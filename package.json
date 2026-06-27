@@ -30,6 +30,10 @@
     "backup:local": "bash scripts/backup.sh",
     "backup:srv": "sudo bash scripts/backup-srv.sh",
 
+    "github": "bash scripts/github-repo-manager.sh",
+    "github:status": "bash scripts/github-repo-manager.sh status",
+    "github:check": "bash scripts/github-repo-manager.sh release-check",
+
     "react:install": "rm -f frontend-react/package-lock.json && rm -rf frontend-react/node_modules/.vite frontend-react/.vite && npm --prefix frontend-react install",
     "react:build": "bash scripts/publish-react.sh build",
     "react:deploy": "sudo bash scripts/publish-react.sh deploy",
@@ -45,4 +49,3 @@
     "node": ">=20"
   }
 }
-
