@@ -1,0 +1,12 @@
+services:
+  suno-fastapi-app:
+    build: .
+    container_name: suno-fastapi-app
+    env_file:
+      - .env
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./storage:/app/storage
+      - ./suno_fastapi_app.db:/app/suno_fastapi_app.db
+    restart: unless-stopped

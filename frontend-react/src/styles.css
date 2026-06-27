@@ -1,0 +1,279 @@
+
+/* Globaler KI-Assistent */
+.global-ai-toggle {
+  position: fixed;
+  right: 22px;
+  bottom: 24px;
+  z-index: 1200;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 18px;
+  border-radius: 999px;
+  border: 1px solid rgba(255,255,255,.18);
+  box-shadow: 0 18px 45px rgba(0,0,0,.35);
+  background: linear-gradient(135deg, #7c3aed, #2563eb);
+  color: #fff;
+  font-weight: 800;
+}
+
+.global-ai-panel {
+  position: fixed;
+  right: 20px;
+  bottom: 22px;
+  width: min(430px, calc(100vw - 30px));
+  max-height: calc(100vh - 110px);
+  z-index: 1200;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-radius: 24px;
+  border: 1px solid rgba(255,255,255,.16);
+  background: rgba(12, 18, 34, .96);
+  box-shadow: 0 28px 80px rgba(0,0,0,.48);
+  backdrop-filter: blur(18px);
+}
+
+.global-ai-panel.is-minimized { max-height: 74px; }
+
+.global-ai-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 16px 18px;
+  border-bottom: 1px solid rgba(255,255,255,.1);
+  background: linear-gradient(135deg, rgba(124,58,237,.34), rgba(37,99,235,.24));
+}
+
+.global-ai-header strong,
+.global-ai-header strong svg { display: inline-flex; align-items: center; gap: 8px; color: #fff; }
+.global-ai-header span { display: block; margin-top: 3px; color: rgba(255,255,255,.68); font-size: .83rem; }
+.global-ai-header-actions { display: flex; gap: 6px; }
+.global-ai-header-actions button { padding: 8px; border-radius: 12px; }
+
+.global-ai-context {
+  padding: 11px 16px;
+  color: rgba(255,255,255,.74);
+  font-size: .88rem;
+  border-bottom: 1px solid rgba(255,255,255,.08);
+}
+
+.global-ai-suggestions,
+.global-ai-message-actions,
+.global-ai-hints,
+.global-ai-preview-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.global-ai-suggestions { padding: 12px 14px; border-bottom: 1px solid rgba(255,255,255,.08); }
+.global-ai-suggestions button,
+.global-ai-message-actions button,
+.global-ai-hints button {
+  border-radius: 999px;
+  padding: 8px 11px;
+  font-size: .85rem;
+  background: rgba(255,255,255,.08);
+  color: rgba(255,255,255,.9);
+  border: 1px solid rgba(255,255,255,.12);
+}
+
+.global-ai-log {
+  padding: 14px;
+  overflow: auto;
+  min-height: 260px;
+  max-height: 46vh;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.global-ai-empty,
+.global-ai-message,
+.global-ai-preview {
+  border-radius: 18px;
+  padding: 13px 14px;
+  background: rgba(255,255,255,.07);
+  border: 1px solid rgba(255,255,255,.1);
+}
+
+.global-ai-message.user {
+  background: rgba(37,99,235,.22);
+  align-self: flex-end;
+  max-width: 92%;
+}
+
+.global-ai-message.assistant,
+.global-ai-message.error {
+  align-self: flex-start;
+  max-width: 96%;
+}
+
+.global-ai-message.error { background: rgba(239,68,68,.18); }
+.global-ai-message p,
+.global-ai-empty p { white-space: pre-wrap; margin: 6px 0 0; color: rgba(255,255,255,.83); }
+.global-ai-message small { display: block; margin-top: 8px; color: rgba(255,255,255,.58); }
+
+.global-ai-preview {
+  background: rgba(16,185,129,.13);
+  border-color: rgba(16,185,129,.28);
+}
+
+.global-ai-preview pre {
+  max-height: 220px;
+  overflow: auto;
+  white-space: pre-wrap;
+  border-radius: 14px;
+  padding: 12px;
+  background: rgba(0,0,0,.22);
+  color: rgba(255,255,255,.86);
+}
+
+.global-ai-input {
+  padding: 13px;
+  border-top: 1px solid rgba(255,255,255,.1);
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 9px;
+}
+
+.global-ai-input textarea {
+  resize: none;
+  min-height: 52px;
+  border-radius: 16px;
+}
+
+.spin-icon { animation: spin 1s linear infinite; }
+
+.global-helper-card .advanced-ai-settings {
+  border: 1px solid rgba(255,255,255,.1);
+  border-radius: 16px;
+  padding: 11px 12px;
+  background: rgba(255,255,255,.04);
+  margin-bottom: 12px;
+}
+
+.global-helper-card .advanced-ai-settings summary {
+  cursor: pointer;
+  font-weight: 800;
+}
+
+.dummy-action-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+}
+
+.helper-note { margin-top: 12px; }
+.helper-note p { margin-bottom: 0; }
+
+@media (max-width: 720px) {
+  .global-ai-panel {
+    inset: auto 10px 10px 10px;
+    width: auto;
+    max-height: calc(100vh - 24px);
+    border-radius: 20px;
+  }
+  .global-ai-toggle { right: 14px; bottom: 16px; }
+  .global-ai-log { max-height: 52vh; }
+  .global-ai-input { grid-template-columns: 1fr; }
+}
+
+
+.options-mini-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 0.65rem;
+  margin-top: 0.6rem;
+}
+
+.options-mini-grid > div {
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 12px;
+  padding: 0.65rem 0.75rem;
+  background: rgba(15, 23, 42, 0.42);
+}
+
+.options-mini-grid span {
+  display: block;
+  color: var(--muted);
+  font-size: 0.78rem;
+  margin-bottom: 0.25rem;
+}
+
+.options-mini-grid strong {
+  display: block;
+  color: var(--text);
+  font-size: 0.93rem;
+  word-break: break-word;
+}
+
+/* Upload- und Suno-Voice-Workflow Ergänzungen */
+.form-grid.three {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.upload-file-list {
+  display: grid;
+  gap: 0.75rem;
+}
+.upload-file-card {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: flex-start;
+  padding: 0.85rem;
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 16px;
+  background: rgba(255,255,255,0.04);
+}
+.upload-file-card div {
+  display: grid;
+  gap: 0.25rem;
+  min-width: 0;
+}
+.upload-file-card code {
+  word-break: break-all;
+  white-space: normal;
+  font-size: 0.78rem;
+  opacity: 0.8;
+}
+.voice-workflow-panel {
+  border: 1px solid rgba(255,255,255,0.14);
+  border-radius: 16px;
+  padding: 0.85rem;
+  background: rgba(255,255,255,0.035);
+}
+.voice-workflow-panel summary {
+  cursor: pointer;
+  font-weight: 700;
+}
+.compact-form {
+  gap: 0.75rem;
+  margin-top: 0.75rem;
+}
+.inline-fields {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.65rem;
+}
+.mini-result {
+  padding: 0.75rem;
+  border-radius: 14px;
+  background: rgba(72, 187, 120, 0.12);
+  border: 1px solid rgba(72, 187, 120, 0.22);
+}
+.mini-result p {
+  margin: 0.35rem 0 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+@media (max-width: 980px) {
+  .form-grid.three,
+  .inline-fields {
+    grid-template-columns: 1fr;
+  }
+  .upload-file-card {
+    flex-direction: column;
+  }
+}

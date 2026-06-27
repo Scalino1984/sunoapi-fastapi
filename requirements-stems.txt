@@ -1,0 +1,4 @@
+# Optional für lokale Stem-Erzeugung im Songstudio
+# Installation nur nötig, wenn im Detailbereich "Stems erzeugen" genutzt werden soll.
+demucs>=4.0.1,<5
+librosa>=0.10.2,<0.12

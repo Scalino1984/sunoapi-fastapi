@@ -1,0 +1,21 @@
+[Unit]
+Description=Suno FastAPI App
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+WorkingDirectory=/opt/suno_fastapi_app
+EnvironmentFile=/opt/suno_fastapi_app/.env
+ExecStart=/opt/suno_fastapi_app/venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000 --proxy-headers
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ReadWritePaths=/opt/suno_fastapi_app/storage /opt/suno_fastapi_app/suno_fastapi_app.db
+
+[Install]
+WantedBy=multi-user.target

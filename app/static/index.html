@@ -1,0 +1,882 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Suno FastAPI App</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%230b1020'/%3E%3Cpath d='M18 45V17h28v22c0 5-4 9-9 9-4 0-7-3-7-6s3-6 7-6c2 0 4 1 5 2V23H24v22z' fill='%238fd3ff'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <header class="app-header">
+    <div>
+      <h1>Suno FastAPI App</h1>
+      <p>Musik generieren, Audio verarbeiten, Lyrics erstellen, Dateien hochladen und Jobs überwachen.</p>
+    </div>
+    <div class="header-actions">
+      <button id="btnWorkflowModal" class="mini-header-btn" type="button">Workflows</button>
+      <button id="btnHelpModal" class="mini-header-btn" type="button">Hilfe</button>
+      <button id="btnSystemModal" class="mini-header-btn" type="button">System</button>
+      <div class="credit-pill" aria-live="polite"><span>Credits</span><strong id="creditsValue">-</strong></div>
+      <button id="btnCredits" class="secondary" type="button">Credits prüfen</button>
+    </div>
+  </header>
+
+  <main class="app-shell">
+    <button id="btnMobileTabMenu" class="mobile-tab-menu-button" type="button" aria-expanded="false" aria-controls="mainTabNav">☰ Menü öffnen</button>
+    <nav id="mainTabNav" class="tab-nav grouped-tab-nav" aria-label="Hauptfunktionen">
+      <div class="tab-group is-open"><button class="tab-group-trigger" type="button" aria-expanded="true">Start <small>Home</small></button><div class="tab-group-menu"><button class="tab-button active" type="button" data-tab="tab-home">Home</button></div></div>
+      <div class="tab-group"><button class="tab-group-trigger" type="button" aria-expanded="false">Produktion <small>Musik · Lyrics · Studio · Styles</small></button><div class="tab-group-menu"><button class="tab-button" type="button" data-tab="tab-music">Musik</button><button class="tab-button" type="button" data-tab="tab-lyrics">Lyrics</button><button class="tab-button" type="button" data-tab="tab-lyric-editor">Songtext Studio</button><button class="tab-button" type="button" data-tab="tab-styles">Styles</button></div></div>
+      <div class="tab-group"><button class="tab-group-trigger" type="button" aria-expanded="false">Bearbeiten <small>Extend · Vocals · Audio · Personas</small></button><div class="tab-group-menu"><button class="tab-button" type="button" data-tab="tab-extend">Extend & Cover</button><button class="tab-button" type="button" data-tab="tab-vocals-style">Vocals & Style</button><button class="tab-button" type="button" data-tab="tab-audio">Audio</button><button class="tab-button" type="button" data-tab="tab-personas">Personas</button></div></div>
+      <div class="tab-group"><button class="tab-group-trigger" type="button" aria-expanded="false">Library <small>Archiv · Playlists · Dateien</small></button><div class="tab-group-menu"><button class="tab-button" type="button" data-tab="tab-archive">Archiv</button><button class="tab-button" type="button" data-tab="tab-playlists">Playlists</button><button class="tab-button" type="button" data-tab="tab-files">Dateien</button></div></div>
+      <div class="tab-group"><button class="tab-group-trigger" type="button" aria-expanded="false">System <small>Status · Admin</small></button><div class="tab-group-menu"><button class="tab-button" type="button" data-tab="tab-status">Status</button><button class="tab-button admin-tab-button" type="button" data-tab="tab-admin">Admin</button></div></div>
+    </nav>
+
+    <div class="workspace">
+      
+      <section class="tab-panel active" id="tab-home">
+        <section class="card compact-card dashboard-card">
+          <h2>Was möchtest du machen?</h2>
+          <p class="section-subtitle">Starte über einen klaren Workflow und arbeite danach in Library, Songtext Studio oder Playlists weiter.</p>
+          <div class="workflow-grid">
+            <button type="button" data-switch-tab="tab-music">🎵 Neuen Song erstellen</button>
+            <button type="button" data-switch-tab="tab-lyric-editor">📝 Songtext schreiben</button>
+            <button type="button" data-switch-tab="tab-archive">🎧 Meine Songs öffnen</button>
+            <button type="button" data-switch-tab="tab-extend">🔁 Song weiterbearbeiten</button>
+            <button type="button" data-switch-tab="tab-playlists">📀 Playlists</button>
+            <button type="button" data-switch-tab="tab-status">🔔 Status prüfen</button>
+          </div>
+        </section>
+      </section>
+
+      <section class="tab-panel" id="tab-music">
+        <section class="card compact-card">
+          <h2>Musik generieren</h2>
+          <p class="section-subtitle">Nur die notwendigen Angaben. Zeichenlimits kommen zentral aus der .env.</p>
+          <form id="generateForm">
+            <div class="form-grid two">
+              <label>Titel
+                <input name="title" id="musicTitle" placeholder="Songtitel">
+                <span class="char-counter" id="musicTitleCounter">0</span>
+              </label>
+              <label>Modell
+                <select name="model" id="musicModel"></select>
+              </label>
+            </div>
+            <div class="form-grid two">
+              <label>Modus
+                <select name="customMode" id="musicCustomMode">
+                  <option value="false">Einfach: Suno erzeugt Lyrics</option>
+                  <option value="true">Custom: Prompt ist Lyrics/Text</option>
+                </select>
+              </label>
+              <label>Instrumental
+                <select name="instrumental">
+                  <option value="false">Nein, mit Gesang</option>
+                  <option value="true">Ja, instrumental</option>
+                </select>
+              </label>
+            </div>
+            <div class="form-grid two">
+              <label>Persona optional
+                <select name="persona_id" id="musicPersonaSelect">
+                  <option value="">Keine Persona verwenden</option>
+                </select>
+              </label>
+              <label>Persona-Typ
+                <select name="persona_model">
+                  <option value="style_persona">Style Persona</option>
+                  <option value="voice_persona">Voice Persona</option>
+                </select>
+              </label>
+            </div>
+            <label>Style / Genre
+              <input name="style" id="musicStyle" placeholder="z. B. hard grimy NYC boom bap, German rap, Jamaican Patois hook">
+              <span class="char-counter" id="musicStyleCounter">0</span>
+            </label>
+            <label>Prompt / Lyrics
+              <textarea name="prompt" id="musicPrompt" rows="9" required placeholder="Prompt oder vollständige Lyrics eingeben..."></textarea>
+              <span class="char-counter" id="musicPromptCounter">0</span>
+            </label>
+            <div class="form-actions">
+              <button type="submit">Generierung starten</button>
+              <button class="secondary" type="button" data-switch-tab="tab-status">Status öffnen</button>
+            </div>
+          </form>
+        </section>
+      </section>
+
+      <section class="tab-panel" id="tab-lyrics">
+        <section class="card compact-card">
+          <h2>Lyrics erzeugen</h2>
+          <p class="section-subtitle">Kurzer Themen-/Stil-Prompt für den Lyrics-Endpunkt. Limit kommt aus der .env.</p>
+          <form id="lyricsForm">
+            <label>Thema / Stil
+              <textarea name="prompt" id="lyricsPrompt" rows="8" required placeholder="Kurz: Thema, Sprache, Stil, Struktur..."></textarea>
+              <span class="char-counter" id="lyricsPromptCounter">0</span>
+            </label>
+            <div class="notice-box">Lange fertige Songtexte gehören in <strong>Musik → Custom</strong>. Lyrics-Ergebnisse findest du anschließend im <strong>Archiv</strong>.</div>
+            <div class="form-actions">
+              <button type="submit">Lyrics starten</button>
+              <button class="secondary" type="button" data-switch-tab="tab-archive">Archiv öffnen</button>
+            </div>
+          </form>
+        </section>
+      </section>
+
+      <section class="tab-panel" id="tab-extend">
+        <div class="tab-grid">
+          <section class="card compact-card">
+            <h2>Musik verlängern</h2>
+            <p class="section-subtitle">Offizieller Extend-Endpunkt. Im Standardmodus reicht die Audio-ID.</p>
+            <form id="extendForm">
+              <div class="form-grid two">
+                <label>Audio ID<input name="audio_id" required placeholder="Audio-ID aus Archiv/Suno"></label>
+                <label>Modell<select name="model" id="extendModel"></select></label>
+              </div>
+              <div class="form-grid two">
+                <label>Modus
+                  <select name="defaultParamFlag" id="extendCustomMode">
+                    <option value="false">Standardparameter der Quelle verwenden</option>
+                    <option value="true">Custom-Extension</option>
+                  </select>
+                </label>
+                <label>Weiter ab Sekunde<input name="continueAt" type="number" min="0" step="0.1" placeholder="z. B. 60"></label>
+              </div>
+              <div class="form-grid two">
+                <label>Titel<input name="title" id="extendTitle" placeholder="Titel für Extension"><span class="char-counter" id="extendTitleCounter">0</span></label>
+                <label>Style<input name="style" id="extendStyle" placeholder="Style für Extension"><span class="char-counter" id="extendStyleCounter">0</span></label>
+              </div>
+              <label>Prompt / Beschreibung<textarea name="prompt" id="extendPrompt" rows="6" placeholder="Wie soll der Track fortgeführt werden?"></textarea><span class="char-counter" id="extendPromptCounter">0</span></label>
+              <div class="form-grid two">
+                <label>Persona optional<select name="persona_id" id="extendPersonaSelect"><option value="">Keine Persona</option></select></label>
+                <label>Persona-Typ<select name="persona_model"><option value="style_persona">Style Persona</option><option value="voice_persona">Voice Persona</option></select></label>
+              </div>
+              <div class="form-grid three">
+                <label>Style Weight<input name="styleWeight" type="number" min="0" max="1" step="0.01" placeholder="0.65"></label>
+                <label>Weirdness<input name="weirdnessConstraint" type="number" min="0" max="1" step="0.01" placeholder="0.65"></label>
+                <label>Audio Weight<input name="audioWeight" type="number" min="0" max="1" step="0.01" placeholder="0.65"></label>
+              </div>
+              <div class="form-grid two">
+                <label>Negative Tags<input name="negative_tags" placeholder="Styles ausschließen"></label>
+                <label>Vocal Gender<select name="vocal_gender"><option value="">Keine Vorgabe</option><option value="m">m</option><option value="f">f</option></select></label>
+              </div>
+              <div class="form-actions"><button type="submit">Extension starten</button><button class="secondary" type="button" data-switch-tab="tab-status">Status</button></div>
+            </form>
+          </section>
+          <section class="card compact-card">
+            <h2>Cover-Bilder erzeugen</h2>
+            <p class="section-subtitle">Erzeugt Cover-Bilder zu einem fertigen Musik-Task.</p>
+            <form id="coverForm">
+              <label>Original Task-ID<input name="task_id" required placeholder="Task-ID der Musikgenerierung"></label>
+              <div class="form-actions"><button type="submit">Cover erstellen</button><button class="secondary" type="button" data-switch-tab="tab-archive">Archiv</button></div>
+            </form>
+          </section>
+
+          <section class="card compact-card">
+            <h2>Upload & Extend</h2>
+            <p class="section-subtitle">Eigene Audio-URL hochladen und stilistisch weiterführen.</p>
+            <form id="uploadExtendForm">
+              <label>Upload-/Audio-URL<input name="audio_url" required placeholder="https://.../audio.mp3"></label>
+              <div class="form-grid two">
+                <label>Modell<select name="model" id="uploadExtendModel"></select></label>
+                <label>Modus<select name="defaultParamFlag"><option value="false">Quelle übernehmen</option><option value="true">Custom-Extension</option></select></label>
+              </div>
+              <div class="form-grid two">
+                <label>Weiter ab Sekunde<input name="continueAt" type="number" min="0" step="0.1" placeholder="z. B. 60"></label>
+                <label>Titel<input name="title" placeholder="Titel für Upload-Extension"></label>
+              </div>
+              <label>Style<input name="style" placeholder="Style nur bei Custom"></label>
+              <label>Prompt<textarea name="prompt" rows="5" placeholder="Fortsetzung beschreiben"></textarea></label>
+              <div class="form-grid three">
+                <label>Style Weight<input name="styleWeight" type="number" min="0" max="1" step="0.01" placeholder="0.61"></label>
+                <label>Weirdness<input name="weirdnessConstraint" type="number" min="0" max="1" step="0.01" placeholder="0.72"></label>
+                <label>Audio Weight<input name="audioWeight" type="number" min="0" max="1" step="0.01" placeholder="0.65"></label>
+              </div>
+              <div class="form-grid two">
+                <label>Negative Tags<input name="negative_tags" placeholder="Heavy Metal, Aggressive Vocals"></label>
+                <label>Vocal Gender<select name="vocal_gender"><option value="">Keine Vorgabe</option><option value="m">m</option><option value="f">f</option></select></label>
+              </div>
+              <div class="form-actions"><button type="submit">Upload-Extend starten</button><button class="secondary" type="button" data-switch-tab="tab-status">Status</button></div>
+            </form>
+          </section>
+
+          <section class="card compact-card">
+            <h2>Abschnitt ersetzen</h2>
+            <p class="section-subtitle">Inpainting: 6 bis 60 Sekunden innerhalb eines fertigen Tracks ersetzen.</p>
+            <form id="replaceSectionForm">
+              <div class="form-grid two"><label>Task ID<input name="task_id" required placeholder="Original Task-ID"></label><label>Audio ID<input name="audio_id" required placeholder="Audio-ID"></label></div>
+              <div class="form-grid two"><label>Start Sek.<input name="infill_start_s" type="number" min="0" step="0.01" required></label><label>Ende Sek.<input name="infill_end_s" type="number" min="0" step="0.01" required></label></div>
+              <label>Titel<input name="title" required placeholder="Titel"></label>
+              <label>Tags / Style<input name="tags" required placeholder="Jazz, Boom Bap, Dark Rap..."></label>
+              <label>Prompt / Ersatz-Lyrics<textarea name="prompt" rows="5" required placeholder="Was soll in diesem Abschnitt ersetzt werden?"></textarea></label>
+              <label>Negative Tags optional<input name="negative_tags" placeholder="Unerwünschte Stile"></label>
+              <div class="form-actions"><button type="submit">Abschnitt ersetzen</button><button class="secondary" type="button" data-switch-tab="tab-status">Status</button></div>
+            </form>
+          </section>
+
+          <section class="card compact-card">
+            <h2>Mashup</h2>
+            <p class="section-subtitle">Mehrere Audio-URLs kombinieren und daraus einen neuen Track erzeugen.</p>
+            <form id="mashupForm">
+              <label>Audio-URLs, eine pro Zeile<textarea name="upload_url_list" rows="5" required placeholder="https://.../audio1.mp3&#10;https://.../audio2.mp3"></textarea></label>
+              <div class="form-grid two"><label>Modell<select name="model" id="mashupModel"></select></label><label>Custom Mode<select name="customMode"><option value="false">Nein</option><option value="true">Ja</option></select></label></div>
+              <label>Titel optional<input name="title" placeholder="Mashup Titel"></label>
+              <label>Style optional<input name="style" placeholder="Ziel-Style"></label>
+              <label>Prompt optional<textarea name="prompt" rows="4" placeholder="Mashup-Idee"></textarea></label>
+              <div class="form-actions"><button type="submit">Mashup starten</button><button class="secondary" type="button" data-switch-tab="tab-status">Status</button></div>
+            </form>
+          </section>
+
+          <section class="card compact-card">
+            <h2>Audio Cover Song</h2>
+            <p class="section-subtitle">Upload-Cover: transformiert eine Audio-URL in einen neuen Stil.</p>
+            <form id="uploadCoverForm">
+              <label>Upload-/Audio-URL<input name="audio_url" required placeholder="https://.../audio.mp3"></label>
+              <div class="form-grid two">
+                <label>Modell<select name="model" id="coverAudioModel"></select></label>
+                <label>Custom Mode<select name="customMode"><option value="false">Nein</option><option value="true">Ja</option></select></label>
+              </div>
+              <div class="form-grid two">
+                <label>Instrumental<select name="instrumental"><option value="false">Nein</option><option value="true">Ja</option></select></label>
+                <label>Titel<input name="title" placeholder="Nur Custom Mode"></label>
+              </div>
+              <label>Style<input name="style" placeholder="Nur Custom Mode, z. B. Grimy NYC Boom Bap"></label>
+              <label>Prompt / Lyrics<textarea name="prompt" rows="5" required placeholder="Prompt oder Lyrics für Cover-Version"></textarea></label>
+              <div class="form-grid two">
+                <label>Persona optional<select name="persona_id" id="coverPersonaSelect"><option value="">Keine Persona</option></select></label>
+                <label>Persona-Typ<select name="persona_model"><option value="style_persona">Style Persona</option><option value="voice_persona">Voice Persona</option></select></label>
+              </div>
+              <div class="form-actions"><button type="submit">Audio Cover starten</button><button class="secondary" type="button" data-switch-tab="tab-status">Status</button></div>
+            </form>
+          </section>
+        </div>
+      </section>
+
+      <section class="tab-panel" id="tab-personas">
+        <div class="tab-grid">
+          <section class="card compact-card">
+            <h2>Persona erstellen</h2>
+            <p class="section-subtitle">Benötigt eine abgeschlossene Musik-Task-ID und eine Audio-ID.</p>
+            <form id="personaForm">
+              <div class="form-grid two">
+                <label>Task ID<input name="task_id" required placeholder="Task-ID der fertigen Musik"></label>
+                <label>Audio ID<input name="audio_id" required placeholder="Audio-ID des Tracks"></label>
+              </div>
+              <label>Name<input name="name" required placeholder="z. B. Grimsy NYC Rap Persona"></label>
+              <label>Beschreibung<textarea name="description" required rows="5" placeholder="Musikalische Eigenschaften, Stimme, Stil, Persönlichkeit..."></textarea></label>
+              <div class="form-grid three">
+                <label>Vocal Start<input name="vocalStart" type="number" min="0" step="0.1" placeholder="0"></label>
+                <label>Vocal End<input name="vocalEnd" type="number" min="0" step="0.1" placeholder="30"></label>
+                <label>Style<input name="style" placeholder="z. B. German Rap / Patwa"></label>
+              </div>
+              <div class="notice-box">Analysebereich optional: 10 bis 30 Sekunden. Persona kann danach in Musik und Extend verwendet werden.</div>
+              <div class="form-actions"><button type="submit">Persona erstellen</button><button class="secondary" type="button" data-switch-tab="tab-archive">Archiv</button></div>
+            </form>
+          </section>
+          <section class="card compact-card">
+            <h2>Gespeicherte Personas</h2>
+            <div id="personaList" class="result-stack"></div>
+          </section>
+        </div>
+      </section>
+
+      <section class="tab-panel" id="tab-vocals-style">
+        <div class="tab-grid">
+          <section class="card compact-card">
+            <h2>Vocals hinzufügen</h2>
+            <p class="section-subtitle">Für Instrumentals oder Backing-Tracks. Erzeugt KI-Vocals passend zur Audio-URL.</p>
+            <form id="addVocalsForm">
+              <label>Instrumental-/Audio-URL<input name="audio_url" required placeholder="https://.../instrumental.mp3"></label>
+              <div class="form-grid two">
+                <label>Titel<input name="title" id="addVocalsTitle" required placeholder="Titel der Vocal-Version"><span class="char-counter" id="addVocalsTitleCounter">0</span></label>
+                <label>Modell<select name="model" id="addVocalsModel"></select></label>
+              </div>
+              <div class="form-grid two">
+                <label>Style<input name="style" id="addVocalsStyle" required placeholder="z. B. Jazz, German Rap, Soul"><span class="char-counter" id="addVocalsStyleCounter">0</span></label>
+                <label>Vocal Gender<select name="vocal_gender"><option value="">Keine Vorgabe</option><option value="m">m</option><option value="f">f</option></select></label>
+              </div>
+              <label>Negative Tags<input name="negative_tags" required placeholder="z. B. Heavy Metal, Aggressive Vocals"></label>
+              <label>Prompt / Vocal-Idee<textarea name="prompt" id="addVocalsPrompt" rows="6" required placeholder="Beschreibung der gewünschten Vocals, Stimmung oder Lyrics-Konzept"></textarea><span class="char-counter" id="addVocalsPromptCounter">0</span></label>
+              <div class="form-grid three">
+                <label>Style Weight<input name="styleWeight" type="number" min="0" max="1" step="0.01" placeholder="0.61"></label>
+                <label>Weirdness<input name="weirdnessConstraint" type="number" min="0" max="1" step="0.01" placeholder="0.72"></label>
+                <label>Audio Weight<input name="audioWeight" type="number" min="0" max="1" step="0.01" placeholder="0.65"></label>
+              </div>
+              <div class="form-actions"><button type="submit">Vocals hinzufügen</button><button class="secondary" type="button" data-switch-tab="tab-status">Status</button></div>
+            </form>
+          </section>
+
+          <section class="card compact-card">
+            <h2>Instrumental hinzufügen</h2>
+            <p class="section-subtitle">Für Vocal-Stems oder Melodiespuren. Erzeugt passende Begleitmusik.</p>
+            <form id="addInstrumentalForm">
+              <label>Vocal-/Audio-URL<input name="audio_url" required placeholder="https://.../vocals.mp3"></label>
+              <div class="form-grid two">
+                <label>Titel<input name="title" id="addInstrumentalTitle" required placeholder="Titel der Instrumental-Version"><span class="char-counter" id="addInstrumentalTitleCounter">0</span></label>
+                <label>Modell<select name="model" id="addInstrumentalModel"></select></label>
+              </div>
+              <label>Tags / gewünschter Stil<input name="tags" id="addInstrumentalTags" required placeholder="Relaxing Piano, Ambient, Peaceful"><span class="char-counter" id="addInstrumentalTagsCounter">0</span></label>
+              <div class="form-grid two">
+                <label>Negative Tags<input name="negative_tags" required placeholder="Heavy Metal, Aggressive Drums"></label>
+                <label>Vocal Gender<select name="vocal_gender"><option value="">Keine Vorgabe</option><option value="m">m</option><option value="f">f</option></select></label>
+              </div>
+              <div class="form-grid three">
+                <label>Style Weight<input name="styleWeight" type="number" min="0" max="1" step="0.01" placeholder="0.61"></label>
+                <label>Weirdness<input name="weirdnessConstraint" type="number" min="0" max="1" step="0.01" placeholder="0.72"></label>
+                <label>Audio Weight<input name="audioWeight" type="number" min="0" max="1" step="0.01" placeholder="0.65"></label>
+              </div>
+              <div class="form-actions"><button type="submit">Instrumental hinzufügen</button><button class="secondary" type="button" data-switch-tab="tab-status">Status</button></div>
+            </form>
+          </section>
+
+          <section class="card compact-card">
+            <h2>Music Style verbessern</h2>
+            <p class="section-subtitle">Optimiert eine Style-Beschreibung über den offiziellen Style-Endpunkt.</p>
+            <form id="boostStyleForm">
+              <label>Style-Beschreibung<textarea name="content" id="boostStyleContent" rows="5" required placeholder="Pop, Mysterious oder längere Style-Beschreibung"></textarea><span class="char-counter" id="boostStyleCounter">0</span></label>
+              <div class="form-actions"><button type="submit">Style optimieren</button><button class="secondary" type="button" data-switch-tab="tab-archive">Archiv</button></div>
+            </form>
+          </section>
+        </div>
+      </section>
+
+
+
+
+      <section class="tab-panel" id="tab-playlists">
+        <div class="tab-grid library-grid">
+          <section class="card compact-card">
+            <h2>Playlists</h2>
+            <p class="section-subtitle">Suno-ähnliche Sammlungen für Varianten, fertige Tracks, Entwürfe und Projektphasen.</p>
+            <form id="playlistForm" class="stacked-form">
+              <label>Name<input name="name" required placeholder="z. B. Album Entwurf, Hook Varianten, Finale Songs"></label>
+              <label>Beschreibung<textarea name="description" rows="3" placeholder="Wofür ist diese Playlist gedacht?"></textarea></label>
+              <label>Cover-Bild-URL optional<input name="cover_image_url" placeholder="https://..."></label>
+              <div class="form-actions"><button type="submit">Playlist anlegen</button><button class="secondary" type="button" id="btnReloadPlaylists">Aktualisieren</button></div>
+            </form>
+          </section>
+          <section class="card compact-card wide-card">
+            <div class="section-head-row"><div><h2>Playlist-Übersicht</h2><p class="section-subtitle">Tracks direkt aus dem Archiv einer Playlist hinzufügen.</p></div></div>
+            <div id="playlistBoard" class="playlist-board"></div>
+          </section>
+        </div>
+      </section>
+
+      <section class="tab-panel" id="tab-lyric-editor">
+        <div class="lyric-studio-layout" id="lyricStudioLayout" data-view="studio">
+          <div class="lyric-studio-header">
+            <div>
+              <h2>Songtext Studio</h2>
+              <p class="section-subtitle">Canvas links, KI-Assistent direkt rechts. Tags, Vorlagen und gespeicherte Texte liegen darunter.</p>
+            </div>
+            <div class="view-toggle" role="group" aria-label="Songtext-Studio Ansicht wechseln">
+              <button class="small-btn active" type="button" data-lyric-view="studio">Studio</button>
+              <button class="small-btn" type="button" data-lyric-view="focus">Fokus</button>
+            </div>
+          </div>
+
+          <div class="lyric-canvas-row">
+            <section class="card compact-card lyric-editor-card lyric-canvas-card">
+              <div class="section-head-row">
+                <div>
+                  <h3>Canvas</h3>
+                  <p class="section-subtitle">Hier arbeitet die KI direkt am aktuellen Songtext.</p>
+                </div>
+              </div>
+              <form id="lyricDraftForm">
+                <input type="hidden" name="id" id="lyricDraftId">
+                <div class="form-grid two lyric-meta-fields">
+                  <label>Titel<input name="title" id="lyricDraftTitle" required placeholder="Songtitel oder Arbeitsname"></label>
+                  <label>Status<select name="status" id="lyricDraftStatus"><option value="draft">Entwurf</option><option value="ready">Bereit für Suno</option><option value="archived">Archiviert</option></select></label>
+                </div>
+                <div class="form-grid two lyric-meta-fields">
+                  <label>Sprache / Mix<input name="language" placeholder="de, en, patwa, de/en/patwa" value="de"></label>
+                  <label>Tags<input name="tags" placeholder="rap, patwa, hook, düster, emotional"></label>
+                </div>
+                <label>Texteditor
+                  <textarea name="content" id="lyricDraftContent" rows="24" placeholder="[Intro | spoken male vocal | Low Energy]&#10;..."></textarea>
+                </label>
+                <div id="lyricChapterMap" class="lyric-chapter-map empty"></div>
+                <div class="editor-toolbar">
+                  <button class="secondary" type="button" id="btnNewLyricDraft">Neu</button>
+                  <button class="secondary" type="button" id="btnInsertBasicStructure">Grundstruktur einfügen</button>
+                  <button class="secondary" type="button" id="btnSendDraftToMusic">In Musik Custom übernehmen</button>
+                  <button type="submit">Speichern</button>
+                </div>
+              </form>
+            </section>
+
+            <aside class="card compact-card ai-assistant-card">
+              <div class="section-head-row">
+                <div>
+                  <h3>KI Canvas Assist</h3>
+                  <p class="section-subtitle">Session-basierter Chat mit direkter Bearbeitung des Canvas.</p>
+                </div>
+              </div>
+              <div class="form-grid two">
+                <label>Provider<select id="aiProviderSelect"></select></label>
+                <label>Modell<select id="aiModelSelect"></select></label>
+              </div>
+              <label>KI-Profil wie GPT<select id="aiAssistantProfileSelect"></select></label>
+              <div class="form-grid two">
+                <label>Session<select id="aiSessionSelect"></select></label>
+                <label>Aktion<button class="secondary full-width" type="button" id="btnNewAiSession">Neue Session</button></label>
+              </div>
+              <div class="editor-toolbar compact-toolbar ai-toolbar">
+                <button class="secondary" type="button" id="btnAiUndo">Undo</button>
+                <button class="secondary" type="button" id="btnAiRedo">Redo</button>
+                <button class="secondary" type="button" id="btnAiSaveCanvas">Canvas speichern</button>
+              </div>
+              <div id="aiChatMessages" class="ai-chat-messages"></div>
+              <form id="aiChatForm" class="ai-chat-form">
+                <textarea id="aiChatInput" name="message" rows="5" placeholder="z. B. Schreibe Hook härter, baue Binnenreime ein, kürze Verse 2, füge Patwa Toasting hinzu..."></textarea>
+                <button type="submit">KI anwenden</button>
+              </form>
+            </aside>
+          </div>
+
+          <div class="lyric-support-row">
+            <section class="card compact-card vocal-tags-card">
+              <h3>Vocal Tags</h3>
+              <p class="section-subtitle">Einfügen per Klick. Tags werden an der aktuellen Cursorposition im Canvas ergänzt.</p>
+              <div id="vocalTagList" class="tag-suggestion-list"></div>
+            </section>
+            <section class="card compact-card saved-lyrics-card">
+              <h3>Gespeicherte Texte</h3>
+              <p class="section-subtitle">Vorhandene Entwürfe laden, weiterbearbeiten oder an Musik Custom übergeben.</p>
+              <div id="lyricDraftList" class="mini-list"></div>
+            </section>
+          </div>
+        </div>
+      </section>
+
+      <section class="tab-panel" id="tab-styles">
+        <div class="tab-grid library-grid">
+          <section class="card compact-card">
+            <h2>Music Styles</h2>
+            <p class="section-subtitle">Wiederverwendbare Suno-Styles mit BPM, Genre, Tags und Favoriten.</p>
+            <form id="musicStyleForm">
+              <input type="hidden" name="id" id="musicStyleId">
+              <div class="form-grid two">
+                <label>Name<input name="name" id="musicStyleName" required placeholder="z. B. Grimsy NYC Boom Bap"></label>
+                <label>Genre<input name="genre" id="musicStyleGenre" placeholder="boom bap, drill, reggae"></label>
+              </div>
+              <div class="form-grid two">
+                <label>BPM<input name="bpm" id="musicStyleBpm" type="number" min="40" max="240" placeholder="99"></label>
+                <label>Favorit<select name="is_favorite" id="musicStyleFavorite"><option value="false">Nein</option><option value="true">Ja</option></select></label>
+              </div>
+              <label>Style-Text<textarea name="style_text" id="musicStyleText" rows="8" required placeholder="grimy NYC boom bap, 99 BPM, dusty vinyl samples..."></textarea></label>
+              <label>Tags<input name="tags" id="musicStyleTags" placeholder="dark, rap, patwa, vinyl"></label>
+              <label>Beschreibung<textarea name="description" id="musicStyleDescription" rows="3" placeholder="Wann und wofür verwenden?"></textarea></label>
+              <div class="form-actions"><button type="submit">Style speichern</button><button class="secondary" type="button" id="btnNewStyle">Neu</button></div>
+            </form>
+          </section>
+          <section class="card compact-card wide-card">
+            <h2>Style-Bibliothek</h2>
+            <div class="library-tools"><input id="styleSearch" placeholder="Styles suchen..."><button class="secondary" type="button" id="btnReloadStyles">Aktualisieren</button></div>
+            <div id="musicStyleList" class="style-library-list"></div>
+            <h3>Produktionsprofile</h3>
+            <p class="section-subtitle">Komplette Voreinstellungen für Modell, Style, Persona und Standardparameter.</p>
+            <div class="profile-create-row"><button class="secondary" type="button" id="btnCreateProfileFromStyle">Profil aus aktuellem Style-Formular erstellen</button></div>
+            <div id="productionProfileList" class="style-library-list profile-library-list"></div>
+          </section>
+        </div>
+      </section>
+
+      <section class="tab-panel" id="tab-audio">
+        <div class="tab-grid">
+          <section class="card compact-card">
+            <h2>Stem-Trennung</h2>
+            <form id="audioForm">
+              <label>Audio URL<input name="audio_url" required placeholder="https://..."></label>
+              <input type="hidden" name="action" value="separate">
+              <div class="form-actions"><button type="submit">Stem-Trennung starten</button><button class="secondary" type="button" data-switch-tab="tab-status">Status</button></div>
+            </form>
+          </section>
+          <section class="card compact-card">
+            <h2>WAV-Konvertierung</h2>
+            <form id="wavForm">
+              <div class="form-grid two"><label>Task ID<input name="task_id" required placeholder="Task-ID"></label><label>Audio ID<input name="audio_id" required placeholder="Audio-ID"></label></div>
+              <div class="form-actions"><button type="submit">WAV erstellen</button><button class="secondary" type="button" data-switch-tab="tab-status">Status</button></div>
+            </form>
+          </section>
+          <section class="card compact-card">
+            <h2>MIDI erzeugen</h2>
+            <p class="section-subtitle">Nach Stem-Trennung: Task-ID des Separation-Jobs verwenden; Audio-ID optional.</p>
+            <form id="midiForm">
+              <div class="form-grid two"><label>Separation Task-ID<input name="task_id" required placeholder="Task-ID der Stem-Trennung"></label><label>Separated Audio-ID optional<input name="audio_id" placeholder="originData[].id"></label></div>
+              <div class="form-actions"><button type="submit">MIDI starten</button><button class="secondary" type="button" data-switch-tab="tab-status">Status</button></div>
+            </form>
+          </section>
+          <section class="card compact-card">
+            <h2>Timestamped Lyrics</h2>
+            <form id="timestampedLyricsForm">
+              <div class="form-grid two"><label>Audio ID<input name="audio_id" required placeholder="Audio-ID"></label><label>Task ID optional<input name="task_id" placeholder="Task-ID"></label></div>
+              <div class="form-actions"><button type="submit">Synchronisierte Lyrics holen</button><button class="secondary" type="button" data-switch-tab="tab-status">Status</button></div>
+            </form>
+          </section>
+          <section class="card compact-card">
+            <h2>Music Video</h2>
+            <form id="videoForm">
+              <div class="form-grid two"><label>Task ID<input name="task_id" required placeholder="Task-ID"></label><label>Audio ID<input name="audio_id" required placeholder="Audio-ID"></label></div>
+              <div class="form-grid two"><label>Author optional<input name="author" placeholder="Artist/Name"></label><label>Domain optional<input name="domain_name" placeholder="klangneural.de"></label></div>
+              <div class="form-actions"><button type="submit">Video erstellen</button><button class="secondary" type="button" data-switch-tab="tab-status">Status</button></div>
+            </form>
+          </section>
+          <section class="card compact-card">
+            <h2>Sounds erzeugen</h2>
+            <form id="soundsForm">
+              <label>Prompt<textarea name="prompt" rows="4" required placeholder="A soft rain ambience with distant thunder..."></textarea></label>
+              <div class="form-grid three"><label>Modell<select name="model" id="soundsModel"></select></label><label>BPM<input name="sound_tempo" type="number" min="40" max="240" placeholder="120"></label><label>Key<input name="sound_key" placeholder="Any, C Minor..."></label></div>
+              <div class="form-grid two"><label>Loop<select name="sound_loop"><option value="false">Nein</option><option value="true">Ja</option></select></label><label>Lyrics erfassen<select name="grab_lyrics"><option value="false">Nein</option><option value="true">Ja</option></select></label></div>
+              <div class="form-actions"><button type="submit">Sound starten</button><button class="secondary" type="button" data-switch-tab="tab-status">Status</button></div>
+            </form>
+          </section>
+        </div>
+      </section>
+
+      <section class="tab-panel" id="tab-files">
+        <div class="tab-grid">
+          <section class="card compact-card">
+            <h2>Datei per URL hochladen</h2>
+            <form id="urlUploadForm">
+              <label>Datei-URL<input name="url" required placeholder="https://.../audio.mp3"></label>
+              <div class="form-actions"><button type="submit">URL-Upload starten</button><button class="secondary" type="button" data-switch-tab="tab-audio">Weiter zu Audio</button></div>
+            </form>
+          </section>
+          <section class="card compact-card">
+            <h2>Stream Upload</h2>
+            <form id="streamUploadForm">
+              <label>Audiodatei<input name="upload" type="file" required></label>
+              <div class="form-actions"><button type="submit">Datei hochladen</button><button class="secondary" type="button" data-switch-tab="tab-audio">Weiter zu Audio</button></div>
+            </form>
+          </section>
+          <section class="card compact-card">
+            <h2>Suno Voice Workflow</h2>
+            <p class="section-subtitle">Validation Phrase erzeugen, abrufen, Custom Voice erstellen und Verfügbarkeit prüfen.</p>
+            <form id="voiceValidateForm">
+              <label>Voice URL<input name="voice_url" required placeholder="https://.../clean-vocal.mp3"></label>
+              <div class="form-grid three"><label>Start s<input name="vocal_start_s" type="number" value="0" min="0"></label><label>Ende s<input name="vocal_end_s" type="number" value="15" min="1"></label><label>Sprache<input name="language" value="de"></label></div>
+              <div class="form-actions"><button type="submit">1. Phrase starten</button></div>
+            </form>
+            <div class="form-grid two">
+              <label>Validation Task-ID<input id="voiceValidationTaskId" placeholder="taskId"></label>
+              <label>Custom Voice Task-ID<input id="voiceCustomTaskId" placeholder="taskId"></label>
+            </div>
+            <div class="form-actions wrap">
+              <button class="secondary" type="button" id="btnVoiceValidateInfo">2. Phrase abrufen</button>
+              <button class="secondary" type="button" id="btnVoiceRegenerate">Phrase neu erzeugen</button>
+            </div>
+            <form id="voiceGenerateForm">
+              <label>Validation Task-ID<input name="task_id" required placeholder="taskId"></label>
+              <label>Verify Audio URL<input name="verify_url" required placeholder="https://.../verification.mp3"></label>
+              <div class="form-grid two"><label>Voice Name<input name="voice_name" placeholder="Andy Main Voice"></label><label>Skill<select name="singer_skill_level"><option>beginner</option><option>intermediate</option><option>advanced</option><option>professional</option></select></label></div>
+              <label>Beschreibung<input name="description" placeholder="raue Rap-Stimme..."></label>
+              <label>Style<input name="style" placeholder="German rap, energetic, gritty..."></label>
+              <div class="form-actions"><button type="submit">3. Custom Voice starten</button></div>
+            </form>
+            <div class="form-actions wrap">
+              <button class="secondary" type="button" id="btnVoiceRecordInfo">4. Voice Record abrufen</button>
+              <button class="secondary" type="button" id="btnVoiceCheckAvailability">Verfügbarkeit prüfen</button>
+            </div>
+          </section>
+        </div>
+      </section>
+
+      <section class="tab-panel" id="tab-status">
+        <section class="card wide">
+          <div class="section-head">
+            <div><h2>Status</h2><p class="section-subtitle">Nur laufende und letzte Jobs. Inhalte liegen sauber im Archiv.</p></div>
+            <div class="result-actions">
+              <button id="btnRefresh" class="secondary" type="button">Aktualisieren</button>
+              <button id="btnClearHistory" class="secondary danger-btn" type="button">Verlauf leeren</button>
+              <button class="secondary" type="button" data-switch-tab="tab-archive">Archiv öffnen</button>
+            </div>
+          </div>
+          <div id="output" class="result-stack" aria-live="polite"></div>
+
+          <section class="status-notification-panel">
+            <div class="section-head-row">
+              <div>
+                <h3>Externen Suno-Task importieren</h3>
+                <p class="section-subtitle">Task-ID von sunoapi.org abrufen und lokal als Task, Song und Audio im Archiv ablegen.</p>
+              </div>
+            </div>
+            <form id="importSunoTaskForm" class="form-grid compact-form">
+              <label>Task-ID<input name="task_id" required placeholder="z. B. b762e25da0e27d420535ae1068504ecd"></label>
+              <label>Task-Typ<select name="task_type">
+                <option value="generate_music">Generate Music</option>
+                <option value="extend_music">Extend Music</option>
+                <option value="upload_and_cover">Upload And Cover</option>
+                <option value="upload_and_extend">Upload And Extend</option>
+                <option value="add_vocals">Add Vocals</option>
+                <option value="add_instrumental">Add Instrumental</option>
+                <option value="generate_mashup">Generate Mashup</option>
+                <option value="generate_sounds">Generate Sounds</option>
+                <option value="create_cover">Generate Music Cover</option>
+                <option value="generate_lyrics">Generate Lyrics</option>
+                <option value="separate">Stem Separation</option>
+                <option value="convert_to_wav">Convert to WAV</option>
+                <option value="generate_midi">Generate MIDI</option>
+                <option value="create_video">Create Music Video</option>
+                <option value="create_custom_voice">Custom Voice</option>
+              </select></label>
+              <label>Titel optional<input name="title" placeholder="Lokaler Anzeigename"></label>
+              <label>Modell optional<input name="model" placeholder="z. B. V5_5"></label>
+              <label>Prompt optional<textarea name="prompt" rows="3"></textarea></label>
+              <label>Style optional<textarea name="style" rows="3"></textarea></label>
+              <label class="checkbox-inline"><input type="checkbox" name="cache_audio" checked> Audio lokal cachen</label>
+              <div class="form-actions"><button class="secondary" type="submit">Task importieren</button></div>
+            </form>
+          </section>
+
+          <section class="status-notification-panel">
+            <div class="section-head-row">
+              <div>
+                <h3>Status-Benachrichtigungen</h3>
+                <p class="section-subtitle">Fertige Tasks erneut öffnen, als erledigt markieren oder endgültig ausblenden.</p>
+              </div>
+              <div class="result-actions">
+                <button id="btnNotificationsSelectAll" class="secondary" type="button">Alle auswählen</button>
+                <button id="btnNotificationsClearSelection" class="secondary" type="button">Auswahl aufheben</button>
+                <button id="btnNotificationsMarkDone" class="secondary" type="button">Als erledigt</button>
+                <button id="btnNotificationsDelete" class="secondary danger-btn" type="button">Löschen</button>
+              </div>
+            </div>
+            <div id="statusNotifications" class="result-stack"></div>
+          </section>
+          <h3>Letzte Tasks</h3>
+          <div id="tasks" class="result-stack"></div>
+        </section>
+      </section>
+
+
+      <section class="tab-panel" id="tab-admin">
+        <div class="admin-layout">
+          <section class="card compact-card">
+            <div class="section-head-row">
+              <div>
+                <h2>Admin Panel</h2>
+                <p class="section-subtitle">Benutzer, KI-Defaults, Systemanweisungen und Vocal Tags zentral verwalten.</p>
+              </div>
+              <button id="btnAdminRefresh" class="secondary" type="button">Aktualisieren</button>
+            </div>
+            <div id="adminStatus" class="notice-box">Admin-Daten werden nach Anmeldung geladen.</div>
+          </section>
+
+          <section class="card compact-card">
+            <h3>Benutzerverwaltung</h3>
+            <p class="section-subtitle">Benutzer aktivieren/deaktivieren und Admin-Rechte setzen.</p>
+            <div id="adminUserList" class="admin-table"></div>
+          </section>
+
+          <section class="card compact-card">
+            <h3>KI Chat Konfiguration</h3>
+            <p class="section-subtitle">Default Provider/Modell und optionale zusätzliche Systemanweisung für den Canvas-Chat.</p>
+            <form id="adminAiSettingsForm">
+              <div class="form-grid two">
+                <label>Default Provider<select name="default_provider" id="adminDefaultProvider"></select></label>
+                <label>Default Modell<select name="default_model" id="adminDefaultModel"></select></label>
+              </div>
+              <label>Default KI-Profil wie GPT<select name="default_assistant_profile_id" id="adminDefaultAssistantProfile"><option value="">Kein Profil</option></select></label>
+              <label>Zusätzliche Systemanweisung optional
+                <textarea name="system_instruction" id="adminSystemInstruction" rows="8" placeholder="z. B. Nutze bevorzugt die gepflegten Vocal Tags, halte Deutschrap technisch, keine generischen Reime..."></textarea>
+              </label>
+              <div class="form-actions">
+                <button type="submit">KI Einstellungen speichern</button>
+                <button id="btnAdminAiTest" class="secondary" type="button">Provider testen</button>
+              </div>
+            </form>
+            <div id="adminAiTestResult" class="result-stack"></div>
+          </section>
+
+          <section class="card compact-card">
+            <h3>KI-Profile wie GPT</h3>
+            <p class="section-subtitle">Erstelle wiederverwendbare KI-Assistenten mit eigenen Instructions, Provider/Modell und verlinkten Wissensdateien.</p>
+            <form id="adminAiProfileForm">
+              <input type="hidden" name="id" id="adminAiProfileId">
+              <div class="form-grid two">
+                <label>Name<input name="name" id="adminAiProfileName" required placeholder="Deutschrap Canvas Coach"></label>
+                <label>Aktiv<select name="is_active" id="adminAiProfileActive"><option value="true">Ja</option><option value="false">Nein</option></select></label>
+              </div>
+              <div class="form-grid two">
+                <label>Provider<select name="provider" id="adminAiProfileProvider"></select></label>
+                <label>Modell<select name="model" id="adminAiProfileModel"></select></label>
+              </div>
+              <div class="form-grid two">
+                <label>Temperature<input name="temperature" id="adminAiProfileTemperature" type="number" min="0" max="2" step="0.1" placeholder="optional"></label>
+                <label>Max Output Tokens<input name="max_output_tokens" id="adminAiProfileMaxTokens" type="number" min="1" step="1" placeholder="optional"></label>
+              </div>
+              <label>Beschreibung<input name="description" id="adminAiProfileDescription" placeholder="Zweck und Einsatzbereich"></label>
+              <label>System Instructions
+                <textarea name="system_instruction" id="adminAiProfileInstruction" rows="8" placeholder="Rolle, Qualitätsregeln, gewünschter Stil, Grenzen..."></textarea>
+              </label>
+              <label>Antwort-/Formatvorgaben
+                <textarea name="response_format_instruction" id="adminAiProfileFormatInstruction" rows="5" placeholder="z. B. Immer vollständigen Canvas zurückgeben, Vocal Tags erhalten..."></textarea>
+              </label>
+              <label>Verlinkte Instruction-Dateien<select id="adminAiProfileFiles" multiple size="6"></select></label>
+              <label>Als Default-Profil verwenden<select name="is_default" id="adminAiProfileDefault"><option value="false">Nein</option><option value="true">Ja</option></select></label>
+              <div class="form-actions"><button type="submit">KI-Profil speichern</button><button id="btnAdminNewAiProfile" class="secondary" type="button">Neu</button></div>
+            </form>
+            <div id="adminAiProfileList" class="style-library-list"></div>
+          </section>
+
+          <section class="card compact-card">
+            <h3>Instruction-Dateien</h3>
+            <p class="section-subtitle">Dateien hochladen oder manuell anlegen und danach mit KI-Profilen verlinken.</p>
+            <form id="adminInstructionUploadForm">
+              <div class="form-grid two">
+                <label>Titel<input name="title" id="adminInstructionUploadTitle" placeholder="Optionaler Anzeigename"></label>
+                <label>Datei<input name="file" id="adminInstructionUploadFile" type="file" accept=".txt,.md,.json,.yaml,.yml,.csv,text/*,application/json"></label>
+              </div>
+              <label>Beschreibung<input name="description" id="adminInstructionUploadDescription" placeholder="Wann soll die KI diese Datei nutzen?"></label>
+              <div class="form-actions"><button type="submit">Instruction hochladen</button></div>
+            </form>
+            <form id="adminInstructionTextForm">
+              <input type="hidden" name="id" id="adminInstructionFileId">
+              <div class="form-grid two">
+                <label>Titel<input name="title" id="adminInstructionTitle" placeholder="Reimregeln, Styleguide, Promptregeln"></label>
+                <label>Aktiv<select name="is_active" id="adminInstructionActive"><option value="true">Ja</option><option value="false">Nein</option></select></label>
+              </div>
+              <label>Beschreibung<input name="description" id="adminInstructionDescription" placeholder="Kurzbeschreibung"></label>
+              <label>Inhalt<textarea name="content" id="adminInstructionContent" rows="10" placeholder="Instructions, Regeln, Beispiele, Referenzen..."></textarea></label>
+              <div class="form-actions"><button type="submit">Instruction speichern</button><button id="btnAdminNewInstruction" class="secondary" type="button">Neu</button></div>
+            </form>
+            <div id="adminInstructionFileList" class="style-library-list"></div>
+          </section>
+
+          <section class="card compact-card">
+            <h3>Vocal Tags verwalten</h3>
+            <p class="section-subtitle">Diese Tags werden im Songtext Studio angezeigt und dem KI-Chat als nutzbares Wissen mitgegeben.</p>
+            <form id="adminVocalTagForm">
+              <input type="hidden" name="id" id="adminVocalTagId">
+              <div class="form-grid two">
+                <label>Label<input name="label" id="adminVocalTagLabel" required placeholder="German Male Rap"></label>
+                <label>Kategorie<input name="category" id="adminVocalTagCategory" required placeholder="Verse, Hook, Intro..."></label>
+              </div>
+              <label>Tag
+                <textarea name="tag" id="adminVocalTagText" rows="4" required placeholder="[Verse 1 | German Male Rap | powerful / dramatic / emotional | Energy: High]"></textarea>
+              </label>
+              <div class="form-grid two">
+                <label>Beschreibung<input name="description" id="adminVocalTagDescription" placeholder="Wann soll die KI diesen Tag verwenden?"></label>
+                <label>Sortierung<input name="sort_order" id="adminVocalTagSort" type="number" value="0"></label>
+              </div>
+              <label>Aktiv<select name="is_active" id="adminVocalTagActive"><option value="true">Ja</option><option value="false">Nein</option></select></label>
+              <div class="form-actions"><button type="submit">Vocal Tag speichern</button><button id="btnAdminNewVocalTag" class="secondary" type="button">Neu</button></div>
+            </form>
+            <div id="adminVocalTagList" class="style-library-list"></div>
+          </section>
+        </div>
+      </section>
+
+      <section class="tab-panel" id="tab-archive">
+        <section class="card wide archive-card suno-library-card">
+          <div class="library-header">
+            <div>
+              <p class="eyebrow">Library</p>
+              <h2>Meine Songs</h2>
+              <p class="section-subtitle">Suno-ähnliche Bibliothek: Cover, Player, Workflow-Aktionen und Details direkt pro Track.</p>
+            </div>
+            <div class="result-actions"><button id="btnArchiveRefresh" class="secondary" type="button">Aktualisieren</button></div>
+          </div>
+          <div class="library-filter-row" role="tablist" aria-label="Archivfilter">
+            <button class="library-filter active" type="button" data-archive-filter="all">Alle</button>
+            <button class="library-filter" type="button" data-archive-filter="generated">Generiert</button>
+            <button class="library-filter" type="button" data-archive-filter="extended">Extended</button>
+            <button class="library-filter" type="button" data-archive-filter="cover">Cover</button>
+            <button class="library-filter" type="button" data-archive-filter="vocals">Vocals</button>
+            <button class="library-filter" type="button" data-archive-filter="instrumental">Instrumental</button>
+            <button class="library-filter" type="button" data-archive-filter="lyrics">Songtexte</button>
+            <button class="library-filter" type="button" data-archive-filter="personas">Personas</button>
+            <button class="library-filter muted-filter" type="button" data-archive-filter="tasks">Tasks</button>
+            <button class="library-filter muted-filter" type="button" data-archive-filter="trash">Papierkorb</button>
+          </div>
+          <div class="archive-toolbar library-toolbar">
+            <input id="archiveSearch" placeholder="Titel, Style, Lyrics, Audio-ID oder Task-ID suchen...">
+            <select id="archiveType" aria-label="Archivtyp">
+              <option value="all">Alle Inhalte</option>
+              <option value="generated">Generiert</option>
+              <option value="extended">Extended</option>
+              <option value="cover">Cover Songs</option>
+              <option value="vocals">Add Vocals</option>
+              <option value="instrumental">Add Instrumental</option>
+              <option value="lyrics">Nur Songtexte</option>
+              <option value="personas">Personas</option>
+              <option value="tasks">Technische Tasks</option>
+              <option value="trash">Papierkorb</option>
+            </select>
+            <select id="archiveStatus" aria-label="Statusfilter">
+              <option value="all">Alle Status</option>
+              <option value="cached">Lokal gespeichert</option>
+              <option value="created">Erstellt</option>
+              <option value="error">Fehler</option>
+              <option value="favorite">Favoriten</option>
+              <option value="final">Final</option>
+            </select>
+            <select id="archiveSort" aria-label="Sortierung">
+              <option value="newest">Neueste zuerst</option>
+              <option value="oldest">Älteste zuerst</option>
+              <option value="title">Titel A-Z</option>
+              <option value="duration">Dauer absteigend</option>
+            </select>
+          </div>
+          <div id="archiveBulkBar" class="archive-bulk-bar hidden">
+            <div><strong id="archiveSelectedCount">0</strong> ausgewählt</div>
+            <div class="bulk-actions">
+              <button class="small-btn secondary" type="button" id="btnArchiveSelectAllVisible">Alle sichtbaren auswählen</button>
+              <button class="small-btn secondary" type="button" id="btnArchiveClearSelection">Auswahl aufheben</button>
+              <button class="small-btn danger-btn" type="button" id="btnArchiveDeleteSelected">In Papierkorb</button>
+              <button class="small-btn secondary" type="button" id="btnArchiveRestoreSelected">Auswahl wiederherstellen</button>
+              <button class="small-btn danger-btn" type="button" id="btnArchivePurgeSelected">Endgültig löschen</button>
+            </div>
+          </div>
+          <div id="archiveList" class="suno-library-list"></div>
+          <div id="archiveDetail" class="archive-detail empty-state visually-hidden">Wähle einen Eintrag aus.</div>
+        </section>
+      </section>
+    </div>
+  </main>
+
+
+
+  <div id="workflowModal" class="app-modal" aria-hidden="true">
+    <div class="modal-backdrop" data-close-modal="workflowModal"></div>
+    <section class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="workflowModalTitle">
+      <div class="modal-head"><h2 id="workflowModalTitle">Workflow-Übersicht</h2><button class="small-btn" type="button" data-close-modal="workflowModal">Schließen</button></div>
+      <div id="workflowModalContent" class="modal-grid"></div>
+    </section>
+  </div>
+
+  <div id="helpModal" class="app-modal" aria-hidden="true">
+    <div class="modal-backdrop" data-close-modal="helpModal"></div>
+    <section class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="helpModalTitle">
+      <div class="modal-head"><h2 id="helpModalTitle">Nächste Schritte</h2><button class="small-btn" type="button" data-close-modal="helpModal">Schließen</button></div>
+      <div id="helpModalContent" class="step-list modal-steps"></div>
+    </section>
+  </div>
+
+  <div id="systemModal" class="app-modal" aria-hidden="true">
+    <div class="modal-backdrop" data-close-modal="systemModal"></div>
+    <section class="modal-panel modal-panel-wide" role="dialog" aria-modal="true" aria-labelledby="systemModalTitle">
+      <div class="modal-head"><h2 id="systemModalTitle">System & Wartung</h2><button class="small-btn" type="button" data-close-modal="systemModal">Schließen</button></div>
+      <div class="modal-actions-row">
+        <button id="btnSystemDiagnostics" class="small-btn" type="button">Diagnose aktualisieren</button>
+        <button id="btnSystemExport" class="small-btn" type="button">JSON exportieren</button>
+        <button id="btnSystemExportZip" class="small-btn" type="button">Backup-ZIP</button>
+        <button id="btnSystemFixMetadata" class="small-btn" type="button">Library reparieren</button>
+        <button id="btnSystemRebuildProjects" class="small-btn" type="button">Projekte neu gruppieren</button>
+        <button id="btnSystemDeduplicateAudio" class="small-btn" type="button">Duplikate entfernen</button>
+        <button id="btnSystemRemoveOrphanFiles" class="small-btn danger-btn" type="button">Verwaiste Dateien löschen</button>
+        <button id="btnSystemCleanupFailedAudio" class="small-btn danger-btn" type="button">Fehlerhafte Audios entfernen</button>
+        <button id="btnSystemCleanupAudit" class="small-btn" type="button">Audit bereinigen</button>
+      </div>
+      <div id="systemModalContent" class="system-modal-content"></div>
+    </section>
+  </div>
+
+  <aside id="globalMiniPlayer" class="global-mini-player hidden" aria-label="Mini-Player"></aside>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <script src="/static/app.js"></script>
+</body>
+</html>

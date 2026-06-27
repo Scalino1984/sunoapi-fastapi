@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Song Studio">
+  <defs>
+    <linearGradient id="bg" x1="64" y1="32" x2="448" y2="480" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#14182f"/>
+      <stop offset="52%" stop-color="#080b18"/>
+      <stop offset="100%" stop-color="#03050d"/>
+    </linearGradient>
+    <linearGradient id="ring" x1="108" y1="96" x2="404" y2="416" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#2dfcff"/>
+      <stop offset="52%" stop-color="#8d5cff"/>
+      <stop offset="100%" stop-color="#ff3df2"/>
+    </linearGradient>
+    <linearGradient id="bars" x1="152" y1="160" x2="360" y2="352" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#2dfcff"/>
+      <stop offset="55%" stop-color="#ffffff"/>
+      <stop offset="100%" stop-color="#ff3df2"/>
+    </linearGradient>
+    <filter id="softGlow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="11" result="blur"/>
+      <feColorMatrix in="blur" type="matrix" values="0 0 0 0 0.18 0 0 0 0 0.95 0 0 0 0 1 0 0 0 0.7 0"/>
+      <feMerge>
+        <feMergeNode/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <rect x="24" y="24" width="464" height="464" rx="104" fill="url(#bg)"/>
+  <circle cx="256" cy="256" r="158" fill="none" stroke="url(#ring)" stroke-width="24" opacity="0.96" filter="url(#softGlow)"/>
+  <circle cx="256" cy="256" r="112" fill="#080b18" opacity="0.98"/>
+
+  <g filter="url(#softGlow)">
+    <rect x="150" y="221" width="34" height="70" rx="17" fill="url(#bars)"/>
+    <rect x="204" y="178" width="34" height="156" rx="17" fill="url(#bars)"/>
+    <rect x="258" y="136" width="34" height="240" rx="17" fill="url(#bars)"/>
+    <rect x="312" y="188" width="34" height="136" rx="17" fill="url(#bars)"/>
+    <rect x="366" y="230" width="34" height="52" rx="17" fill="url(#bars)"/>
+  </g>
+</svg>

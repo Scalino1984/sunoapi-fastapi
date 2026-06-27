@@ -1,0 +1,90 @@
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.crt
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.pytest-runtime/
+venv/
+.venv/
+
+# Node / React
+node_modules/
+frontend-react/node_modules/
+frontend-react/dist/
+frontend-react/.vite/
+
+# Runtime state and logs
+.runtime/
+*.log
+logs/
+
+# Databases and local app state
+*.db
+*.sqlite
+*.sqlite3
+*.db-shm
+*.db-wal
+
+# Generated/local media and cache
+storage/
+covers/
+test-suno/
+*.mp3
+*.wav
+*.flac
+*.m4a
+*.mp4
+*.mov
+*.webm
+*.gif
+
+# Local/generated root artifacts
+input*.png
+referenz.png
+palette.png
+cover_cover_*.jpg
+output*
+bugfix.patch
+catalog.csv
+songabfrage.txt
+package.json.backup
+*.bck
+*.bak
+srt_reference_script_logic_patch_sha256.txt
+
+# Local project history/audit notes that are not part of the public app package
+PATCH_*.md
+RELEASE_*.md
+TECH_*.md
+CURRENT_SNAPSHOT_*.md
+FINALISIERTER_PROJEKTSTAND_*.md
+PROJECT_BASELINE_*.md
+CODEBASE_ANALYSE.md
+DATABASE_SCHEMA_OVERVIEW_AI_AGENTS.md
+GIT-README.md
+KI_FUNKTIONEN_SYSTEM_PROMPTS_PROVIDER.md
+POSTGRESQL_UMSTELLUNG_ANWEISUNG_FUER_KI.md
+SYSTEMANWEISUNG_KI_PROJEKTANALYSE.md
+UMSETZUNGSPLAN_KI_ADMIN_FUNKTIONSKONFIG.md
+README_DATABASE_MAINTENANCE_STARTUP.md
+README_FEATURE_ROOT_*.md
+README_LOCAL_MASTER_UNIFIED_AUDIO.md
+README_PORTABLE_BACKUP_RESTORE.md
+analyses/
+documentation/local_audiofiles.txt
+documentation/storage_snapshot.txt
+documentation/tree-list-storage.txt
+documentation/test-audit-logs/
+
+# OS/editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

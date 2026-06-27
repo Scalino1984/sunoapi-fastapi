@@ -1,0 +1,18 @@
+[Unit]
+Description=Suno React Dev App (WSL)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+User=astier
+WorkingDirectory=/home/astier/Projekte/suno_react
+EnvironmentFile=/home/astier/Projekte/suno_react/.env
+ExecStart=/usr/bin/bash -lc 'source "$HOME/.nvm/nvm.sh" 2>/dev/null || true; npm run start'
+ExecStop=/usr/bin/bash -lc 'source "$HOME/.nvm/nvm.sh" 2>/dev/null || true; npm run stop'
+TimeoutStartSec=60
+TimeoutStopSec=60
+
+[Install]
+WantedBy=multi-user.target

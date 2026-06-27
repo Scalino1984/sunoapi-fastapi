@@ -1,0 +1,48 @@
+{
+  "name": "suno-fastapi-app-root",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Root control scripts for FastAPI backend, React frontend, backups and deployment.",
+  "scripts": {
+    "install:react": "rm -f frontend-react/package-lock.json && rm -rf frontend-react/node_modules/.vite frontend-react/.vite && npm --prefix frontend-react install",
+    "build:react": "npm --prefix frontend-react run build",
+
+    "start": "bash scripts/start-dev.sh",
+    "stop": "bash scripts/stop-dev.sh",
+    "restart": "npm run stop && npm run start",
+    "status": "bash scripts/status-dev.sh",
+
+    "logs": "bash scripts/logs-dev.sh",
+    "logs:api": "tail -f .runtime/logs/fastapi.log",
+    "logs:react": "tail -f .runtime/logs/react.log",
+    "logs:api:live": "tail -n 200 -f .runtime/logs/fastapi.log",
+    "logs:react:live": "tail -n 200 -f .runtime/logs/react.log",
+    "logs:live": "bash -c 'echo \"== FastAPI Live Log ==\"; tail -n 200 -f .runtime/logs/fastapi.log'",
+    "logs:srv": "sudo journalctl -u songstudio-vanilla -n 200 --no-pager",
+    "logs:srv:live": "sudo journalctl -u songstudio-vanilla -f",
+    "logs:apache:error": "sudo tail -n 200 -f /var/log/apache2/songstudio-react-ssl-error.log",
+    "logs:apache:access": "sudo tail -n 200 -f /var/log/apache2/songstudio-react-ssl-access.log",
+
+    "db:upgrade": "bash scripts/upgrade_db.sh",
+    "test:smoke": "bash scripts/smoke_test.sh",
+
+    "backup": "bash scripts/backup.sh",
+    "backup:local": "bash scripts/backup.sh",
+    "backup:srv": "sudo bash scripts/backup-srv.sh",
+
+    "react:install": "rm -f frontend-react/package-lock.json && rm -rf frontend-react/node_modules/.vite frontend-react/.vite && npm --prefix frontend-react install",
+    "react:build": "bash scripts/publish-react.sh build",
+    "react:deploy": "sudo bash scripts/publish-react.sh deploy",
+    "react:publish": "sudo bash scripts/publish-react.sh publish",
+    "react:status": "sudo bash scripts/publish-react.sh status",
+    "react:clean": "bash scripts/publish-react.sh clean",
+    "react:rollback": "sudo bash scripts/publish-react.sh rollback",
+
+    "deploy:react": "sudo bash scripts/publish-react.sh publish",
+    "deploy:full": "sudo bash scripts/backup-srv.sh && rm -f frontend-react/package-lock.json && rm -rf frontend-react/node_modules/.vite frontend-react/.vite && npm --prefix frontend-react install && sudo bash scripts/publish-react.sh publish && sudo systemctl restart songstudio-vanilla && sudo systemctl reload apache2"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
+

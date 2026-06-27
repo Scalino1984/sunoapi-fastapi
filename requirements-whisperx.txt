@@ -1,0 +1,4 @@
+# Optionales Zusatzpaket nur für das lokale SRT-Backend "whisperx".
+# Installation nur auf Servern ausführen, auf denen im Admin-Bereich
+# transcription_backend=whisperx genutzt werden soll.
+whisperx==3.8.6
