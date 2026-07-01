@@ -3,18 +3,19 @@ import { CheckCircle2, ClipboardCopy, Download, FileJson, Film, GitBranch, Refre
 import { api } from '../api/client.js';
 import { SectionHeader } from '../components/SectionHeader.jsx';
 import { formatDate, formatDuration, safeArray } from '../utils.js';
+import { useI18n } from '../i18n/I18nContext.jsx';
 
 const STATUS_OPTIONS = [
-  ['draft', 'Entwurf'],
-  ['lyrics', 'Lyrics'],
-  ['generated', 'Generiert'],
-  ['selection', 'Auswahl'],
-  ['edit', 'Bearbeitung'],
-  ['srt', 'SRT'],
-  ['video', 'Video'],
-  ['youtube', 'YouTube'],
-  ['release_ready', 'Release-ready'],
-  ['archived', 'Archiviert']
+  ['draft', 'production.status.draft'],
+  ['lyrics', 'production.status.lyrics'],
+  ['generated', 'production.status.generated'],
+  ['selection', 'production.status.selection'],
+  ['edit', 'production.status.edit'],
+  ['srt', 'production.status.srt'],
+  ['video', 'production.status.video'],
+  ['youtube', 'production.status.youtube'],
+  ['release_ready', 'production.status.releaseReady'],
+  ['archived', 'production.status.archived']
 ];
 
 function assetTitle(asset) {
@@ -69,14 +70,14 @@ function RatingInput({ label, value, onChange }) {
   );
 }
 
-function RoadmapPanel({ roadmap = [] }) {
+function RoadmapPanel({ roadmap = [], t }) {
   return (
     <section className="production-roadmap-grid">
       {safeArray(roadmap, ['items']).map((item) => (
         <article className="panel production-roadmap-card" key={item.key || item.title}>
           <div className="row between align-start">
             <div>
-              <p className="eyebrow">{item.status || 'geplant'}</p>
+              <p className="eyebrow">{item.status || t('production.planned', 'geplant')}</p>
               <h3>{item.title}</h3>
             </div>
             <CheckCircle2 size={20} />
@@ -90,7 +91,7 @@ function RoadmapPanel({ roadmap = [] }) {
   );
 }
 
-function AssetReadinessCard({ item, selected, onSelect }) {
+function AssetReadinessCard({ item, selected, onSelect, t }) {
   const readiness = item?.readiness || {};
   const state = item?.production || {};
   const missing = safeArray(readiness.missing).slice(0, 3);
@@ -109,23 +110,23 @@ function AssetReadinessCard({ item, selected, onSelect }) {
           <span key={check.key} className={check.passed ? 'ok' : 'missing'}>{check.label}</span>
         ))}
       </div>
-      {missing.length > 0 && <small className="muted">Fehlt: {missing.join(', ')}</small>}
+      {missing.length > 0 && <small className="muted">{t('production.missing', 'Fehlt')}: {missing.join(', ')}</small>}
     </button>
   );
 }
 
-function YoutubePackagePanel({ packageData, onCopy, assetId }) {
-  if (!packageData) return <p className="muted">Noch kein YouTube-Paket geladen.</p>;
+function YoutubePackagePanel({ packageData, onCopy, assetId, t }) {
+  if (!packageData) return <p className="muted">{t('production.youtube.empty', 'Noch kein YouTube-Paket geladen.')}</p>;
   return (
     <div className="nested-panel soft-panel stack">
       <div className="row between align-start">
         <div>
-          <p className="eyebrow">YouTube Export</p>
-          <h3>{packageData.title || 'Unbenannt'}</h3>
-          <p className="muted">Playlist: {packageData.playlist || '—'} · Tags: {safeArray(packageData.tags).length}</p>
+          <p className="eyebrow">{t('production.youtube.export', 'YouTube Export')}</p>
+          <h3>{packageData.title || t('production.untitled', 'Unbenannt')}</h3>
+          <p className="muted">{t('production.youtube.playlist', 'Playlist')}: {packageData.playlist || '—'} · Tags: {safeArray(packageData.tags).length}</p>
         </div>
         <div className="button-row wrap right">
-          <button type="button" onClick={onCopy}><ClipboardCopy size={15} /> Kopieren</button>
+          <button type="button" onClick={onCopy}><ClipboardCopy size={15} /> {t('common.copy', 'Kopieren')}</button>
           {assetId && <a className="button" href={api.production.youtubePackageTextUrl(assetId)}><Download size={15} /> TXT</a>}
         </div>
       </div>
@@ -134,20 +135,20 @@ function YoutubePackagePanel({ packageData, onCopy, assetId }) {
   );
 }
 
-function VideoPlanPanel({ videoPlan }) {
-  if (!videoPlan) return <p className="muted">Noch kein Musikvideo-Plan geladen.</p>;
+function VideoPlanPanel({ videoPlan, t }) {
+  if (!videoPlan) return <p className="muted">{t('production.video.empty', 'Noch kein Musikvideo-Plan geladen.')}</p>;
   return (
     <div className="nested-panel soft-panel stack">
       <div>
-        <p className="eyebrow">Musikvideo Workflow</p>
-        <h3>{videoPlan.scene_count || 0} Szenen aus {videoPlan.source === 'srt' ? 'SRT' : 'Lyrics'}</h3>
+        <p className="eyebrow">{t('production.video.workflow', 'Musikvideo Workflow')}</p>
+        <h3>{t('production.video.sceneCount', '{{count}} Szenen aus {{source}}', { count: videoPlan.scene_count || 0, source: videoPlan.source === 'srt' ? 'SRT' : 'Lyrics' })}</h3>
         <p className="muted">{videoPlan.export_hint}</p>
       </div>
       <div className="production-scene-list">
         {safeArray(videoPlan.scenes).slice(0, 10).map((scene) => (
           <article key={scene.index}>
-            <strong>Szene {scene.index}</strong>
-            <small>{scene.start != null ? `${scene.start}s – ${scene.end}s` : 'ohne Zeitstempel'}</small>
+            <strong>{t('production.video.scene', 'Szene')} {scene.index}</strong>
+            <small>{scene.start != null ? `${scene.start}s – ${scene.end}s` : t('production.video.noTimestamp', 'ohne Zeitstempel')}</small>
             <p>{scene.lyrics_excerpt || scene.prompt_hint}</p>
           </article>
         ))}
@@ -157,6 +158,7 @@ function VideoPlanPanel({ videoPlan }) {
 }
 
 export function ProductionPage({ notify, onReload, onNavigate, onOpenAsset }) {
+  const { t } = useI18n();
   const [cockpit, setCockpit] = useState(null);
   const [loading, setLoading] = useState(false);
   const [selectedId, setSelectedId] = useState(null);
@@ -174,9 +176,9 @@ export function ProductionPage({ notify, onReload, onNavigate, onOpenAsset }) {
       const result = await api.production.cockpit();
       setCockpit(result);
       if (!selectedId && result?.assets?.[0]?.id) setSelectedId(result.assets[0].id);
-      if (!options.silent) notify?.('Production Cockpit aktualisiert.', 'success');
+      if (!options.silent) notify?.(t('production.messages.cockpitUpdated', 'Production Cockpit aktualisiert.'), 'success');
     } catch (err) {
-      notify?.(err?.message || 'Production Cockpit konnte nicht geladen werden.', 'error');
+      notify?.(err?.message || t('production.messages.cockpitLoadFailed', 'Production Cockpit konnte nicht geladen werden.'), 'error');
     } finally {
       setLoading(false);
     }
@@ -189,7 +191,7 @@ export function ProductionPage({ notify, onReload, onNavigate, onOpenAsset }) {
       setDetails(result);
       setForm(stateFromAsset(result.asset));
     } catch (err) {
-      notify?.(err?.message || 'Produktionsdaten konnten nicht geladen werden.', 'error');
+      notify?.(err?.message || t('production.messages.workflowLoadFailed', 'Produktionsdaten konnten nicht geladen werden.'), 'error');
     }
   }
 
@@ -220,9 +222,9 @@ export function ProductionPage({ notify, onReload, onNavigate, onOpenAsset }) {
       setDetails((current) => ({ ...(current || {}), ...result, asset: result.asset, production: result.production, readiness: result.readiness }));
       await load({ silent: true });
       await onReload?.({ silent: true });
-      notify?.('Produktionsdaten gespeichert.', 'success');
+      notify?.(t('production.messages.workflowSaved', 'Produktionsdaten gespeichert.'), 'success');
     } catch (err) {
-      notify?.(err?.message || 'Produktionsdaten konnten nicht gespeichert werden.', 'error');
+      notify?.(err?.message || t('production.messages.workflowSaveFailed', 'Produktionsdaten konnten nicht gespeichert werden.'), 'error');
     } finally {
       setSaving(false);
     }
@@ -230,16 +232,16 @@ export function ProductionPage({ notify, onReload, onNavigate, onOpenAsset }) {
 
   async function duplicateVersion() {
     if (!selectedAsset?.id) return;
-    const label = prompt('Label für die neue Version:', 'Neue Version');
+    const label = prompt(t('production.messages.versionLabelPrompt', 'Label für die neue Version:'), t('production.newVersion', 'Neue Version'));
     if (label === null) return;
     try {
-      const result = await api.production.duplicateVersion(selectedAsset.id, { label: label || 'Neue Version', notes: form.notes || '' });
+      const result = await api.production.duplicateVersion(selectedAsset.id, { label: label || t('production.newVersion', 'Neue Version'), notes: form.notes || '' });
       await load({ silent: true });
       await onReload?.({ silent: true });
       setSelectedId(result?.audio_asset?.id || selectedAsset.id);
-      notify?.('Neue logische Version wurde angelegt.', 'success');
+      notify?.(t('production.messages.versionCreated', 'Neue logische Version wurde angelegt.'), 'success');
     } catch (err) {
-      notify?.(err?.message || 'Version konnte nicht erstellt werden.', 'error');
+      notify?.(err?.message || t('production.messages.versionFailed', 'Version konnte nicht erstellt werden.'), 'error');
     }
   }
 
@@ -247,17 +249,17 @@ export function ProductionPage({ notify, onReload, onNavigate, onOpenAsset }) {
     try {
       const result = await api.production.seedStylePresets();
       await onReload?.({ silent: true });
-      notify?.(`${result.created || 0} Style-Presets erstellt, ${result.existing || 0} bereits vorhanden.`, 'success');
+      notify?.(t('production.messages.presetsCreated', '{{created}} Style-Presets erstellt, {{existing}} bereits vorhanden.', { created: result.created || 0, existing: result.existing || 0 }), 'success');
     } catch (err) {
-      notify?.(err?.message || 'Style-Presets konnten nicht angelegt werden.', 'error');
+      notify?.(err?.message || t('production.messages.presetsFailed', 'Style-Presets konnten nicht angelegt werden.'), 'error');
     }
   }
 
   async function copyYoutubePackage() {
     const text = details?.youtube_package?.text || '';
-    if (!text.trim()) return notify?.('Kein YouTube-Paket zum Kopieren vorhanden.', 'error');
+    if (!text.trim()) return notify?.(t('production.messages.noYoutubePackage', 'Kein YouTube-Paket zum Kopieren vorhanden.'), 'error');
     await navigator.clipboard?.writeText(text);
-    notify?.('YouTube-Paket kopiert.', 'success');
+    notify?.(t('production.messages.youtubeCopied', 'YouTube-Paket kopiert.'), 'success');
   }
 
   const counts = cockpit?.counts || {};
@@ -265,50 +267,50 @@ export function ProductionPage({ notify, onReload, onNavigate, onOpenAsset }) {
 
   return (
     <section className="page stack production-page">
-      <SectionHeader eyebrow="Production Suite" title="Workflow Cockpit">
+      <SectionHeader eyebrow={t('production.eyebrow', 'Production Suite')} title={t('production.title', 'Workflow Cockpit')}>
         <button type="button" onClick={() => setShowRoadmap((value) => !value)}><FileJson size={16} /> Plan</button>
-        <button type="button" onClick={seedPresets}><Sparkles size={16} /> Presets anlegen</button>
-        <button type="button" onClick={() => load()} className={loading ? 'spin' : ''}><RefreshCw size={16} /> Aktualisieren</button>
+        <button type="button" onClick={seedPresets}><Sparkles size={16} /> {t('production.createPresets', 'Presets anlegen')}</button>
+        <button type="button" onClick={() => load()} className={loading ? 'spin' : ''}><RefreshCw size={16} /> {t('topbar.refresh', 'Aktualisieren')}</button>
       </SectionHeader>
 
       <section className="production-kpi-grid">
-        <article className="panel"><span>Tracks</span><strong>{counts.audio_assets ?? '—'}</strong><small>Library gesamt</small></article>
-        <article className="panel"><span>Release-ready</span><strong>{counts.release_ready ?? '—'}</strong><small>aktuelle Analyse</small></article>
-        <article className="panel"><span>YouTube-ready</span><strong>{counts.youtube_ready ?? '—'}</strong><small>Metadaten vorbereitet</small></article>
-        <article className="panel"><span>SRT offen</span><strong>{counts.needs_srt ?? '—'}</strong><small>für letzte Tracks</small></article>
-        <article className="panel"><span>Stems offen</span><strong>{counts.needs_stems ?? '—'}</strong><small>für letzte Tracks</small></article>
-        <article className="panel"><span>Tasks</span><strong>{counts.open_tasks ?? '—'}</strong><small>offen/laufend</small></article>
+        <article className="panel"><span>Tracks</span><strong>{counts.audio_assets ?? '—'}</strong><small>{t('production.kpi.libraryTotal', 'Library gesamt')}</small></article>
+        <article className="panel"><span>Release-ready</span><strong>{counts.release_ready ?? '—'}</strong><small>{t('production.kpi.currentAnalysis', 'aktuelle Analyse')}</small></article>
+        <article className="panel"><span>YouTube-ready</span><strong>{counts.youtube_ready ?? '—'}</strong><small>{t('production.kpi.metadataPrepared', 'Metadaten vorbereitet')}</small></article>
+        <article className="panel"><span>{t('production.kpi.srtOpen', 'SRT offen')}</span><strong>{counts.needs_srt ?? '—'}</strong><small>{t('production.kpi.forRecentTracks', 'für letzte Tracks')}</small></article>
+        <article className="panel"><span>{t('production.kpi.stemsOpen', 'Stems offen')}</span><strong>{counts.needs_stems ?? '—'}</strong><small>{t('production.kpi.forRecentTracks', 'für letzte Tracks')}</small></article>
+        <article className="panel"><span>Tasks</span><strong>{counts.open_tasks ?? '—'}</strong><small>{t('production.kpi.openRunning', 'offen/laufend')}</small></article>
       </section>
 
-      {showRoadmap && <RoadmapPanel roadmap={cockpit?.roadmap || []} />}
+      {showRoadmap && <RoadmapPanel roadmap={cockpit?.roadmap || []} t={t} />}
 
       <section className="production-layout">
         <aside className="panel stack production-asset-list">
           <div className="row between align-start">
             <div>
-              <p className="eyebrow">Tracks</p>
-              <h2>Readiness</h2>
+              <p className="eyebrow">{t('production.tracks', 'Tracks')}</p>
+              <h2>{t('production.readiness', 'Readiness')}</h2>
             </div>
             <Rocket size={22} />
           </div>
-          {!assets.length ? <p className="muted">Keine Audios gefunden.</p> : assets.map((item) => (
-            <AssetReadinessCard key={item.id} item={item} selected={String(item.id) === String(selectedAsset?.id)} onSelect={() => setSelectedId(item.id)} />
+          {!assets.length ? <p className="muted">{t('production.noAudios', 'Keine Audios gefunden.')}</p> : assets.map((item) => (
+            <AssetReadinessCard key={item.id} item={item} selected={String(item.id) === String(selectedAsset?.id)} onSelect={() => setSelectedId(item.id)} t={t} />
           ))}
         </aside>
 
         <main className="panel stack production-workbench">
-          {!selectedAsset ? <p className="muted">Wähle einen Track aus.</p> : (
+          {!selectedAsset ? <p className="muted">{t('production.selectTrack', 'Wähle einen Track aus.')}</p> : (
             <>
               <div className="row between align-start">
                 <div>
-                  <p className="eyebrow">Aktueller Track</p>
+                  <p className="eyebrow">{t('production.currentTrack', 'Aktueller Track')}</p>
                   <h2>{assetTitle(selectedAsset)}</h2>
-                  <p className="muted">Readiness: {readiness.score || 0}% · {readiness.label || 'Entwurf'} · {formatDuration(selectedAsset.duration_seconds)}</p>
+                  <p className="muted">Readiness: {readiness.score || 0}% · {readiness.label || t('production.status.draft', 'Entwurf')} · {formatDuration(selectedAsset.duration_seconds)}</p>
                 </div>
                 <div className="button-row wrap right">
-                  <button type="button" onClick={() => onOpenAsset?.(selectedAsset.id)}><Rocket size={15} /> Library öffnen</button>
-                  <button type="button" onClick={duplicateVersion}><GitBranch size={15} /> Version duplizieren</button>
-                  <a className="button" href={selectedAsset.project_id ? api.production.projectExportUrl(selectedAsset.project_id, 'zip') : '#'} onClick={(event) => { if (!selectedAsset.project_id) event.preventDefault(); }}><Download size={15} /> Projekt-ZIP</a>
+                  <button type="button" onClick={() => onOpenAsset?.(selectedAsset.id)}><Rocket size={15} /> {t('production.openLibrary', 'Library öffnen')}</button>
+                  <button type="button" onClick={duplicateVersion}><GitBranch size={15} /> {t('production.duplicateVersion', 'Version duplizieren')}</button>
+                  <a className="button" href={selectedAsset.project_id ? api.production.projectExportUrl(selectedAsset.project_id, 'zip') : '#'} onClick={(event) => { if (!selectedAsset.project_id) event.preventDefault(); }}><Download size={15} /> {t('production.projectZip', 'Projekt-ZIP')}</a>
                 </div>
               </div>
 
@@ -323,16 +325,16 @@ export function ProductionPage({ notify, onReload, onNavigate, onOpenAsset }) {
                 <div className="form-grid three">
                   <label>Status
                     <select value={form.production_status} onChange={(event) => updateForm('production_status', event.target.value)}>
-                      {STATUS_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+                      {STATUS_OPTIONS.map(([value, labelKey]) => <option key={value} value={value}>{t(labelKey, value)}</option>)}
                     </select>
                   </label>
-                  <label>Genre<input value={form.genre} onChange={(event) => updateForm('genre', event.target.value)} placeholder="z. B. Deutschrap" /></label>
-                  <label>Stimmung<input value={form.mood} onChange={(event) => updateForm('mood', event.target.value)} placeholder="z. B. düster, humorvoll" /></label>
+                  <label>Genre<input value={form.genre} onChange={(event) => updateForm('genre', event.target.value)} placeholder={t('production.placeholders.genre', 'z. B. Deutschrap')} /></label>
+                  <label>{t('production.mood', 'Stimmung')}<input value={form.mood} onChange={(event) => updateForm('mood', event.target.value)} placeholder={t('production.placeholders.mood', 'z. B. düster, humorvoll')} /></label>
                 </div>
 
                 <div className="production-rating-grid">
-                  <RatingInput label="Bewertung" value={form.rating} onChange={(value) => updateForm('rating', value)} />
-                  <RatingInput label="Energie" value={form.energy} onChange={(value) => updateForm('energy', value)} />
+                  <RatingInput label={t('production.ratings.rating', 'Bewertung')} value={form.rating} onChange={(value) => updateForm('rating', value)} />
+                  <RatingInput label={t('production.ratings.energy', 'Energie')} value={form.energy} onChange={(value) => updateForm('energy', value)} />
                   <RatingInput label="Hook" value={form.hook_strength} onChange={(value) => updateForm('hook_strength', value)} />
                   <RatingInput label="Lyrics" value={form.lyrics_quality} onChange={(value) => updateForm('lyrics_quality', value)} />
                   <RatingInput label="Mix" value={form.mix_quality} onChange={(value) => updateForm('mix_quality', value)} />
@@ -345,28 +347,28 @@ export function ProductionPage({ notify, onReload, onNavigate, onOpenAsset }) {
                 </div>
 
                 <div className="form-grid two">
-                  <label>YouTube Titel<input value={form.youtube_title} onChange={(event) => updateForm('youtube_title', event.target.value)} /></label>
-                  <label>YouTube Playlist<input value={form.youtube_playlist} onChange={(event) => updateForm('youtube_playlist', event.target.value)} placeholder="z. B. Deutschrap / Boom Bap" /></label>
-                  <label className="wide">YouTube Tags<input value={form.youtube_tags} onChange={(event) => updateForm('youtube_tags', event.target.value)} placeholder="Kommagetrennt" /></label>
-                  <label className="wide">YouTube Beschreibung<textarea rows={5} value={form.youtube_description} onChange={(event) => updateForm('youtube_description', event.target.value)} /></label>
-                  <label className="wide">To-do<textarea rows={4} value={form.todo} onChange={(event) => updateForm('todo', event.target.value)} placeholder="Ein Punkt pro Zeile" /></label>
-                  <label className="wide">Notizen<textarea rows={4} value={form.notes} onChange={(event) => updateForm('notes', event.target.value)} /></label>
+                  <label>{t('production.youtube.title', 'YouTube Titel')}<input value={form.youtube_title} onChange={(event) => updateForm('youtube_title', event.target.value)} /></label>
+                  <label>YouTube Playlist<input value={form.youtube_playlist} onChange={(event) => updateForm('youtube_playlist', event.target.value)} placeholder={t('production.placeholders.youtubePlaylist', 'z. B. Deutschrap / Boom Bap')} /></label>
+                  <label className="wide">YouTube Tags<input value={form.youtube_tags} onChange={(event) => updateForm('youtube_tags', event.target.value)} placeholder={t('production.placeholders.commaSeparated', 'Kommagetrennt')} /></label>
+                  <label className="wide">{t('production.youtube.description', 'YouTube Beschreibung')}<textarea rows={5} value={form.youtube_description} onChange={(event) => updateForm('youtube_description', event.target.value)} /></label>
+                  <label className="wide">To-do<textarea rows={4} value={form.todo} onChange={(event) => updateForm('todo', event.target.value)} placeholder={t('production.placeholders.todoLine', 'Ein Punkt pro Zeile')} /></label>
+                  <label className="wide">{t('production.notes', 'Notizen')}<textarea rows={4} value={form.notes} onChange={(event) => updateForm('notes', event.target.value)} /></label>
                 </div>
 
                 <div className="button-row wrap right">
-                  <button className="primary" type="submit" disabled={saving}><Save size={16} /> {saving ? 'Speichert…' : 'Produktionsdaten speichern'}</button>
+                  <button className="primary" type="submit" disabled={saving}><Save size={16} /> {saving ? t('production.saving', 'Speichert…') : t('production.saveWorkflow', 'Produktionsdaten speichern')}</button>
                 </div>
               </form>
 
               <section className="production-output-grid">
-                <YoutubePackagePanel packageData={details?.youtube_package} onCopy={copyYoutubePackage} assetId={selectedAsset.id} />
-                <VideoPlanPanel videoPlan={details?.video_plan} />
+                <YoutubePackagePanel packageData={details?.youtube_package} onCopy={copyYoutubePackage} assetId={selectedAsset.id} t={t} />
+                <VideoPlanPanel videoPlan={details?.video_plan} t={t} />
               </section>
 
               <section className="nested-panel soft-panel stack">
-                <div className="row between"><div><p className="eyebrow">Audit</p><h3>Track-Verlauf</h3></div><Film size={18} /></div>
+                <div className="row between"><div><p className="eyebrow">Audit</p><h3>{t('production.trackHistory', 'Track-Verlauf')}</h3></div><Film size={18} /></div>
                 <div className="production-event-list">
-                  {safeArray(details?.events).length === 0 ? <p className="muted">Noch keine Ereignisse vorhanden.</p> : safeArray(details?.events).slice(0, 16).map((event) => (
+                  {safeArray(details?.events).length === 0 ? <p className="muted">{t('production.noEvents', 'Noch keine Ereignisse vorhanden.')}</p> : safeArray(details?.events).slice(0, 16).map((event) => (
                     <article key={`${event.source}-${event.id}-${event.created_at}`}>
                       <strong>{event.title || event.event_type}</strong>
                       <small>{event.source} · {formatDate(event.created_at)}</small>

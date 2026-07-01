@@ -3,6 +3,7 @@ import { Captions, ChevronDown, ChevronUp, Download, ExternalLink, FileText, Hea
 import { api } from '../api/client.js';
 import { formatDuration, handleCoverImageError, operationLabel, pickCover, pickLyrics, pickPrompt, pickStyle, pickTitle } from '../utils.js';
 import { Waveform } from './Waveform.jsx';
+import { useI18n } from '../i18n/I18nContext.jsx';
 
 function formatClock(value) {
   const seconds = Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
@@ -92,6 +93,7 @@ function stableStreamUrl(assetId, cacheBust = false) {
 }
 
 export function MiniPlayer({ queue, currentIndex, loop, sidebarMode = 'open', mobileNavOpen = false, playerCommand = 0, onPlaybackStateChange, onLoopChange, onIndexChange, onOpenDetails, onPrepareMusic, onFavoriteChange, onClose }) {
+  const { t } = useI18n();
   const audioRef = useRef(null);
   const progressRef = useRef(null);
   const lastPlayerCommandRef = useRef(0);
@@ -197,12 +199,12 @@ export function MiniPlayer({ queue, currentIndex, loop, sidebarMode = 'open', mo
             clearSrtTaskWatcher();
             setSrtGenerating(false);
             setSrtLoading(false);
-            setError('SRT wurde erzeugt. Anzeige wird beim nächsten Aktualisieren geladen.');
+            setError(t('player.errors.srtGeneratedReload', 'SRT wurde erzeugt. Anzeige wird beim nächsten Aktualisieren geladen.'));
             window.dispatchEvent(new CustomEvent('srt:updated', { detail: { audio_asset_id: assetId } }));
             return;
           }
         } else if (isTaskFailure(task)) {
-          const message = task?.error_message || task?.response_payload?.message || task?.result_payload?.message || 'SRT-Erzeugung fehlgeschlagen.';
+          const message = task?.error_message || task?.response_payload?.message || task?.result_payload?.message || t('player.errors.srtFailed', 'SRT-Erzeugung fehlgeschlagen.');
           clearSrtTaskWatcher();
           setSrtGenerating(false);
           setSrtLoading(false);
@@ -218,7 +220,7 @@ export function MiniPlayer({ queue, currentIndex, loop, sidebarMode = 'open', mo
         }
       } catch (err) {
         if (watcher.attempts >= 3) {
-          setError(`SRT-Status wird weiter überwacht${taskId ? ` (#${taskId})` : ''}…`);
+        setError(t('player.errors.srtStatusWatching', 'SRT-Status wird weiter überwacht{{suffix}}…', { suffix: taskId ? ` (#${taskId})` : '' }));
         }
       }
 
@@ -226,7 +228,7 @@ export function MiniPlayer({ queue, currentIndex, loop, sidebarMode = 'open', mo
         clearSrtTaskWatcher();
         setSrtGenerating(false);
         setSrtLoading(false);
-        setError(`SRT-Task läuft weiterhin im Hintergrund${taskId ? ` (#${taskId})` : ''}.`);
+        setError(t('player.errors.srtTaskBackground', 'SRT-Task läuft weiterhin im Hintergrund{{suffix}}.', { suffix: taskId ? ` (#${taskId})` : '' }));
         return;
       }
 
@@ -396,7 +398,7 @@ export function MiniPlayer({ queue, currentIndex, loop, sidebarMode = 'open', mo
         // Dann bereiten wir exakt dieses Asset gezielt vor und starten mit
         // cache-busted Stream-URL neu, statt den Nutzer zum Browser-F5 zu zwingen.
         if (cancelled) return;
-        setError('Audio wird lokal vorbereitet. Erneuter Start läuft…');
+        setError(t('player.errors.audioPreparing', 'Audio wird lokal vorbereitet. Erneuter Start läuft…'));
         await preparePlaybackAsset({ cacheBust: true });
         await new Promise((resolve) => window.setTimeout(resolve, 350));
         const retryAudio = audioRef.current;
@@ -408,7 +410,7 @@ export function MiniPlayer({ queue, currentIndex, loop, sidebarMode = 'open', mo
             setIsPlaying(true);
           }
         } catch {
-          if (!cancelled) setError('Autoplay wurde blockiert oder Audio ist noch nicht bereit. Bitte Play drücken.');
+          if (!cancelled) setError(t('player.errors.autoplayBlocked', 'Autoplay wurde blockiert oder Audio ist noch nicht bereit. Bitte Play drücken.'));
         }
       }
     }
@@ -469,7 +471,7 @@ export function MiniPlayer({ queue, currentIndex, loop, sidebarMode = 'open', mo
   const nextSrtSegment = !activeSrtSegment ? srtSegments.find((segment) => Number(segment.start || 0) > Number(currentTime || 0)) : null;
   const hasSrt = srtSegments.length > 0;
   const displayedSrtSegment = activeSrtSegment || nextSrtSegment || null;
-  const displayedSrtText = displayedSrtSegment?.text || 'Noch keine aktive Untertitel-Zeile.';
+  const displayedSrtText = displayedSrtSegment?.text || t('player.noActiveSubtitle', 'Noch keine aktive Untertitel-Zeile.');
   const displayedSrtLength = displayedSrtText.replace(/\s+/g, ' ').trim().length;
   const displayedSrtFontSize = displayedSrtLength > 125
     ? '0.58rem'
@@ -500,7 +502,7 @@ export function MiniPlayer({ queue, currentIndex, loop, sidebarMode = 'open', mo
 
   function handleAudioError() {
     if (!current?.id || !audioRef.current) {
-      setError('Audio konnte nicht geladen werden.');
+      setError(t('player.errors.audioLoad', 'Audio konnte nicht geladen werden.'));
       return;
     }
     const retry = streamRetryRef.current || { assetId: current.id, count: 0 };
@@ -510,7 +512,7 @@ export function MiniPlayer({ queue, currentIndex, loop, sidebarMode = 'open', mo
     const count = Number(streamRetryRef.current.count || 0);
     if (count < 3) {
       streamRetryRef.current = { assetId: current.id, count: count + 1 };
-      setError('Audio wird gerade bereitgestellt. Erneuter Ladeversuch läuft…');
+      setError(t('player.errors.audioProvisioning', 'Audio wird gerade bereitgestellt. Erneuter Ladeversuch läuft…'));
       window.setTimeout(() => {
         void (async () => {
           const audio = audioRef.current;
@@ -520,17 +522,17 @@ export function MiniPlayer({ queue, currentIndex, loop, sidebarMode = 'open', mo
           if (!retryAudio) return;
           retryAudio.play()
             .then(() => { setError(''); setIsPlaying(true); })
-            .catch(() => setError('Wiedergabe konnte noch nicht gestartet werden. Bitte erneut Play drücken.'));
+            .catch(() => setError(t('player.errors.playbackRetry', 'Wiedergabe konnte noch nicht gestartet werden. Bitte erneut Play drücken.')));
         })();
       }, 1500);
       return;
     }
-    setError('Audio konnte nicht geladen werden. Bitte Inhalt aktualisieren oder später erneut versuchen.');
+    setError(t('player.errors.audioLoadRefresh', 'Audio konnte nicht geladen werden. Bitte Inhalt aktualisieren oder später erneut versuchen.'));
   }
 
   if (!current) return null;
 
-  const operation = operationLabel(current.operation_type || current.task_type);
+  const operation = operationLabel(current.operation_type || current.task_type, t);
   const currentVariantIndex = Number(current.project_variant_index || 0);
   const currentVariantTotal = Number(current.project_variant_total || queue?.length || 0);
   const currentDisplayTitle = current.project_variant_title
@@ -550,7 +552,7 @@ export function MiniPlayer({ queue, currentIndex, loop, sidebarMode = 'open', mo
       onFavoriteChange?.(current.id, nextValue);
     } catch (err) {
       setFavoriteOverride(Boolean(current?.is_favorite));
-      setError(err?.message || 'Favorit konnte nicht gespeichert werden.');
+      setError(err?.message || t('player.errors.favoriteFailed', 'Favorit konnte nicht gespeichert werden.'));
     } finally {
       setFavoriteSaving(false);
     }
@@ -574,7 +576,7 @@ export function MiniPlayer({ queue, currentIndex, loop, sidebarMode = 'open', mo
         // die konkrete AudioAsset-Variante vorbereiten. Das vermeidet den alten
         // Zustand: neuer Song sichtbar, aber Stream erst nach Browser-F5 nutzbar.
         await refreshPromise;
-        setError('Audio wird vorbereitet. Bitte einen Moment…');
+        setError(t('player.errors.preparing', 'Audio wird vorbereitet. Bitte einen Moment…'));
         await preparePlaybackAsset({ cacheBust: true });
         await new Promise((resolve) => window.setTimeout(resolve, 300));
         const retryAudio = audioRef.current;
@@ -584,7 +586,7 @@ export function MiniPlayer({ queue, currentIndex, loop, sidebarMode = 'open', mo
           setIsPlaying(true);
           setError('');
         } catch {
-          setError('Wiedergabe konnte nicht gestartet werden. Bitte kurz warten und erneut Play drücken.');
+          setError(t('player.errors.playbackStartFailed', 'Wiedergabe konnte nicht gestartet werden. Bitte kurz warten und erneut Play drücken.'));
         }
       }
       return;
@@ -677,12 +679,12 @@ export function MiniPlayer({ queue, currentIndex, loop, sidebarMode = 'open', mo
     if (!current?.id || srtGenerating) return;
     let keepGeneratingForWatcher = false;
     setSrtGenerating(true);
-    setError('SRT-Erzeugung wird gestartet…');
+    setError(t('player.errors.srtStarting', 'SRT-Erzeugung wird gestartet…'));
     try {
       const result = await api.archive.generateSrt(current.id, { force: true });
       if (result?.queued || result?.task_local_id) {
         const taskId = result?.task_local_id || result?.id || null;
-        setError(`SRT-Erzeugung läuft im Hintergrund${taskId ? ` (#${taskId})` : ''}. Status wird automatisch überwacht…`);
+        setError(t('player.errors.srtBackground', 'SRT-Erzeugung läuft im Hintergrund{{suffix}}. Status wird automatisch überwacht…', { suffix: taskId ? ` (#${taskId})` : '' }));
         window.dispatchEvent(new CustomEvent('srt:updated', {
           detail: { audio_asset_id: current.id, srt: { audio_asset_id: current.id, status: 'running', task_local_id: taskId } }
         }));
@@ -713,11 +715,11 @@ export function MiniPlayer({ queue, currentIndex, loop, sidebarMode = 'open', mo
       setSrtState(result);
       window.dispatchEvent(new CustomEvent('srt:updated', { detail: { audio_asset_id: current.id, srt: result } }));
       if (switchToSrt) setPlayerView('srt');
-      setError('SRT wurde erzeugt.');
+      setError(t('player.errors.srtGenerated', 'SRT wurde erzeugt.'));
       window.setTimeout(() => setError(''), 2500);
     } catch (err) {
       clearSrtTaskWatcher();
-      setError(err?.message || 'SRT-Erzeugung fehlgeschlagen.');
+      setError(err?.message || t('player.errors.srtFailed', 'SRT-Erzeugung fehlgeschlagen.'));
     } finally {
       if (!keepGeneratingForWatcher) setSrtGenerating(false);
     }
@@ -734,12 +736,12 @@ export function MiniPlayer({ queue, currentIndex, loop, sidebarMode = 'open', mo
   async function generateCurrentStems() {
     if (!current?.id || actionBusy) return;
     setActionBusy('stems');
-    setError('Stem-Erzeugung wird gestartet…');
+    setError(t('player.errors.stemsStarting', 'Stem-Erzeugung wird gestartet…'));
     try {
       const result = await api.archive.generateStems(current.id);
-      setError(`Stems gestartet${result?.task_local_id ? ` (#${result.task_local_id})` : ''}.`);
+      setError(t('player.errors.stemsStarted', 'Stems gestartet{{suffix}}.', { suffix: result?.task_local_id ? ` (#${result.task_local_id})` : '' }));
     } catch (err) {
-      setError(err?.message || 'Stem-Erzeugung fehlgeschlagen.');
+      setError(err?.message || t('player.errors.stemsFailed', 'Stem-Erzeugung fehlgeschlagen.'));
     } finally {
       setActionBusy('');
     }
@@ -748,15 +750,15 @@ export function MiniPlayer({ queue, currentIndex, loop, sidebarMode = 'open', mo
   async function generateCurrentAiCover() {
     if (!current?.id || actionBusy) return;
     setActionBusy('cover');
-    setError('KI-Cover wird gestartet…');
+    setError(t('player.errors.coverStarting', 'KI-Cover wird gestartet…'));
     try {
       const formData = new FormData();
       formData.append('model', 'pro');
       formData.append('note', pickTitle(current));
       const result = await api.archive.generateAiCover(current.id, formData);
-      setError(`KI-Cover gestartet${result?.id ? ` (#${result.id})` : result?.task_id ? ` (${result.task_id})` : ''}.`);
+      setError(t('player.errors.coverStarted', 'KI-Cover gestartet{{suffix}}.', { suffix: result?.id ? ` (#${result.id})` : result?.task_id ? ` (${result.task_id})` : '' }));
     } catch (err) {
-      setError(err?.message || 'KI-Cover konnte nicht gestartet werden.');
+      setError(err?.message || t('player.errors.coverFailed', 'KI-Cover konnte nicht gestartet werden.'));
     } finally {
       setActionBusy('');
     }
@@ -783,8 +785,8 @@ export function MiniPlayer({ queue, currentIndex, loop, sidebarMode = 'open', mo
       work_mode: 'extend',
       forceAdvanced: true,
       message: hasReusableAudioId
-        ? 'Musik erweitern wurde im Generator vorbereitet.'
-        : 'Upload And Extend wurde vorbereitet. Prüfe, ob eine extern erreichbare Audio-URL vorhanden ist.'
+        ? t('player.errors.extendPrepared', 'Musik erweitern wurde im Generator vorbereitet.')
+        : t('player.errors.uploadExtendPrepared', 'Upload And Extend wurde vorbereitet. Prüfe, ob eine extern erreichbare Audio-URL vorhanden ist.')
     });
     setMenuOpen(false);
   }
@@ -805,30 +807,30 @@ export function MiniPlayer({ queue, currentIndex, loop, sidebarMode = 'open', mo
       <div className="mini-player-left">
         <img src={pickCover(current)} alt="Cover" onError={handleCoverImageError} />
         <div className="mini-meta">
-          <button type="button" className="mini-title-button" onClick={(event) => { event.preventDefault(); event.stopPropagation(); onOpenDetails?.(current); }} title="Songdetails öffnen">{currentDisplayTitle}</button>
+          <button type="button" className="mini-title-button" onClick={(event) => { event.preventDefault(); event.stopPropagation(); onOpenDetails?.(current); }} title={t('player.openDetails', 'Songdetails öffnen')}>{currentDisplayTitle}</button>
           <span>{operation} · {currentIndex + 1}/{queue.length} · {formatDuration(duration || current.duration_seconds)}</span>
           {error && <small className="warning-text">{error}</small>}
         </div>
       </div>
 
       <div className="mini-player-mobile-controls">
-        <button type="button" className="player-main-play" onClick={togglePlay} title={isPlaying ? 'Pause' : 'Abspielen'}>{isPlaying ? <Pause size={20} /> : <Play size={20} />}</button>
-        <button type="button" className="player-mobile-expand" onClick={() => setExpanded((value) => !value)} aria-expanded={expanded} title={expanded ? 'Player einklappen' : 'Player erweitern'}>{expanded ? <ChevronDown size={18} /> : <ChevronUp size={18} />}</button>
-        <button type="button" className="player-close-button player-close-mobile" onClick={closePlayer} aria-label="Player schließen" title="Player schließen"><X size={18} /></button>
+        <button type="button" className="player-main-play" onClick={togglePlay} title={isPlaying ? t('player.pause', 'Pause') : t('player.play', 'Abspielen')}>{isPlaying ? <Pause size={20} /> : <Play size={20} />}</button>
+        <button type="button" className="player-mobile-expand" onClick={() => setExpanded((value) => !value)} aria-expanded={expanded} title={expanded ? t('player.collapse', 'Player einklappen') : t('player.expand', 'Player erweitern')}>{expanded ? <ChevronDown size={18} /> : <ChevronUp size={18} />}</button>
+        <button type="button" className="player-close-button player-close-mobile" onClick={closePlayer} aria-label={t('player.close', 'Player schließen')} title={t('player.close', 'Player schließen')}><X size={18} /></button>
       </div>
 
       <div className="custom-player-shell">
         <div className="custom-player-controls">
-          <button type="button" className="player-round" onClick={previous} disabled={!canPrevious} title="Vorheriger Track"><SkipBack size={18} /></button>
-          <button type="button" className="player-main-play" onClick={togglePlay} title={isPlaying ? 'Pause' : 'Abspielen'}>{isPlaying ? <Pause size={22} /> : <Play size={22} />}</button>
-          <button type="button" className="player-round" onClick={next} disabled={!canNext} title="Nächster Track"><SkipForward size={18} /></button>
-          <div className="mini-player-view-toolbar mini-player-view-toolbar-inline" aria-label="Player-Anzeige">
-            <button type="button" className={playerView === 'waveform' ? 'active' : ''} onClick={() => setPlayerView('waveform')} title="Waveform anzeigen"><Waves size={14} /> Waveform</button>
-            <button type="button" className={playerView === 'srt' ? 'active' : ''} onClick={handleSrtButtonClick} disabled={srtLoading || srtGenerating} title={hasSrt ? 'Live-SRT anzeigen' : 'SRT erzeugen'}><Captions size={14} /> {srtGenerating ? 'SRT…' : 'SRT'}</button>
+          <button type="button" className="player-round" onClick={previous} disabled={!canPrevious} title={t('player.previous', 'Vorheriger Track')}><SkipBack size={18} /></button>
+          <button type="button" className="player-main-play" onClick={togglePlay} title={isPlaying ? t('player.pause', 'Pause') : t('player.play', 'Abspielen')}>{isPlaying ? <Pause size={22} /> : <Play size={22} />}</button>
+          <button type="button" className="player-round" onClick={next} disabled={!canNext} title={t('player.next', 'Nächster Track')}><SkipForward size={18} /></button>
+          <div className="mini-player-view-toolbar mini-player-view-toolbar-inline" aria-label={t('player.display', 'Player-Anzeige')}>
+            <button type="button" className={playerView === 'waveform' ? 'active' : ''} onClick={() => setPlayerView('waveform')} title={t('player.showWaveform', 'Waveform anzeigen')}><Waves size={14} /> Waveform</button>
+            <button type="button" className={playerView === 'srt' ? 'active' : ''} onClick={handleSrtButtonClick} disabled={srtLoading || srtGenerating} title={hasSrt ? t('player.showLiveSrt', 'Live-SRT anzeigen') : t('player.generateSrt', 'SRT erzeugen')}><Captions size={14} /> {srtGenerating ? 'SRT…' : 'SRT'}</button>
           </div>
 
           <span className="custom-time current-time">{formatClock(currentTime)}</span>
-          <div className="custom-progress" ref={progressRef} onClick={seekFromEvent} role="slider" aria-label="Position" aria-valuemin="0" aria-valuemax="100" aria-valuenow={Math.round(progress)}>
+          <div className="custom-progress" ref={progressRef} onClick={seekFromEvent} role="slider" aria-label={t('player.position', 'Position')} aria-valuemin="0" aria-valuemax="100" aria-valuenow={Math.round(progress)}>
             <div className="custom-progress-track">
               <div className="custom-progress-fill" style={{ width: `${progress}%` }} />
               <span className="custom-progress-thumb" style={{ left: `${progress}%` }} />
@@ -839,7 +841,7 @@ export function MiniPlayer({ queue, currentIndex, loop, sidebarMode = 'open', mo
         <div className={`mini-player-visual ${playerView === 'srt' && hasSrt ? 'is-srt' : 'is-waveform'}`}>
           {playerView === 'srt' && hasSrt ? (
             <div className="mini-player-srt-live" style={{ '--srt-live-font-size': displayedSrtFontSize }}>
-              <span className="mini-player-srt-label">Live-SRT</span>
+              <span className="mini-player-srt-label">{t('player.liveSrt', 'Live-SRT')}</span>
               <strong title={displayedSrtText}>{displayedSrtText}</strong>
               {displayedSrtSegment && <small>{formatClock(displayedSrtSegment.start)} → {formatClock(displayedSrtSegment.end)}</small>}
             </div>
@@ -850,30 +852,30 @@ export function MiniPlayer({ queue, currentIndex, loop, sidebarMode = 'open', mo
       </div>
 
       <div className="mini-player-right custom-player-actions">
-        <span className={isPlaying ? 'player-state playing' : 'player-state'}>{isPlaying ? 'läuft' : 'bereit'}</span>
-        <button type="button" className={currentFavorite ? 'active favorite-mini-button is-favorite' : 'favorite-mini-button'} onClick={toggleCurrentFavorite} disabled={favoriteSaving} title={currentFavorite ? 'Favorit entfernen' : 'Als Favorit speichern'}><ThumbsUp size={18} fill={currentFavorite ? 'currentColor' : 'none'} /></button>
-        <button type="button" className={loop ? 'active' : ''} onClick={() => onLoopChange(!loop)} title="Loop"><Repeat size={18} /></button>
-        <button type="button" onClick={() => setMuted(!muted)} title={muted ? 'Ton aktivieren' : 'Stumm'}>{muted ? <VolumeX size={18} /> : <Volume2 size={18} />}</button>
-        <input className="custom-volume" type="range" min="0" max="100" value={muted ? 0 : Math.round(volume * 100)} onChange={changeVolume} aria-label="Lautstärke" style={{ '--volume-fill': `${muted ? 0 : Math.round(volume * 100)}%` }} />
+        <span className={isPlaying ? 'player-state playing' : 'player-state'}>{isPlaying ? t('player.running', 'läuft') : t('player.ready', 'bereit')}</span>
+        <button type="button" className={currentFavorite ? 'active favorite-mini-button is-favorite' : 'favorite-mini-button'} onClick={toggleCurrentFavorite} disabled={favoriteSaving} title={currentFavorite ? t('player.removeFavorite', 'Favorit entfernen') : t('player.saveFavorite', 'Als Favorit speichern')}><ThumbsUp size={18} fill={currentFavorite ? 'currentColor' : 'none'} /></button>
+        <button type="button" className={loop ? 'active' : ''} onClick={() => onLoopChange(!loop)} title={t('player.loop', 'Loop')}><Repeat size={18} /></button>
+        <button type="button" onClick={() => setMuted(!muted)} title={muted ? t('player.enableSound', 'Ton aktivieren') : t('player.mute', 'Stumm')}>{muted ? <VolumeX size={18} /> : <Volume2 size={18} />}</button>
+        <input className="custom-volume" type="range" min="0" max="100" value={muted ? 0 : Math.round(volume * 100)} onChange={changeVolume} aria-label={t('player.volume', 'Lautstärke')} style={{ '--volume-fill': `${muted ? 0 : Math.round(volume * 100)}%` }} />
         <div className="player-menu-wrap">
-          <button type="button" onClick={() => setMenuOpen(!menuOpen)} title="Optionen"><MoreVertical size={18} /></button>
+          <button type="button" onClick={() => setMenuOpen(!menuOpen)} title={t('player.options', 'Optionen')}><MoreVertical size={18} /></button>
           {menuOpen && (
             <div className="player-menu">
-              <button type="button" onClick={() => { setMenuOpen(false); onOpenDetails?.(current); }}><FileText size={15} /> Songdetails öffnen</button>
-              <button type="button" onClick={toggleCurrentFavorite} disabled={favoriteSaving}><ThumbsUp size={15} fill={currentFavorite ? 'currentColor' : 'none'} /> {currentFavorite ? 'Favorit entfernen' : 'Favorit'}</button>
-              <button type="button" onClick={() => { setMenuOpen(false); hasSrt ? setPlayerView('srt') : void generateCurrentSrt({ switchToSrt: true }); }} disabled={srtLoading || srtGenerating}><Captions size={15} /> {hasSrt ? 'SRT anzeigen' : srtGenerating ? 'SRT läuft…' : 'SRT erzeugen'}</button>
-              {hasSrt && <a href={api.archive.srtDownloadUrl(current.id)}><Download size={15} /> SRT herunterladen</a>}
-              <button type="button" onClick={() => { setMenuOpen(false); void generateCurrentAiCover(); }} disabled={Boolean(actionBusy)}><ImageIcon size={15} /> {actionBusy === 'cover' ? 'KI-Cover läuft…' : 'KI Cover erzeugen'}</button>
-              <button type="button" onClick={() => { setMenuOpen(false); void generateCurrentStems(); }} disabled={Boolean(actionBusy)}><Headphones size={15} /> {actionBusy === 'stems' ? 'Stems laufen…' : 'Stems erzeugen'}</button>
-              <button type="button" onClick={prepareCurrentExtend}><Sparkles size={15} /> Extend vorbereiten</button>
-              <a href={api.archive.assetBundleUrl(current.id)}><Download size={15} /> Audio-Paket ZIP</a>
-              <a href={api.archive.downloadUrl(current.id)}><Download size={15} /> Audio herunterladen</a>
-              {current.source_url && <a href={current.source_url} target="_blank" rel="noreferrer"><ExternalLink size={15} /> Quelle öffnen</a>}
+              <button type="button" onClick={() => { setMenuOpen(false); onOpenDetails?.(current); }}><FileText size={15} /> {t('player.openDetails', 'Songdetails öffnen')}</button>
+              <button type="button" onClick={toggleCurrentFavorite} disabled={favoriteSaving}><ThumbsUp size={15} fill={currentFavorite ? 'currentColor' : 'none'} /> {currentFavorite ? t('player.removeFavorite', 'Favorit entfernen') : t('player.favorite', 'Favorit')}</button>
+              <button type="button" onClick={() => { setMenuOpen(false); hasSrt ? setPlayerView('srt') : void generateCurrentSrt({ switchToSrt: true }); }} disabled={srtLoading || srtGenerating}><Captions size={15} /> {hasSrt ? t('player.showSrt', 'SRT anzeigen') : srtGenerating ? t('player.srtRunning', 'SRT läuft…') : t('player.generateSrt', 'SRT erzeugen')}</button>
+              {hasSrt && <a href={api.archive.srtDownloadUrl(current.id)}><Download size={15} /> {t('player.downloadSrt', 'SRT herunterladen')}</a>}
+              <button type="button" onClick={() => { setMenuOpen(false); void generateCurrentAiCover(); }} disabled={Boolean(actionBusy)}><ImageIcon size={15} /> {actionBusy === 'cover' ? t('player.aiCoverRunning', 'KI-Cover läuft…') : t('player.createAiCover', 'KI Cover erzeugen')}</button>
+              <button type="button" onClick={() => { setMenuOpen(false); void generateCurrentStems(); }} disabled={Boolean(actionBusy)}><Headphones size={15} /> {actionBusy === 'stems' ? t('player.stemsRunning', 'Stems laufen…') : t('player.createStems', 'Stems erzeugen')}</button>
+              <button type="button" onClick={prepareCurrentExtend}><Sparkles size={15} /> {t('player.prepareExtend', 'Extend vorbereiten')}</button>
+              <a href={api.archive.assetBundleUrl(current.id)}><Download size={15} /> {t('player.downloadAudioPackage', 'Audio-Paket ZIP')}</a>
+              <a href={api.archive.downloadUrl(current.id)}><Download size={15} /> {t('player.downloadAudio', 'Audio herunterladen')}</a>
+              {current.source_url && <a href={current.source_url} target="_blank" rel="noreferrer"><ExternalLink size={15} /> {t('player.openSource', 'Quelle öffnen')}</a>}
             </div>
           )}
         </div>
-        <a className="icon-button player-download-primary" href={api.archive.downloadUrl(current.id)} title="Download"><Download size={17} /></a>
-        <button type="button" className="player-close-button player-close-desktop" onClick={closePlayer} aria-label="Player schließen" title="Player schließen"><X size={18} /></button>
+        <a className="icon-button player-download-primary" href={api.archive.downloadUrl(current.id)} title={t('player.download', 'Download')}><Download size={17} /></a>
+        <button type="button" className="player-close-button player-close-desktop" onClick={closePlayer} aria-label={t('player.close', 'Player schließen')} title={t('player.close', 'Player schließen')}><X size={18} /></button>
       </div>
     </aside>
   );

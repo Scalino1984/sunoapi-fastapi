@@ -23,6 +23,7 @@ import { DawPage } from './pages/DawPage.jsx';
 import { GlobalAIAssistant } from './components/GlobalAIAssistant.jsx';
 import { AppAssistantProvider } from './context/AppAssistantContext.jsx';
 import { buildAvailableAssistantActions, createAssistantActions } from './assistant/assistantActions.js';
+import { useI18n } from './i18n/I18nContext.jsx';
 
 const tabs = [
   ['home', 'Home', Home],
@@ -134,13 +135,6 @@ const WORKSPACE_FOCUS_STORAGE_KEY = 'react-workspace-focus';
 
 const directSidebarKeys = ['home', 'library', 'lyrics', 'music'];
 
-const sidebarSections = [
-  { label: 'Produktion', keys: ['production', 'daw'] },
-  { label: 'Sammlung', keys: ['playlists', 'styles', 'texts'] },
-  { label: 'Kontrolle', keys: ['status', 'system', 'help'] },
-  { label: 'Verwaltung', keys: ['admin'] }
-];
-
 function getInitialSidebarMode() {
   try {
     const stored = localStorage.getItem(SIDEBAR_STORAGE_KEY);
@@ -246,6 +240,7 @@ function describeRefreshPayload(payload) {
 }
 
 export default function App() {
+  const { language, setLanguage, t } = useI18n();
   const [user, setUser] = useState(null);
   const [authChecked, setAuthChecked] = useState(false);
   const routePopStateRef = useRef(false);
@@ -791,7 +786,7 @@ export default function App() {
     seenNotificationIdsRef.current = seen;
     persistSeenNotificationIds(seen);
 
-    const friendly = friendlyNotification(unread);
+    const friendly = friendlyNotification(unread, t);
     setToast({ message: `${friendly.title}${friendly.message ? ' · ' + friendly.message : ''}`, type: unread.severity || 'info', notification: unread });
   }, [notifications, playerState.isPlaying]);
 
@@ -1138,18 +1133,23 @@ export default function App() {
     setTopbarMenuOpen(false);
     const lower = query.toLowerCase();
 
-    const directTab = tabs.find(([key, label]) => lower === key || lower.includes(String(label).toLowerCase()));
+    const directTab = tabs.find(([key, label]) => {
+      const localizedLabel = localizedTabLabels[key] || label;
+      return lower === key
+        || lower.includes(String(label).toLowerCase())
+        || lower.includes(String(localizedLabel).toLowerCase());
+    });
     if (directTab) {
       openMainTab(directTab[0], directTab[0] === 'music' && lower.includes('wizard') ? { wizard: true } : {});
       setCommandQuery('');
-      notify(`${directTab[1]} geöffnet.`, 'info');
+      notify(t('messages.opened', '{{label}} geöffnet.', { label: localizedTabLabels[directTab[0]] || directTab[1] }), 'info');
       return;
     }
 
     if (lower.includes('song') && (lower.includes('neu') || lower.includes('erstellen') || lower.includes('generieren'))) {
       openMainTab('music', { wizard: true });
       setCommandQuery('');
-      notify('Song-Wizard geöffnet.', 'info');
+      notify(t('messages.songWizardOpened', 'Song-Wizard geöffnet.'), 'info');
       return;
     }
 
@@ -1515,12 +1515,25 @@ export default function App() {
   }, [toast?.notification?.id, toastAutoMarkDone, refreshAll]);
 
   const executeFrontendAction = useMemo(() => createAssistantActions({ openMainTab, play, assets, refreshAll, notify, setDawOpenAssetId, playerState }), [assets, refreshAll, notify, playerState.currentAssetId, playerState.isPlaying, playerState.duration]);
+  const localizedTabLabels = useMemo(
+    () => Object.fromEntries(tabs.map(([key, label]) => [key, t(`nav.${key}`, label)])),
+    [t]
+  );
+  const localizedSidebarSections = useMemo(() => ([
+    { label: t('nav.groups.production', 'Produktion'), keys: ['production', 'daw'] },
+    { label: t('nav.groups.collection', 'Sammlung'), keys: ['playlists', 'styles', 'texts'] },
+    { label: t('nav.groups.control', 'Kontrolle'), keys: ['status', 'system', 'help'] },
+    { label: t('nav.groups.administration', 'Verwaltung'), keys: ['admin'] }
+  ]), [t]);
+  const toggleLanguage = useCallback(() => {
+    setLanguage(language === 'en' ? 'de' : 'en');
+  }, [language, setLanguage]);
 
   function buildAssistantContext() {
     const lyricsState = JSON.parse(localStorage.getItem('assistant-lyrics-state') || '{}');
     return {
       active_tab: activeTab,
-      page_label: tabLabels[activeTab] || activeTab,
+      page_label: localizedTabLabels[activeTab] || tabLabels[activeTab] || activeTab,
       route: tabPath(activeTab, typeof window !== 'undefined' ? window.location.pathname : ''),
       assets_count: listCount(assets),
       lyrics_count: listCount(lyrics),
@@ -1541,7 +1554,7 @@ export default function App() {
       current_session_title: lyricsState.sessionTitle || '',
       current_session_id: lyricsState.sessionId || null,
       assistant_profile_id: lyricsState.profileId ? Number(lyricsState.profileId) : null,
-      workflow_step: musicWizardSignal ? 'Song-Wizard aktiv' : '',
+      workflow_step: musicWizardSignal ? t('assistant.workflowWizardActive', 'Song-Wizard aktiv') : '',
       available_actions: buildAvailableAssistantActions(activeTab, lyricsState, { musicWizardSignal })
     };
   }
@@ -1578,7 +1591,7 @@ export default function App() {
     return <SystemPage notify={notify} uploadedFiles={uploadedFiles} onRefresh={refreshAll} />;
   }, [activeTab, assets, libraryLoadError, lyrics, styles, voices, uploadedFiles, playlists, musicDraft, currentPageNotifications, currentPageTasks, libraryOpenAssetId, dawOpenAssetId, libraryResetSignal, libraryRouteDetailSlug, commandQuery, musicWizardSignal, currentPageTaskRefreshState, stablePlaybackState, toggleCurrentPlayer, handleLibraryOpenAssetHandled, refreshAll, refreshPendingAndReload, handleMusicStarted, notify, requestLibraryAssetOpen, handleLibraryDetailRouteChange, libraryOpenRequestKey]);
 
-  if (!authChecked) return <main className="loading">Lade Anwendung…</main>;
+  if (!authChecked) return <main className="loading">{t('app.loading', 'Lade Anwendung…')}</main>;
   if (!user) return <Login onLogin={setUser} />;
 
   const openTaskCount = activeTaskCount(tasks);
@@ -1598,61 +1611,65 @@ export default function App() {
               <Music size={26} />
               <div>
                 <strong>Suno Song Studio</strong>
-                <span>AI Music Production Suite</span>
+                <span>{t('app.suite', 'AI Music Production Suite')}</span>
               </div>
             </div>
-            <a className="studio-route-link" href={tabHref(activeTab, activeTab === 'library' ? libraryRouteTitle : '')} onClick={(event) => openTabLink(event, activeTab)} title={`Direktlink: ${tabFullHref(activeTab)}`}>
+            <a className="studio-route-link" href={tabHref(activeTab, activeTab === 'library' ? libraryRouteTitle : '')} onClick={(event) => openTabLink(event, activeTab)} title={t('topbar.directLink', 'Direktlink: {{url}}', { url: tabFullHref(activeTab) })}>
               {tabHref(activeTab, activeTab === 'library' ? libraryRouteTitle : '')}
             </a>
           </div>
 
           <form className={`studio-commandbar ${mobileSearchOpen ? 'is-open' : ''}`} onSubmit={(event) => { event.preventDefault(); runCommand(commandQuery); }}>
             <Search size={17} />
-            <input value={commandQuery} onChange={(event) => setCommandQuery(event.target.value)} placeholder="Song, Task, Bereich oder Befehl suchen …" />
-            <button className="commandbar-close" type="button" onClick={() => setMobileSearchOpen(false)} aria-label="Suche schließen"><X size={15} /></button>
+            <input value={commandQuery} onChange={(event) => setCommandQuery(event.target.value)} placeholder={t('topbar.searchPlaceholder', 'Song, Task, Bereich oder Befehl suchen …')} />
+            <button className="commandbar-close" type="button" onClick={() => setMobileSearchOpen(false)} aria-label={t('topbar.closeSearch', 'Suche schließen')}><X size={15} /></button>
             <kbd>Enter</kbd>
           </form>
 
           <div className="studio-mobile-actions">
-            <button type="button" onClick={() => setMobileSearchOpen((value) => { const next = !value; if (next) setTopbarMenuOpen(false); return next; })} className={mobileSearchOpen ? 'active' : ''} title="Suche öffnen" aria-expanded={mobileSearchOpen}><Search size={17} /></button>
-            <button type="button" onClick={() => setTopbarMenuOpen((value) => { const next = !value; if (next) setMobileSearchOpen(false); return next; })} className={topbarMenuOpen ? 'active' : ''} title="Schnellmenü" aria-expanded={topbarMenuOpen}><MoreHorizontal size={18} /></button>
+            <button type="button" onClick={() => setMobileSearchOpen((value) => { const next = !value; if (next) setTopbarMenuOpen(false); return next; })} className={mobileSearchOpen ? 'active' : ''} title={t('topbar.openSearch', 'Suche öffnen')} aria-expanded={mobileSearchOpen}><Search size={17} /></button>
+            <button type="button" onClick={() => setTopbarMenuOpen((value) => { const next = !value; if (next) setMobileSearchOpen(false); return next; })} className={topbarMenuOpen ? 'active' : ''} title={t('topbar.quickMenu', 'Schnellmenü')} aria-expanded={topbarMenuOpen}><MoreHorizontal size={18} /></button>
           </div>
 
           <div className={`studio-top-actions ${topbarMenuOpen ? 'is-open' : ''}`}>
-            {openTaskCount > 0 && <button className="task-poll-pill live-pill" onClick={() => refreshPendingAndReload({ manual: true })} title="Offene Suno-Tasks jetzt prüfen"><RefreshCw size={14} className={taskRefreshState.running ? 'spin-icon' : ''} /> {openTaskCount} aktiv</button>}
-            <span className="credits topbar-credits">Credits: {credits ?? '—'}</span>
-            <button className={workspaceFocus ? 'active focus-toggle-button' : 'focus-toggle-button'} type="button" onClick={() => setWorkspaceFocus((value) => !value)} title="Zusatzcontainer ein-/ausblenden"><Command size={16} /><span>Fokus</span></button>
-            <button className="theme-toggle-button" type="button" onClick={toggleTheme} title={theme === 'light' ? 'Dark Mode aktivieren' : 'Light Mode aktivieren'} aria-label={theme === 'light' ? 'Dark Mode aktivieren' : 'Light Mode aktivieren'}>
-              {theme === 'light' ? <Moon size={16} /> : <Sun size={16} />}
-              <span>{theme === 'light' ? 'Dark' : 'Light'}</span>
+            {openTaskCount > 0 && <button className="task-poll-pill live-pill" onClick={() => refreshPendingAndReload({ manual: true })} title={t('topbar.openTasksNow', 'Offene Suno-Tasks jetzt prüfen')}><RefreshCw size={14} className={taskRefreshState.running ? 'spin-icon' : ''} /> {t('topbar.activeTasksShort', '{{count}} aktiv', { count: openTaskCount })}</button>}
+            <span className="credits topbar-credits">{t('topbar.credits', 'Credits: {{value}}', { value: credits ?? '—' })}</span>
+            <button className={workspaceFocus ? 'active focus-toggle-button' : 'focus-toggle-button'} type="button" onClick={() => setWorkspaceFocus((value) => !value)} title={t('topbar.focusTitle', 'Zusatzcontainer ein-/ausblenden')}><Command size={16} /><span>{t('topbar.focus', 'Fokus')}</span></button>
+            <button className="language-toggle-button" type="button" onClick={toggleLanguage} title={t('language.switchTo', 'Auf Englisch umschalten')} aria-label={t('language.switchTo', 'Auf Englisch umschalten')}>
+              <span>{t('language.code', 'DE')}</span>
             </button>
-            <button onClick={() => refreshAll()} className={refreshing ? 'spin' : ''} title="Aktualisieren"><RefreshCw size={16} /></button>
+            <button className="theme-toggle-button" type="button" onClick={toggleTheme} title={theme === 'light' ? t('topbar.enableDark', 'Dark Mode aktivieren') : t('topbar.enableLight', 'Light Mode aktivieren')} aria-label={theme === 'light' ? t('topbar.enableDark', 'Dark Mode aktivieren') : t('topbar.enableLight', 'Light Mode aktivieren')}>
+              {theme === 'light' ? <Moon size={16} /> : <Sun size={16} />}
+              <span>{theme === 'light' ? t('topbar.dark', 'Dark') : t('topbar.light', 'Light')}</span>
+            </button>
+            <button onClick={() => refreshAll()} className={refreshing ? 'spin' : ''} title={t('topbar.refresh', 'Aktualisieren')}><RefreshCw size={16} /></button>
             <ProfileMenu user={user} voices={voices} uploadedFiles={uploadedFiles} onUserUpdate={setUser} onLogout={logout} onRefresh={refreshAll} notify={notify} />
           </div>
         </header>
 
-        <aside id="studioSidebar" className="studio-sidebar" aria-label="Hauptnavigation">
+        <aside id="studioSidebar" className="studio-sidebar" aria-label={t('nav.mainNavigation', 'Hauptnavigation')}>
           <div className="sidebar-head">
             <div>
-              <strong>Navigation</strong>
-              <span>{tabLabels[activeTab] || activeTab}</span>
+              <strong>{t('nav.navigation', 'Navigation')}</strong>
+              <span>{localizedTabLabels[activeTab] || tabLabels[activeTab] || activeTab}</span>
             </div>
           </div>
           <nav className="studio-sidebar-nav">
-            <div className="sidebar-direct-nav" aria-label="Direktnavigation">
+            <div className="sidebar-direct-nav" aria-label={t('nav.directNavigation', 'Direktnavigation')}>
               {directSidebarKeys.map((key) => {
                 const tab = tabByKey[key];
                 if (!tab) return null;
                 const [, label, Icon] = tab;
+                const displayLabel = localizedTabLabels[key] || label;
                 return (
-                  <a key={key} className={`sidebar-link sidebar-direct-link ${activeTab === key ? 'active' : ''}`} href={tabHref(key, key === 'library' ? libraryRouteTitle : '')} onClick={(event) => openTabLink(event, key)} title={label}>
+                  <a key={key} className={`sidebar-link sidebar-direct-link ${activeTab === key ? 'active' : ''}`} href={tabHref(key, key === 'library' ? libraryRouteTitle : '')} onClick={(event) => openTabLink(event, key)} title={displayLabel}>
                     <Icon size={18} />
-                    <span>{label}</span>
+                    <span>{displayLabel}</span>
                   </a>
                 );
               })}
             </div>
-            {sidebarSections.map((section) => {
+            {localizedSidebarSections.map((section) => {
               const sectionActive = section.keys.includes(activeTab);
               const isOpen = openNavGroup === section.label || sectionActive || sidebarMode === 'compact';
               return (
@@ -1666,10 +1683,11 @@ export default function App() {
                       const tab = tabByKey[key];
                       if (!tab) return null;
                       const [, label, Icon] = tab;
+                      const displayLabel = localizedTabLabels[key] || label;
                       return (
-                        <a key={key} className={`sidebar-link ${activeTab === key ? 'active' : ''}`} href={tabHref(key)} onClick={(event) => openTabLink(event, key)} title={label}>
+                        <a key={key} className={`sidebar-link ${activeTab === key ? 'active' : ''}`} href={tabHref(key)} onClick={(event) => openTabLink(event, key)} title={displayLabel}>
                           <Icon size={18} />
-                          <span>{label}</span>
+                          <span>{displayLabel}</span>
                         </a>
                       );
                     })}
@@ -1683,17 +1701,17 @@ export default function App() {
             href={tabHref('status')}
             onClick={(event) => openTabLink(event, 'status')}
             style={{ color: 'inherit', textDecoration: 'none', width: '100%', cursor: 'pointer' }}
-            title="Statusseite öffnen"
-            aria-label={`${openTaskCount} aktive Tasks. ${taskRefreshState.lastMessage || 'Produktionsmonitor bereit'}. Statusseite öffnen`}
+            title={t('topbar.statusPageOpen', 'Statusseite öffnen')}
+            aria-label={t('topbar.statusFooterAria', '{{count}} aktive Tasks. {{message}}. Statusseite öffnen', { count: openTaskCount, message: taskRefreshState.lastMessage || t('topbar.productionMonitorReady', 'Produktionsmonitor bereit') })}
           >
             <span className="live-dot" />
             <div>
-              <strong>{openTaskCount} aktive Tasks</strong>
-              <small>{taskRefreshState.lastMessage || 'Produktionsmonitor bereit'}</small>
+              <strong>{t('topbar.activeTasksLong', '{{count}} aktive Tasks', { count: openTaskCount })}</strong>
+              <small>{taskRefreshState.lastMessage || t('topbar.productionMonitorReady', 'Produktionsmonitor bereit')}</small>
             </div>
           </a>
         </aside>
-        {mobileNavOpen && <button type="button" className="sidebar-scrim" aria-label="Sidebar schließen" onClick={() => setMobileNavOpen(false)} />}
+        {mobileNavOpen && <button type="button" className="sidebar-scrim" aria-label={t('topbar.closeSidebar', 'Sidebar schließen')} onClick={() => setMobileNavOpen(false)} />}
         <main className="app-main studio-main-content">{currentPage}</main>
       </div>
       <MiniPlayer queue={queue} currentIndex={currentIndex} loop={loop} sidebarMode={sidebarMode} mobileNavOpen={mobileNavOpen} playerCommand={playerCommand} onPlaybackStateChange={handlePlaybackStateChange} onLoopChange={setLoop} onIndexChange={setCurrentIndex} onOpenDetails={openLibraryAssetFromPlayer} onPrepareMusic={reusePromptForMusic} onFavoriteChange={handleFavoriteChange} onClose={closeAudioPlayer} />

@@ -15,6 +15,18 @@ async function parseResponse(response) {
   return response.text();
 }
 
+function apiUiLanguage() {
+  try {
+    return String(document?.documentElement?.lang || navigator?.language || 'de').toLowerCase().startsWith('en') ? 'en' : 'de';
+  } catch (_) {
+    return 'de';
+  }
+}
+
+function apiTimeoutMessage(path) {
+  return apiUiLanguage() === 'en' ? `API request timed out: ${path}` : `Zeitüberschreitung bei API-Aufruf: ${path}`;
+}
+
 export function getStoredAccessToken() {
   try {
     return window.localStorage.getItem('suno_access_token') || '';
@@ -95,7 +107,7 @@ export async function apiFetch(path, options = {}) {
     });
   } catch (err) {
     if (err?.name === 'AbortError' || err?.name === 'TimeoutError') {
-      throw new ApiError(`Zeitüberschreitung bei API-Aufruf: ${path}`, 408, { path, timeoutMs });
+      throw new ApiError(apiTimeoutMessage(path), 408, { path, timeoutMs });
     }
     throw err;
   } finally {

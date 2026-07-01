@@ -9,6 +9,7 @@ import { ArrowLeft, ArrowRight, CheckCircle2, Copy, Loader2, Music2, RefreshCw, 
 import { api } from '../api/client.js';
 import { SectionHeader } from '../components/SectionHeader.jsx';
 import { Modal } from '../components/Modal.jsx';
+import { useI18n } from '../i18n/I18nContext.jsx';
 
 const models = ['V5_5', 'V5', 'V4_5ALL', 'V4_5', 'V4_5PLUS', 'V4'];
 const addModels = ['V4_5PLUS', 'V5', 'V5_5'];
@@ -496,16 +497,16 @@ function formatScorePercent(value) {
   return `${Math.round(Math.max(0, Math.min(1, number)) * 100)}%`;
 }
 
-function voiceLabel(voice) {
-  if (!voice) return 'Keine Voice / Persona';
+function voiceLabel(voice, t = null) {
+  if (!voice) return t ? t('music.fields.noVoicePersona', 'Keine Voice / Persona') : 'Keine Voice / Persona';
   const nickname = voice.nickname || voice.name || 'Voice';
   const shortId = String(voice.voice_id || voice.persona_id || '').slice(0, 10);
   const type = voice.source_type === 'persona' ? 'Persona' : 'Voice';
   return `${nickname} · ${type}${shortId ? ` · ${shortId}…` : ''}`;
 }
 
-function assetTitle(asset) {
-  if (!asset) return 'Audio wählen…';
+function assetTitle(asset, t = null) {
+  if (!asset) return t ? t('music.fields.chooseAudio', 'Audio wählen…') : 'Audio wählen…';
   const title = asset.display_title || asset.title || `Audio #${asset.id}`;
   const variant = asset.operation_label || asset.version_label || asset.task_type || asset.status || '';
   return `${title}${variant ? ` · ${variant}` : ''}`;
@@ -550,12 +551,12 @@ function canUseSelectedAssetForOperation(asset, mode) {
   return true;
 }
 
-function localOnlyAssetHint(asset) {
+function localOnlyAssetHint(asset, t = null) {
   if (!isLocalOnlyAsset(asset)) return '';
   const metadata = assetMetadata(asset);
-  if (metadata.import_source === 'suno_public_clip' || metadata.is_suno_clip_import) return 'Öffentlicher Suno-Import: lokale Funktionen verfügbar, SunoAPI.org-Folgeaktionen deaktiviert.';
-  if (metadata.generation_source === 'opencli' || metadata.provider === 'opencli' || metadata.is_opencli_generation) return 'OpenCLI-Asset: lokale Funktionen verfügbar, SunoAPI.org-Folgeaktionen deaktiviert.';
-  return 'Lokales Asset: SunoAPI.org-Folgeaktionen deaktiviert.';
+  if (metadata.import_source === 'suno_public_clip' || metadata.is_suno_clip_import) return t ? t('music.messages.publicSunoImportLocalOnly', 'Öffentlicher Suno-Import: lokale Funktionen verfügbar, SunoAPI.org-Folgeaktionen deaktiviert.') : 'Öffentlicher Suno-Import: lokale Funktionen verfügbar, SunoAPI.org-Folgeaktionen deaktiviert.';
+  if (metadata.generation_source === 'opencli' || metadata.provider === 'opencli' || metadata.is_opencli_generation) return t ? t('music.messages.openCliAssetLocalOnly', 'OpenCLI-Asset: lokale Funktionen verfügbar, SunoAPI.org-Folgeaktionen deaktiviert.') : 'OpenCLI-Asset: lokale Funktionen verfügbar, SunoAPI.org-Folgeaktionen deaktiviert.';
+  return t ? t('music.messages.localAssetSunoDisabled', 'Lokales Asset: SunoAPI.org-Folgeaktionen deaktiviert.') : 'Lokales Asset: SunoAPI.org-Folgeaktionen deaktiviert.';
 }
 
 function numberOrNull(value) {
@@ -572,7 +573,7 @@ function splitStyleTags(value) {
     .slice(0, 18);
 }
 
-function StylePresetModal({ open, onClose, styles = [], builtinStyles = [], onApply }) {
+function StylePresetModal({ open, onClose, styles = [], builtinStyles = [], onApply, t }) {
   const [query, setQuery] = useState('');
   const [tab, setTab] = useState('all');
 
@@ -596,7 +597,7 @@ function StylePresetModal({ open, onClose, styles = [], builtinStyles = [], onAp
       genre: label,
       bpm: '',
       text,
-      description: 'Schneller eingebauter Style-Vorschlag',
+      description: t('music.stylePresetModal.builtinDescription', 'Schneller eingebauter Style-Vorschlag'),
       tags: splitStyleTags(`${label}, preset, vorschlag, ${text}`),
     }));
     return [...saved, ...builtin];
@@ -609,10 +610,10 @@ function StylePresetModal({ open, onClose, styles = [], builtinStyles = [], onAp
   }, [rows]);
 
   const tabs = [
-    ['all', 'Alle'],
-    ['saved', 'Gespeichert'],
-    ['builtin', 'Vorschläge'],
-    ['favorite', 'Favoriten'],
+    ['all', t('music.stylePresetModal.tabs.all', 'Alle')],
+    ['saved', t('music.stylePresetModal.tabs.saved', 'Gespeichert')],
+    ['builtin', t('music.stylePresetModal.tabs.builtin', 'Vorschläge')],
+    ['favorite', t('music.stylePresetModal.tabs.favorite', 'Favoriten')],
     ...availableTags.slice(0, 12).map((tag) => [`tag:${tag}`, `#${tag}`]),
   ];
 
@@ -628,23 +629,23 @@ function StylePresetModal({ open, onClose, styles = [], builtinStyles = [], onAp
   });
 
   return (
-    <Modal open={open} title="Style Preset auswählen" onClose={onClose} wide>
+    <Modal open={open} title={t('music.stylePresetModal.title', 'Style Preset auswählen')} onClose={onClose} wide>
       <div className="style-preset-modal stack">
-        <div className="search-wrap"><Search size={17} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Style, Genre, Tag, Stimmung suchen…" /></div>
+        <div className="search-wrap"><Search size={17} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={t('music.stylePresetModal.searchPlaceholder', 'Style, Genre, Tag, Stimmung suchen…')} /></div>
         <div className="style-preset-tabs">
           {tabs.map(([key, label]) => <button key={key} type="button" className={tab === key ? 'active' : ''} onClick={() => setTab(key)}>{label}</button>)}
         </div>
         <div className="style-preset-grid">
           {filtered.map((row) => (
             <article key={row.id} className="style-preset-card">
-              <div className="row between align-start"><div><p className="eyebrow">{row.source === 'saved' ? 'Gespeichert' : 'Vorschlag'}</p><h3>{row.name}</h3></div>{row.favorite && <span className="status cached">Favorit</span>}</div>
-              <p className="muted">{row.genre || 'Ohne Genre'}{row.bpm ? ` · ${row.bpm} BPM` : ''}</p>
+              <div className="row between align-start"><div><p className="eyebrow">{row.source === 'saved' ? t('music.stylePresetModal.saved', 'Gespeichert') : t('music.stylePresetModal.suggestion', 'Vorschlag')}</p><h3>{row.name}</h3></div>{row.favorite && <span className="status cached">{t('music.stylePresetModal.favorite', 'Favorit')}</span>}</div>
+              <p className="muted">{row.genre || t('music.stylePresetModal.noGenre', 'Ohne Genre')}{row.bpm ? ` · ${row.bpm} BPM` : ''}</p>
               <p className="ai-style-text">{row.text}</p>
               <div className="tag-chip-row">{row.tags.slice(0, 10).map((tag) => <span key={tag}><Tag size={12} /> {tag}</span>)}</div>
-              <button type="button" className="primary" onClick={() => { onApply(row.text, row); onClose?.(); }}>Style übernehmen</button>
+              <button type="button" className="primary" onClick={() => { onApply(row.text, row); onClose?.(); }}>{t('music.stylePresetModal.apply', 'Style übernehmen')}</button>
             </article>
           ))}
-          {!filtered.length && <p className="muted">Kein Style gefunden. Passe Suche oder Filter an.</p>}
+          {!filtered.length && <p className="muted">{t('music.stylePresetModal.empty', 'Kein Style gefunden. Passe Suche oder Filter an.')}</p>}
         </div>
       </div>
     </Modal>
@@ -652,6 +653,7 @@ function StylePresetModal({ open, onClose, styles = [], builtinStyles = [], onAp
 }
 
 export function MusicPage({ styles, voices = [], uploadedFiles = [], assets = [], draft, notify, onRefresh, onMusicStarted, onCheckStatus, taskRefreshState, initialWizard = false }) {
+  const { t } = useI18n();
   const storedMusicState = useMemo(() => readStoredMusicPageState(), []);
   const [title, setTitle] = useState(() => storedMusicState.title || '');
   const [prompt, setPrompt] = useState(() => storedMusicState.prompt || '');
@@ -862,11 +864,50 @@ export function MusicPage({ styles, voices = [], uploadedFiles = [], assets = []
   const styleOverLimit = Boolean(isGenerateMode && styleLimit && styleLength > styleLimit);
   const titleOverLimit = Boolean(isGenerateMode && titleLimit && titleLength > titleLimit);
   const generationLimitMessages = [
-    titleOverLimit ? `Titel ist für ${model} zu lang: ${titleLength}/${titleLimit} Zeichen.` : '',
-    promptOverLimit ? `Prompt/Lyrics sind für ${model} zu lang: ${promptLength}/${modelLimit} Zeichen.` : '',
-    styleOverLimit ? `Style ist für ${model} zu lang: ${styleLength}/${styleLimit} Zeichen.` : ''
+    titleOverLimit ? t('music.messages.titleTooLong', 'Titel ist für {{model}} zu lang: {{current}}/{{limit}} Zeichen.', { model, current: titleLength, limit: titleLimit }) : '',
+    promptOverLimit ? t('music.messages.promptTooLong', 'Prompt/Lyrics sind für {{model}} zu lang: {{current}}/{{limit}} Zeichen.', { model, current: promptLength, limit: modelLimit }) : '',
+    styleOverLimit ? t('music.messages.styleTooLong', 'Style ist für {{model}} zu lang: {{current}}/{{limit}} Zeichen.', { model, current: styleLength, limit: styleLimit }) : ''
   ].filter(Boolean);
   const generationBlockedByLimits = generationLimitMessages.length > 0;
+
+  const localizedStartModes = useMemo(() => [
+    ['idea', t('music.startModes.idea.label', 'Ich habe nur eine Idee'), t('music.startModes.idea.text', 'Suno erzeugt aus einer kurzen Idee einen Song.')],
+    ['lyrics', t('music.startModes.lyrics.label', 'Ich habe fertige Lyrics'), t('music.startModes.lyrics.text', 'Du nutzt den Custom-Modus mit deinem vollständigen Songtext.')],
+    ['instrumental', t('music.startModes.instrumental.label', 'Ich möchte ein Instrumental'), t('music.startModes.instrumental.text', 'Es wird ein Track ohne Gesang erzeugt.')]
+  ], [t]);
+
+  const localizedOperationModes = useMemo(() => operationModes.map(([key, label]) => [key, t(`music.operationModes.${key}`, label)]), [t]);
+
+  const wizardStepLabels = useMemo(() => [
+    t('music.wizard.steps.start', 'Start'),
+    t('music.wizard.steps.content', 'Inhalt'),
+    t('music.wizard.steps.style', 'Style'),
+    t('music.wizard.steps.model', 'Modell'),
+    t('music.wizard.steps.check', 'Prüfen')
+  ], [t]);
+
+  const localizedStyleVariantStrategies = useMemo(() => STYLE_VARIANT_STRATEGIES.map(([key, label, description]) => [
+    key,
+    t(`music.styleStrategies.${key}.label`, label),
+    t(`music.styleStrategies.${key}.description`, description)
+  ]), [t]);
+
+  const localizedStyleFeatureOptions = useMemo(() => STYLE_FEATURE_TOGGLE_OPTIONS.map(([key, label, description]) => [
+    key,
+    t(`music.styleFeatures.${key}.label`, label),
+    t(`music.styleFeatures.${key}.description`, description)
+  ]), [t]);
+
+  const styleConsultationChips = useMemo(() => [
+    t('music.styleConsultation.chips.morePressure', 'Mehr Druck'),
+    t('music.styleConsultation.chips.biggerHook', 'Hook größer'),
+    t('music.styleConsultation.chips.lessBusy', 'Weniger überladen'),
+    t('music.styleConsultation.chips.moreBoomBap', 'Mehr Boom Bap'),
+    t('music.styleConsultation.chips.moreTrap', 'Mehr Trap'),
+    t('music.styleConsultation.chips.moreCinema', 'Mehr Kino'),
+    t('music.styleConsultation.chips.improveNegative', 'Negative Tags verbessern'),
+    t('music.styleConsultation.chips.shorterSuno', 'Suno-kürzer formulieren')
+  ], [t]);
 
   const selectedVoice = voices.find((item) => String(item.id) === String(selectedVoiceId));
   const selectedAsset = assets.find((item) => String(item.id) === String(selectedAssetId));
@@ -921,7 +962,7 @@ export function MusicPage({ styles, voices = [], uploadedFiles = [], assets = []
   function applyStylePresetText(value, preset = null) {
     setStyle(String(value || ''));
     if (preset?.tags?.length) setOperationTags(preset.tags.join(', '));
-    notify?.(`Style „${preset?.name || 'Preset'}“ übernommen.`, 'success');
+    notify?.(t('music.messages.stylePresetApplied', 'Style „{{name}}“ übernommen.', { name: preset?.name || 'Preset' }), 'success');
   }
 
   function applySuggestedStyle(value) {
@@ -933,19 +974,19 @@ export function MusicPage({ styles, voices = [], uploadedFiles = [], assets = []
     const lyrics = String(prompt || '').trim();
     const currentMusicStyle = String(style || '').trim();
     if (!lyrics) {
-      const message = 'Bitte zuerst Lyrics oder einen Prompt einfügen. Dann kann die KI passende Suno-Styles erstellen.';
+      const message = t('music.messages.stylePromptMissing', 'Bitte zuerst Lyrics oder einen Prompt einfügen. Dann kann die KI passende Suno-Styles erstellen.');
       setStyleSuggestionError(message);
       notify?.(message, 'error');
       return;
     }
     if (lyrics.length > STYLE_ENGINE_LYRICS_MAX_CHARS) {
-      const message = `Songtext/Prompt ist zu lang für Styles generieren: ${lyrics.length} / ${STYLE_ENGINE_LYRICS_MAX_CHARS} Zeichen.`;
+      const message = t('music.messages.styleLyricsTooLong', 'Songtext/Prompt ist zu lang für Styles generieren: {{current}} / {{limit}} Zeichen.', { current: lyrics.length, limit: STYLE_ENGINE_LYRICS_MAX_CHARS });
       setStyleSuggestionError(message);
       notify?.(message, 'error');
       return;
     }
     if (currentMusicStyle.length > STYLE_ENGINE_MUSIC_STYLE_MAX_CHARS) {
-      const message = `Music Style ist zu lang für Styles generieren: ${currentMusicStyle.length} / ${STYLE_ENGINE_MUSIC_STYLE_MAX_CHARS} Zeichen.`;
+      const message = t('music.messages.styleEngineStyleTooLong', 'Music Style ist zu lang für Styles generieren: {{current}} / {{limit}} Zeichen.', { current: currentMusicStyle.length, limit: STYLE_ENGINE_MUSIC_STYLE_MAX_CHARS });
       setStyleSuggestionError(message);
       notify?.(message, 'error');
       return;
@@ -967,9 +1008,9 @@ export function MusicPage({ styles, voices = [], uploadedFiles = [], assets = []
       const suggestions = Array.isArray(response?.suggestions) ? response.suggestions : [];
       setStyleSuggestions(suggestions);
       setStyleSuggestionRuntime(response?.runtime_info || null);
-      notify?.(`${suggestions.length || 0} KI-Style-Vorschlag/Vorschläge erstellt.`, 'success');
+      notify?.(t('music.messages.styleSuggestionsCreated', '{{count}} KI-Style-Vorschlag/Vorschläge erstellt.', { count: suggestions.length || 0 }), 'success');
     } catch (err) {
-      const message = err?.message || 'KI-Style-Vorschläge konnten nicht erstellt werden.';
+      const message = err?.message || t('music.messages.styleSuggestionsFailed', 'KI-Style-Vorschläge konnten nicht erstellt werden.');
       setStyleSuggestionError(message);
       notify?.(message, 'error');
     } finally {
@@ -990,8 +1031,8 @@ export function MusicPage({ styles, voices = [], uploadedFiles = [], assets = []
     }
     notify?.(
       includeNegative && nextNegative
-        ? `Master Style „${suggestion?.title || 'KI-Vorschlag'}“ inkl. Negative Tags übernommen.`
-        : `Master Style „${suggestion?.title || 'KI-Vorschlag'}“ übernommen.`,
+        ? t('music.messages.masterStyleWithNegativeApplied', 'Master Style „{{title}}“ inkl. Negative Tags übernommen.', { title: suggestion?.title || t('music.aiStyleFallback', 'KI-Vorschlag') })
+        : t('music.messages.masterStyleApplied', 'Master Style „{{title}}“ übernommen.', { title: suggestion?.title || t('music.aiStyleFallback', 'KI-Vorschlag') }),
       'success'
     );
   }
@@ -1004,22 +1045,22 @@ export function MusicPage({ styles, voices = [], uploadedFiles = [], assets = []
     const nextNegative = suggestionNegativeTags(suggestion);
     if (!nextNegative) return;
     setNegativeTags((current) => mode === 'replace' ? nextNegative : mergeCommaTags(current, nextNegative));
-    notify?.(mode === 'replace' ? 'Negative Tags ersetzt.' : 'Negative Tags angehängt.', 'success');
+    notify?.(mode === 'replace' ? t('music.messages.negativeReplaced', 'Negative Tags ersetzt.') : t('music.messages.negativeAppended', 'Negative Tags angehängt.'), 'success');
   }
 
   async function openLyricTagPreview(suggestion) {
     const lyrics = String(prompt || '').trim();
     const lyricTags = suggestionLyricVocalTags(suggestion);
     if (!lyrics) {
-      notify?.('Für die Songtext-Vorschau wird zuerst ein Songtext benötigt.', 'error');
+      notify?.(t('music.messages.lyricPreviewNeedsLyrics', 'Für die Songtext-Vorschau wird zuerst ein Songtext benötigt.'), 'error');
       return;
     }
     if (lyrics.length > STYLE_ENGINE_LYRICS_MAX_CHARS) {
-      notify?.(`Songtext ist zu lang für die Vorschau: ${lyrics.length} / ${STYLE_ENGINE_LYRICS_MAX_CHARS} Zeichen.`, 'error');
+      notify?.(t('music.messages.lyricPreviewTooLong', 'Songtext ist zu lang für die Vorschau: {{current}} / {{limit}} Zeichen.', { current: lyrics.length, limit: STYLE_ENGINE_LYRICS_MAX_CHARS }), 'error');
       return;
     }
     if (!lyricTags.length) {
-      notify?.('Dieser Style-Vorschlag enthält keine Songtext-Tags.', 'info');
+      notify?.(t('music.messages.noLyricTags', 'Dieser Style-Vorschlag enthält keine Songtext-Tags.'), 'info');
       return;
     }
     const fallbackTaggedText = buildLyricVocalTagPreviewText(lyrics, lyricTags);
@@ -1027,13 +1068,13 @@ export function MusicPage({ styles, voices = [], uploadedFiles = [], assets = []
     setLyricTagPreview({
       open: true,
       suggestion,
-      title: suggestion?.title || 'KI-Style',
+      title: suggestion?.title || t('music.aiStyleTitle', 'KI-Style'),
       taggedText: fallbackTaggedText,
       tagText: fallbackTagText,
       lyricTags,
       loading: true,
       error: '',
-      notes: 'Erstelle vollständige Songtext-Vorschau passend zu diesem Style…',
+      notes: t('music.messages.creatingTaggedPreview', 'Erstelle vollständige Songtext-Vorschau passend zu diesem Style…'),
       runtimeInfo: null
     });
     try {
@@ -1045,27 +1086,27 @@ export function MusicPage({ styles, voices = [], uploadedFiles = [], assets = []
       const nextTags = suggestionLyricVocalTags({ lyric_vocal_tags: response?.lyric_vocal_tags || lyricTags });
       const nextTaggedText = String(response?.tagged_lyrics || fallbackTaggedText || '').trim();
       if (nextTaggedText.length > STYLE_ENGINE_LYRICS_MAX_CHARS) {
-        throw new Error(`Getaggter Songtext überschreitet ${STYLE_ENGINE_LYRICS_MAX_CHARS} Zeichen.`);
+        throw new Error(t('music.messages.taggedLyricsTooLongLimit', 'Getaggter Songtext überschreitet {{limit}} Zeichen.', { limit: STYLE_ENGINE_LYRICS_MAX_CHARS }));
       }
       setLyricTagPreview({
         open: true,
         suggestion: { ...suggestion, lyric_vocal_tags: nextTags },
-        title: suggestion?.title || 'KI-Style',
+        title: suggestion?.title || t('music.aiStyleTitle', 'KI-Style'),
         taggedText: nextTaggedText,
         tagText: buildVocalTagPackage(nextTags),
         lyricTags: nextTags,
         loading: false,
         error: '',
-        notes: response?.notes || 'Vollständiger getaggter Songtext wurde erzeugt.',
+        notes: response?.notes || t('music.messages.taggedPreviewCreated', 'Vollständiger getaggter Songtext wurde erzeugt.'),
         runtimeInfo: response?.runtime_info || null
       });
     } catch (err) {
-      const message = err?.message || 'Vollständige Songtext-Vorschau konnte nicht erstellt werden.';
+      const message = err?.message || t('music.messages.taggedPreviewFailed', 'Vollständige Songtext-Vorschau konnte nicht erstellt werden.');
       setLyricTagPreview((current) => ({
         ...current,
         loading: false,
         error: message,
-        notes: 'Fallback-Vorschau aus den vorhandenen Section-Tags wird angezeigt.'
+        notes: t('music.messages.taggedPreviewFallback', 'Fallback-Vorschau aus den vorhandenen Section-Tags wird angezeigt.')
       }));
       notify?.(message, 'error');
     }
@@ -1081,11 +1122,11 @@ export function MusicPage({ styles, voices = [], uploadedFiles = [], assets = []
     const nextText = String(taggedTextOverride || '').trim();
     const finalText = nextText || mergeLyricVocalTagsIntoPrompt(prompt, lyricTags);
     if (finalText.length > STYLE_ENGINE_LYRICS_MAX_CHARS) {
-      notify?.(`Songtext-Tags können nicht übernommen werden: ${finalText.length} / ${STYLE_ENGINE_LYRICS_MAX_CHARS} Zeichen.`, 'error');
+      notify?.(t('music.messages.lyricTagsApplyTooLong', 'Songtext-Tags können nicht übernommen werden: {{current}} / {{limit}} Zeichen.', { current: finalText.length, limit: STYLE_ENGINE_LYRICS_MAX_CHARS }), 'error');
       return;
     }
     setPrompt(finalText);
-    notify?.(`${lyricTags.length} Songtext-Tag(s) übernommen.`, 'success');
+    notify?.(t('music.messages.lyricTagsApplied', '{{count}} Songtext-Tag(s) übernommen.', { count: lyricTags.length }), 'success');
   }
 
   function applyPreviewedLyricTags() {
@@ -1101,13 +1142,13 @@ export function MusicPage({ styles, voices = [], uploadedFiles = [], assets = []
       await navigator.clipboard?.writeText(value);
       notify?.(successMessage, 'success');
     } catch {
-      notify?.('Kopieren war nicht möglich. Bitte Text manuell markieren.', 'error');
+      notify?.(t('common.copyFailed', 'Kopieren nicht möglich.'), 'error');
     }
   }
 
   function openStyleConsultation(suggestion) {
     const draft = {
-      title: suggestion?.title || 'KI-Style',
+      title: suggestion?.title || t('music.aiStyleTitle', 'KI-Style'),
       style: suggestion?.style || '',
       reason: suggestion?.reason || '',
       bpm: suggestion?.bpm || '',
@@ -1142,7 +1183,7 @@ export function MusicPage({ styles, voices = [], uploadedFiles = [], assets = []
         history: nextMessages.slice(-10),
         mode: 'advise_or_update'
       });
-      const assistantMessage = response?.assistant_message || 'Ich habe die Zusammenstellung geprüft.';
+      const assistantMessage = response?.assistant_message || t('music.messages.styleConsultationChecked', 'Ich habe die Zusammenstellung geprüft.');
       const updatedDraft = response?.updated_draft || null;
       setStyleConsultation((current) => ({
         ...current,
@@ -1152,7 +1193,7 @@ export function MusicPage({ styles, voices = [], uploadedFiles = [], assets = []
         error: ''
       }));
     } catch (err) {
-      const messageText = err?.message || 'KI-Beratung konnte nicht durchgeführt werden.';
+      const messageText = err?.message || t('music.messages.styleConsultationFailed', 'KI-Beratung konnte nicht durchgeführt werden.');
       setStyleConsultation((current) => ({ ...current, loading: false, error: messageText }));
       notify?.(messageText, 'error');
     }
@@ -1169,18 +1210,18 @@ export function MusicPage({ styles, voices = [], uploadedFiles = [], assets = []
     if (!nextStyle) return;
     try {
       const saved = await api.library.createStyle({
-        name: suggestion?.title || `KI-Style ${new Date().toLocaleString('de-DE')}`,
+        name: suggestion?.title || t('music.aiStyleNamed', 'KI-Style {{date}}', { date: new Date().toLocaleString('de-DE') }),
         style_text: nextStyle,
-        description: suggestion?.reason || 'KI-generierter Suno-Style aus dem Musikbereich.',
+        description: suggestion?.reason || t('music.messages.aiStyleDescription', 'KI-generierter Suno-Style aus dem Musikbereich.'),
         tags: 'ki,suno,style',
         is_favorite: false,
         profile_json: buildStyleProfileJson(suggestion)
       });
       applyAiStyle(suggestion);
       await onRefresh?.();
-      notify?.(`Style „${saved?.name || suggestion?.title || 'KI-Vorschlag'}“ gespeichert und übernommen.`, 'success');
+      notify?.(t('music.messages.styleSavedApplied', 'Style „{{name}}“ gespeichert und übernommen.', { name: saved?.name || suggestion?.title || t('music.aiStyleFallback', 'KI-Vorschlag') }), 'success');
     } catch (err) {
-      notify?.(err?.message || 'Style konnte nicht gespeichert werden.', 'error');
+      notify?.(err?.message || t('music.messages.styleSaveFailed', 'Style konnte nicht gespeichert werden.'), 'error');
     }
   }
 
@@ -1232,7 +1273,7 @@ export function MusicPage({ styles, voices = [], uploadedFiles = [], assets = []
     return {
       ...buildAdvancedPayload(),
       model,
-      title: title || 'Unbenannt',
+    title: title || t('common.untitled', 'Unbenannt'),
       prompt,
       style: limitForSunoField(style, styleLimit),
       customMode,
@@ -1259,17 +1300,17 @@ export function MusicPage({ styles, voices = [], uploadedFiles = [], assets = []
   async function runSafeCheck() {
     const payload = buildSunoPackagePayload();
     if (!String(payload.prompt || '').trim() && !String(payload.style || '').trim()) {
-      notify?.('Bitte zuerst Prompt/Lyrics oder Style eintragen.', 'error');
+      notify?.(t('music.messages.safeCheckNeedsContent', 'Bitte zuerst Prompt/Lyrics oder Style eintragen.'), 'error');
       return null;
     }
     setSafeCheckLoading(true);
     try {
       const result = await api.music.safeCheck(payload);
       setSafeCheckResult(result);
-      notify?.(`Suno-Safe-Check: Risiko ${result.risk || 'unbekannt'} (${result.score || 0}/100).`, result.risk === 'high' ? 'error' : result.risk === 'medium' ? 'info' : 'success');
+      notify?.(t('music.messages.safeCheckResult', 'Suno-Safe-Check: Risiko {{risk}} ({{score}}/100).', { risk: result.risk || t('common.unknown', 'unbekannt'), score: result.score || 0 }), result.risk === 'high' ? 'error' : result.risk === 'medium' ? 'info' : 'success');
       return result;
     } catch (err) {
-      notify?.(err?.message || 'Safe-Check fehlgeschlagen.', 'error');
+      notify?.(err?.message || t('music.messages.safeCheckFailed', 'Safe-Check fehlgeschlagen.'), 'error');
       return null;
     } finally {
       setSafeCheckLoading(false);
@@ -1279,13 +1320,13 @@ export function MusicPage({ styles, voices = [], uploadedFiles = [], assets = []
   async function createMasterPackage() {
     const payload = buildSunoPackagePayload();
     const lines = [
-      `Titel: ${payload.title || 'Unbenannt'}`,
+      `${t('common.title', 'Titel')}: ${payload.title || t('common.untitled', 'Unbenannt')}`,
       `Operation: ${operationMode}`,
-      `Modell: ${payload.model}`,
+      `${t('music.fields.model', 'Modell')}: ${payload.model}`,
       `Provider: ${generationProvider === 'opencli' ? 'OpenCLI' : 'SunoAPI'}`,
-      `Custom Mode: ${payload.customMode ? 'Ja' : 'Nein'}`,
-      `Instrumental: ${payload.instrumental ? 'Ja' : 'Nein'}`,
-      `Voice/Persona: ${payload.persona_id || payload.voice_id || 'Nein'}`,
+      `Custom Mode: ${payload.customMode ? t('common.yes', 'Ja') : t('common.no', 'Nein')}`,
+      `Instrumental: ${payload.instrumental ? t('common.yes', 'Ja') : t('common.no', 'Nein')}`,
+      `Voice/Persona: ${payload.persona_id || payload.voice_id || t('common.no', 'Nein')}`,
       '',
       'STYLE:',
       payload.style || '',
@@ -1304,40 +1345,40 @@ export function MusicPage({ styles, voices = [], uploadedFiles = [], assets = []
     ];
     const text = lines.join('\n');
     setMasterPackageText(text);
-    try { await navigator.clipboard?.writeText(text); notify?.('Master-Paket wurde erstellt und kopiert.', 'success'); } catch { notify?.('Master-Paket wurde erstellt.', 'success'); }
+    try { await navigator.clipboard?.writeText(text); notify?.(t('music.messages.masterPackageCopied', 'Master-Paket wurde erstellt und kopiert.'), 'success'); } catch { notify?.(t('music.messages.masterPackageCreated', 'Master-Paket wurde erstellt.'), 'success'); }
   }
 
   function prepareAbVariants() {
     const baseStyle = style || 'cinematic modern production, clean mix, strong hook energy';
     const rows = [
-      { label: 'Variante A · Original stärker', style: `${baseStyle}, tighter arrangement, clearer hook focus, polished master`, note: 'Sicherer Hauptversuch mit klarerer Struktur.' },
-      { label: 'Variante B · Dunkler / härter', style: `${baseStyle}, darker mood, heavier drums, deeper bass, more dramatic tension`, note: 'Mehr Druck und Atmosphäre.' },
-      { label: 'Variante C · Eingängiger / größer', style: `${baseStyle}, more catchy lead motif, wider chorus, radio-ready energy, bigger dynamics`, note: 'Mehr Ohrwurm und Release-Potenzial.' },
+      { label: t('music.abTest.variantA', 'Variante A · Original stärker'), style: `${baseStyle}, tighter arrangement, clearer hook focus, polished master`, note: t('music.abTest.variantANote', 'Sicherer Hauptversuch mit klarerer Struktur.') },
+      { label: t('music.abTest.variantB', 'Variante B · Dunkler / härter'), style: `${baseStyle}, darker mood, heavier drums, deeper bass, more dramatic tension`, note: t('music.abTest.variantBNote', 'Mehr Druck und Atmosphäre.') },
+      { label: t('music.abTest.variantC', 'Variante C · Eingängiger / größer'), style: `${baseStyle}, more catchy lead motif, wider chorus, radio-ready energy, bigger dynamics`, note: t('music.abTest.variantCNote', 'Mehr Ohrwurm und Release-Potenzial.') },
     ];
     setAbVariants(rows);
-    notify?.('A/B/C Varianten wurden vorbereitet.', 'success');
+    notify?.(t('music.messages.abVariantsPrepared', 'A/B/C Varianten wurden vorbereitet.'), 'success');
   }
 
   function applyAbVariant(variant) {
     setStyle(variant.style);
     setOperationTags(variant.style);
-    notify?.(`${variant.label} übernommen.`, 'success');
+    notify?.(t('music.messages.variantApplied', '{{label}} übernommen.', { label: variant.label }), 'success');
   }
 
   function applyWorkflowTemplate(kind) {
     if (kind === 'rap_voice') {
       setWizard(false); setOperationMode('generate'); setCustomMode(true); setInstrumental(false); setStartMode('lyrics');
       setNegativeTags(negativeTags || 'female vocals, low quality, distorted, off key');
-      notify?.('Workflow „Rap mit Voice“ vorbereitet.', 'info');
+      notify?.(t('music.messages.workflowRapVoicePrepared', 'Workflow „Rap mit Voice“ vorbereitet.'), 'info');
     } else if (kind === 'instrumental') {
       setWizard(false); setOperationMode('generate'); setCustomMode(true); setInstrumental(true); setSelectedVoiceId(''); setStartMode('instrumental');
-      notify?.('Workflow „Instrumental-Bauplan“ vorbereitet.', 'info');
+      notify?.(t('music.messages.workflowInstrumentalPrepared', 'Workflow „Instrumental-Bauplan“ vorbereitet.'), 'info');
     } else if (kind === 'cover_video') {
       setWizard(false); setOperationMode('upload-cover'); setCustomMode(true);
-      notify?.('Workflow „Cover/Video“ vorbereitet. Nach dem Cover kannst du auf Music Video wechseln.', 'info');
+      notify?.(t('music.messages.workflowCoverVideoPrepared', 'Workflow „Cover/Video“ vorbereitet. Nach dem Cover kannst du auf Music Video wechseln.'), 'info');
     } else if (kind === 'stems') {
       setWizard(false); setOperationMode('stem-separation'); setInstrumental(false); setCustomMode(false);
-      notify?.('Workflow „Stem Separation“ vorbereitet.', 'info');
+      notify?.(t('music.messages.workflowStemsPrepared', 'Workflow „Stem Separation“ vorbereitet.'), 'info');
     }
   }
 
@@ -1349,7 +1390,7 @@ export function MusicPage({ styles, voices = [], uploadedFiles = [], assets = []
       if (onMusicStarted) await onMusicStarted(task);
       else await onRefresh?.();
     } catch (err) {
-      notify?.(err.message || 'Operation fehlgeschlagen.', 'error');
+      notify?.(err.message || t('music.messages.operationFailed', 'Operation fehlgeschlagen.'), 'error');
     } finally {
       setLoading(false);
     }
@@ -1381,16 +1422,16 @@ export function MusicPage({ styles, voices = [], uploadedFiles = [], assets = []
     Object.keys(payload).forEach((key) => (payload[key] === undefined || payload[key] === null || payload[key] === '') && delete payload[key]);
 
     if (styleLimit && rawStyleForSubmit && rawStyleForSubmit.length > styleLimit) {
-      notify?.(`Style wurde für ${model} auf ${styleLimit} Zeichen gekürzt, damit SunoAPI die Generierung annimmt.`, 'info');
+      notify?.(t('music.messages.styleTrimmedForModel', 'Style wurde für {{model}} auf {{limit}} Zeichen gekürzt, damit SunoAPI die Generierung annimmt.', { model, limit: styleLimit }), 'info');
     }
 
     if (generationProvider === 'opencli') {
       if (runtime?.opencli && !openCliRuntime.enabled) {
-        notify?.('OpenCLI ist serverseitig deaktiviert. Setze SUNO_OPENCLI_ENABLED=true und starte FastAPI neu.', 'error');
+        notify?.(t('music.messages.openCliDisabled', 'OpenCLI ist serverseitig deaktiviert. Setze SUNO_OPENCLI_ENABLED=true und starte FastAPI neu.'), 'error');
         return;
       }
       if (runtime?.opencli && !openCliRuntime.installed) {
-        notify?.(`OpenCLI wurde nicht gefunden. Installiere opencli auf dem Server oder prüfe SUNO_OPENCLI_BINARY.`, 'error');
+        notify?.(t('music.messages.openCliMissing', 'OpenCLI wurde nicht gefunden. Installiere opencli auf dem Server oder prüfe SUNO_OPENCLI_BINARY.'), 'error');
         return;
       }
     }
@@ -1398,15 +1439,15 @@ export function MusicPage({ styles, voices = [], uploadedFiles = [], assets = []
     await startTask(
       () => generationProvider === 'opencli' ? api.music.generateOpenCli(payload) : api.music.generate(payload),
       generationProvider === 'opencli'
-        ? `OpenCLI-Generierung für „${title || 'Unbenannt'}“ wurde eingereiht. Status und Library aktualisieren sich nach Abschluss.`
-        : `Dein Song „${title || 'Unbenannt'}“ wurde gestartet. Die automatische Statusprüfung läuft jetzt.`
+        ? t('music.messages.openCliQueued', 'OpenCLI-Generierung für „{{title}}“ wurde eingereiht. Status und Library aktualisieren sich nach Abschluss.', { title: title || t('common.untitled', 'Unbenannt') })
+        : t('music.messages.songStarted', 'Dein Song „{{title}}“ wurde gestartet. Die automatische Statusprüfung läuft jetzt.', { title: title || t('common.untitled', 'Unbenannt') })
     );
   }
 
-  async function useUploadedFileForCurrentOperation(result, message = 'Upload wurde für diese Operation übernommen.') {
+  async function useUploadedFileForCurrentOperation(result, message = t('music.messages.uploadApplied', 'Upload wurde für diese Operation übernommen.')) {
     const uploadedUrl = String(result?.uploaded_url || result?.url || '').trim();
     if (!uploadedUrl) {
-      notify?.('Upload abgeschlossen, aber SunoAPI hat keine verwendbare Upload-URL zurückgegeben.', 'warning');
+      notify?.(t('music.messages.uploadNoUsableUrl', 'Upload abgeschlossen, aber SunoAPI hat keine verwendbare Upload-URL zurückgegeben.'), 'warning');
       await onRefresh?.({ silent: true });
       return;
     }
@@ -1418,14 +1459,14 @@ export function MusicPage({ styles, voices = [], uploadedFiles = [], assets = []
 
   async function uploadOperationFile(event) {
     event?.preventDefault?.();
-    if (!operationUploadFile) return notify?.('Bitte zuerst eine Audiodatei auswählen.', 'error');
+    if (!operationUploadFile) return notify?.(t('music.messages.selectAudioFileFirst', 'Bitte zuerst eine Audiodatei auswählen.'), 'error');
     try {
       setOperationUploadBusy(true);
       const result = await api.files.uploadStream(operationUploadFile);
       setOperationUploadFile(null);
-      await useUploadedFileForCurrentOperation(result, 'Datei wurde hochgeladen und als Audio-URL für diese Operation übernommen.');
+      await useUploadedFileForCurrentOperation(result, t('music.messages.fileUploadedApplied', 'Datei wurde hochgeladen und als Audio-URL für diese Operation übernommen.'));
     } catch (err) {
-      notify?.(err?.message || 'Datei-Upload fehlgeschlagen.', 'error');
+      notify?.(err?.message || t('music.messages.fileUploadFailed', 'Datei-Upload fehlgeschlagen.'), 'error');
     } finally {
       setOperationUploadBusy(false);
     }
@@ -1434,14 +1475,14 @@ export function MusicPage({ styles, voices = [], uploadedFiles = [], assets = []
   async function uploadOperationUrl(event) {
     event?.preventDefault?.();
     const url = String(operationUploadUrl || '').trim();
-    if (!url) return notify?.('Bitte zuerst eine Quell-URL eintragen.', 'error');
+    if (!url) return notify?.(t('music.messages.enterSourceUrlFirst', 'Bitte zuerst eine Quell-URL eintragen.'), 'error');
     try {
       setOperationUploadBusy(true);
       const result = await api.files.uploadUrl(url);
       setOperationUploadUrl('');
-      await useUploadedFileForCurrentOperation(result, 'URL wurde hochgeladen und als Audio-URL für diese Operation übernommen.');
+      await useUploadedFileForCurrentOperation(result, t('music.messages.urlUploadedApplied', 'URL wurde hochgeladen und als Audio-URL für diese Operation übernommen.'));
     } catch (err) {
-      notify?.(err?.message || 'URL-Upload fehlgeschlagen.', 'error');
+      notify?.(err?.message || t('music.messages.urlUploadFailed', 'URL-Upload fehlgeschlagen.'), 'error');
     } finally {
       setOperationUploadBusy(false);
     }
@@ -1456,24 +1497,24 @@ export function MusicPage({ styles, voices = [], uploadedFiles = [], assets = []
 
     const needsAudioSource = ['extend', 'upload-extend', 'upload-cover', 'add-instrumental', 'add-vocals'].includes(operationMode);
     if (selectedAsset && !canUseSelectedAssetForOperation(selectedAsset, operationMode)) {
-      notify?.(localOnlyAssetHint(selectedAsset) || 'Diese Operation ist für das ausgewählte AudioAsset deaktiviert.', 'info');
+      notify?.(localOnlyAssetHint(selectedAsset, t) || t('music.messages.operationDisabledForAsset', 'Diese Operation ist für das ausgewählte AudioAsset deaktiviert.'), 'info');
       return;
     }
 
     if (needsAudioSource && !assetId && !directAudioUrl && !hasUploadedUrl) {
-      notify?.('Bitte zuerst eine generierte Audiodatei auswählen oder eine Audio-URL eintragen.', 'error');
+      notify?.(t('music.messages.selectGeneratedAudioOrUrl', 'Bitte zuerst eine generierte Audiodatei auswählen oder eine Audio-URL eintragen.'), 'error');
       return;
     }
 
     if (operationMode === 'generate') return submit(event);
 
     if (operationMode === 'generate-lyrics') {
-      if (!prompt.trim()) return notify?.('Für Generate Lyrics ist ein Themen-/Stil-Prompt erforderlich.', 'error');
-      return startTask(() => api.lyrics.generate({ prompt }), 'Suno Lyrics-Generierung wurde gestartet.');
+      if (!prompt.trim()) return notify?.(t('music.messages.generateLyricsNeedsPrompt', 'Für Generate Lyrics ist ein Themen-/Stil-Prompt erforderlich.'), 'error');
+      return startTask(() => api.lyrics.generate({ prompt }), t('music.messages.lyricsGenerationStarted', 'Suno Lyrics-Generierung wurde gestartet.'));
     }
 
     if (operationMode === 'import-suno-song') {
-      if (!sunoImportId.trim()) return notify?.('Bitte eine Suno Song-ID oder Suno-URL eintragen.', 'error');
+      if (!sunoImportId.trim()) return notify?.(t('music.messages.enterSunoSongIdOrUrl', 'Bitte eine Suno Song-ID oder Suno-URL eintragen.'), 'error');
       return startTask(async () => {
         const result = await api.music.importSongFromSuno({
           song_id: sunoImportId.trim(),
@@ -1488,39 +1529,39 @@ export function MusicPage({ styles, voices = [], uploadedFiles = [], assets = []
           status: result.ok ? 'SUCCESS' : 'FAILED',
           response_payload: result
         };
-      }, sunoImportOverwrite ? 'Suno-Clip wurde aktualisiert.' : 'Suno-Clip wurde importiert.');
+      }, sunoImportOverwrite ? t('music.messages.sunoClipUpdated', 'Suno-Clip wurde aktualisiert.') : t('music.messages.sunoClipImported', 'Suno-Clip wurde importiert.'));
     }
 
     if (operationMode === 'stem-separation') {
       const taskId = selectedTaskId();
       const audioId = selectedAudioId();
-      if (!taskId || !audioId) return notify?.('Stem Separation benötigt Task-ID und Audio-ID einer Suno-Generierung.', 'error');
-      return startTask(() => api.audio.separate({ taskId, audioId, type: stemSeparationType }), 'Stem Separation wurde gestartet.');
+      if (!taskId || !audioId) return notify?.(t('music.messages.stemNeedsTaskAndAudio', 'Stem Separation benötigt Task-ID und Audio-ID einer Suno-Generierung.'), 'error');
+      return startTask(() => api.audio.separate({ taskId, audioId, type: stemSeparationType }), t('music.messages.stemStarted', 'Stem Separation wurde gestartet.'));
     }
 
     if (operationMode === 'convert-wav') {
       const taskId = selectedTaskId();
       const audioId = selectedAudioId();
-      if (!taskId || !audioId) return notify?.('Convert to WAV benötigt Task-ID und Audio-ID.', 'error');
-      return startTask(() => api.audio.wav({ taskId, audioId }), 'WAV-Konvertierung wurde gestartet.');
+      if (!taskId || !audioId) return notify?.(t('music.messages.wavNeedsTaskAndAudio', 'Convert to WAV benötigt Task-ID und Audio-ID.'), 'error');
+      return startTask(() => api.audio.wav({ taskId, audioId }), t('music.messages.wavStarted', 'WAV-Konvertierung wurde gestartet.'));
     }
 
     if (operationMode === 'midi') {
       const taskId = selectedTaskId();
       const audioId = selectedAudioId();
-      if (!taskId) return notify?.('Generate MIDI benötigt mindestens eine Task-ID.', 'error');
-      return startTask(() => api.audio.midi({ taskId, audioId: audioId || undefined }), 'MIDI-Erzeugung wurde gestartet.');
+      if (!taskId) return notify?.(t('music.messages.midiNeedsTask', 'Generate MIDI benötigt mindestens eine Task-ID.'), 'error');
+      return startTask(() => api.audio.midi({ taskId, audioId: audioId || undefined }), t('music.messages.midiStarted', 'MIDI-Erzeugung wurde gestartet.'));
     }
 
     if (operationMode === 'video') {
       const taskId = selectedTaskId();
       const audioId = selectedAudioId();
-      if (!taskId || !audioId) return notify?.('Create Music Video benötigt Task-ID und Audio-ID.', 'error');
-      return startTask(() => api.music.video({ taskId, audioId, author: videoAuthor || undefined, domainName: videoDomain || undefined }), 'Music Video wurde gestartet.');
+      if (!taskId || !audioId) return notify?.(t('music.messages.videoNeedsTaskAndAudio', 'Create Music Video benötigt Task-ID und Audio-ID.'), 'error');
+      return startTask(() => api.music.video({ taskId, audioId, author: videoAuthor || undefined, domainName: videoDomain || undefined }), t('music.messages.videoStarted', 'Music Video wurde gestartet.'));
     }
 
     if (operationMode === 'sounds') {
-      if (!prompt.trim()) return notify?.('Für Generate Sounds ist ein Prompt erforderlich.', 'error');
+      if (!prompt.trim()) return notify?.(t('music.messages.soundsNeedPrompt', 'Für Generate Sounds ist ein Prompt erforderlich.'), 'error');
       const payload = {
         prompt,
         model: soundModels.includes(model) ? model : 'V5',
@@ -1529,32 +1570,32 @@ export function MusicPage({ styles, voices = [], uploadedFiles = [], assets = []
         soundKey: soundKey || undefined,
         grabLyrics
       };
-      return startTask(() => api.music.sounds(payload), 'Sound-Generierung wurde gestartet.');
+      return startTask(() => api.music.sounds(payload), t('music.messages.soundsStarted', 'Sound-Generierung wurde gestartet.'));
     }
 
     if (operationMode === 'extend') {
       const continueAtValue = numberOrNull(continueAt);
       const useAutoContinueAt = Boolean(autoContinueAtEnabled && autoContinueAt);
-      if (!useAutoContinueAt && (!continueAtValue || continueAtValue <= 0)) return notify?.('Bitte eine gültige Extend-Startzeit in Sekunden angeben.', 'error');
-      if (!prompt.trim()) return notify?.('Für Extend ist ein Prompt oder Songtext erforderlich.', 'error');
-      if (!style.trim() && !operationTags.trim()) return notify?.('Für Extend sind Style/Tags erforderlich.', 'error');
-      if (!title.trim()) return notify?.('Für Extend ist ein Titel erforderlich.', 'error');
+      if (!useAutoContinueAt && (!continueAtValue || continueAtValue <= 0)) return notify?.(t('music.messages.extendNeedsValidTime', 'Bitte eine gültige Extend-Startzeit in Sekunden angeben.'), 'error');
+      if (!prompt.trim()) return notify?.(t('music.messages.extendNeedsPrompt', 'Für Extend ist ein Prompt oder Songtext erforderlich.'), 'error');
+      if (!style.trim() && !operationTags.trim()) return notify?.(t('music.messages.extendNeedsStyle', 'Für Extend sind Style/Tags erforderlich.'), 'error');
+      if (!title.trim()) return notify?.(t('music.messages.extendNeedsTitle', 'Für Extend ist ein Titel erforderlich.'), 'error');
       const payload = {
         ...buildAdvancedPayload({ officialSunoNames: true }),
         defaultParamFlag: true,
         continueAt: continueAtValue || undefined,
         autoContinueAt: useAutoContinueAt || undefined
       };
-      return startTask(() => api.archive.extend(assetId, payload), `Extend für „${assetTitle(selectedAsset)}“ wurde gestartet.`);
+      return startTask(() => api.archive.extend(assetId, payload), t('music.messages.extendStartedForAsset', 'Extend für „{{title}}“ wurde gestartet.', { title: assetTitle(selectedAsset, t) }));
     }
 
     if (operationMode === 'upload-extend') {
       const continueAtValue = numberOrNull(continueAt);
       const useAutoContinueAt = Boolean(autoContinueAtEnabled && autoContinueAt);
-      if (!useAutoContinueAt && (!continueAtValue || continueAtValue <= 0)) return notify?.('Bitte eine gültige Extend-Startzeit in Sekunden angeben.', 'error');
-      if (!prompt.trim()) return notify?.('Für Upload And Extend ist ein Prompt oder Songtext erforderlich.', 'error');
-      if (!style.trim() && !operationTags.trim()) return notify?.('Für Upload And Extend sind Style/Tags erforderlich.', 'error');
-      if (!title.trim()) return notify?.('Für Upload And Extend ist ein Titel erforderlich.', 'error');
+      if (!useAutoContinueAt && (!continueAtValue || continueAtValue <= 0)) return notify?.(t('music.messages.extendNeedsValidTime', 'Bitte eine gültige Extend-Startzeit in Sekunden angeben.'), 'error');
+      if (!prompt.trim()) return notify?.(t('music.messages.uploadExtendNeedsPrompt', 'Für Upload And Extend ist ein Prompt oder Songtext erforderlich.'), 'error');
+      if (!style.trim() && !operationTags.trim()) return notify?.(t('music.messages.uploadExtendNeedsStyle', 'Für Upload And Extend sind Style/Tags erforderlich.'), 'error');
+      if (!title.trim()) return notify?.(t('music.messages.uploadExtendNeedsTitle', 'Für Upload And Extend ist ein Titel erforderlich.'), 'error');
       const payload = {
         ...buildAdvancedPayload({ officialSunoNames: true }),
         uploadUrl: selectedAudioUrl(),
@@ -1563,11 +1604,11 @@ export function MusicPage({ styles, voices = [], uploadedFiles = [], assets = []
         continueAt: continueAtValue || undefined,
         autoContinueAt: useAutoContinueAt || undefined
       };
-      return startTask(() => api.music.uploadAndExtend(payload), 'Upload And Extend Audio wurde gestartet.');
+      return startTask(() => api.music.uploadAndExtend(payload), t('music.messages.uploadExtendStarted', 'Upload And Extend Audio wurde gestartet.'));
     }
 
     if (operationMode === 'upload-cover') {
-      if (!prompt.trim()) return notify?.('Für Upload And Cover Song ist ein Prompt oder Songtext erforderlich.', 'error');
+      if (!prompt.trim()) return notify?.(t('music.messages.uploadCoverNeedsPrompt', 'Für Upload And Cover Song ist ein Prompt oder Songtext erforderlich.'), 'error');
       const payload = {
         ...buildAdvancedPayload({ officialSunoNames: true }),
         uploadUrl: selectedAudioUrl(),
@@ -1577,13 +1618,13 @@ export function MusicPage({ styles, voices = [], uploadedFiles = [], assets = []
         style: style || undefined,
         title: title || `${selectedAsset?.title || 'Audio'} Cover`
       };
-      return startTask(() => api.music.uploadAndCover(payload), 'Upload And Cover Song wurde gestartet.');
+      return startTask(() => api.music.uploadAndCover(payload), t('music.messages.uploadCoverStarted', 'Upload And Cover Song wurde gestartet.'));
     }
 
     if (operationMode === 'cover-image') {
       const taskId = selectedTaskId();
-      if (!taskId) return notify?.('Für Cover-Bilder ist eine Task-ID erforderlich.', 'error');
-      return startTask(() => api.music.cover({ taskId }), 'Cover-Bilder wurden gestartet.');
+      if (!taskId) return notify?.(t('music.messages.coverImagesNeedTask', 'Für Cover-Bilder ist eine Task-ID erforderlich.'), 'error');
+      return startTask(() => api.music.cover({ taskId }), t('music.messages.coverImagesStarted', 'Cover-Bilder wurden gestartet.'));
     }
 
     if (operationMode === 'replace-section') {
@@ -1591,9 +1632,9 @@ export function MusicPage({ styles, voices = [], uploadedFiles = [], assets = []
       const audioId = selectedAudioId();
       const tags = operationTags || style;
       const fullLyrics = (replaceFullLyrics || selectedAsset?.lyrics || selectedAsset?.prompt || prompt || '').trim();
-      if (!taskId || !audioId) return notify?.('Replace Section benötigt Task-ID und Audio-ID.', 'error');
-      if (!prompt.trim() || !tags.trim() || !title.trim()) return notify?.('Replace Section benötigt Titel, Tags/Style und Prompt.', 'error');
-      if (!fullLyrics) return notify?.('Replace Section benötigt vollständige Lyrics für fullLyrics.', 'error');
+      if (!taskId || !audioId) return notify?.(t('music.messages.replaceNeedsTaskAndAudio', 'Replace Section benötigt Task-ID und Audio-ID.'), 'error');
+      if (!prompt.trim() || !tags.trim() || !title.trim()) return notify?.(t('music.messages.replaceNeedsFields', 'Replace Section benötigt Titel, Tags/Style und Prompt.'), 'error');
+      if (!fullLyrics) return notify?.(t('music.messages.replaceNeedsFullLyrics', 'Replace Section benötigt vollständige Lyrics für fullLyrics.'), 'error');
       const payload = {
         taskId,
         audioId,
@@ -1605,41 +1646,41 @@ export function MusicPage({ styles, voices = [], uploadedFiles = [], assets = []
         infillEndS: numberOrNull(replaceEnd),
         negativeTags: negativeTags || undefined
       };
-      return startTask(() => api.music.replaceSection(payload), 'Replace Section wurde gestartet.');
+      return startTask(() => api.music.replaceSection(payload), t('music.messages.replaceStarted', 'Replace Section wurde gestartet.'));
     }
 
     if (operationMode === 'persona') {
       const taskId = selectedTaskId();
       const audioId = selectedAudioId();
-      if (!taskId || !audioId) return notify?.('Persona erstellen benötigt Task-ID und Audio-ID.', 'error');
+      if (!taskId || !audioId) return notify?.(t('music.messages.personaNeedsTaskAndAudio', 'Persona erstellen benötigt Task-ID und Audio-ID.'), 'error');
       const payload = {
         taskId,
         audioId,
         name: personaName || title || `${selectedAsset?.title || 'Audio'} Persona`,
-        description: personaDescription || prompt || title || 'Gespeicherte Persona aus Song Studio',
+        description: personaDescription || prompt || title || t('music.defaults.personaDescription', 'Gespeicherte Persona aus Song Studio'),
         vocalStart: numberOrNull(vocalStart),
         vocalEnd: numberOrNull(vocalEnd),
         style: style || undefined
       };
-      return startTask(() => api.music.persona(payload), 'Persona-Erstellung wurde gestartet.');
+      return startTask(() => api.music.persona(payload), t('music.messages.personaStarted', 'Persona-Erstellung wurde gestartet.'));
     }
 
     if (operationMode === 'boost-style') {
       const content = style || operationTags || prompt;
-      if (!content.trim()) return notify?.('Bitte zuerst einen Style oder Prompt zum Optimieren eingeben.', 'error');
+      if (!content.trim()) return notify?.(t('music.messages.boostNeedsContent', 'Bitte zuerst einen Style oder Prompt zum Optimieren eingeben.'), 'error');
       return startTask(async () => {
         const result = await api.music.boostStyle({ content });
         const improved = result?.result_payload?.data || result?.response_payload?.data || result?.result_payload?.msg || '';
         if (typeof improved === 'string' && improved.trim()) setStyle(improved.trim());
         return result;
-      }, 'Style-Optimierung wurde gestartet.');
+      }, t('music.messages.boostStarted', 'Style-Optimierung wurde gestartet.'));
     }
 
     if (operationMode === 'mashup') {
       const urls = mashupUrls.split(/[\n,]+/).map((item) => item.trim()).filter(Boolean);
       const selectedUrl = selectedAudioUrl();
       if (selectedUrl && !urls.includes(selectedUrl)) urls.unshift(selectedUrl);
-      if (urls.length !== 2) return notify?.('Mashup benötigt laut SunoAPI exakt zwei Audio-URLs.', 'error');
+      if (urls.length !== 2) return notify?.(t('music.messages.mashupNeedsTwoUrls', 'Mashup benötigt laut SunoAPI exakt zwei Audio-URLs.'), 'error');
       const payload = {
         uploadUrlList: urls,
         customMode,
@@ -1653,12 +1694,12 @@ export function MusicPage({ styles, voices = [], uploadedFiles = [], assets = []
         weirdnessConstraint: numberOrNull(weirdnessConstraint),
         audioWeight: numberOrNull(audioWeight)
       };
-      return startTask(() => api.music.mashup(payload), 'Mashup wurde gestartet.');
+      return startTask(() => api.music.mashup(payload), t('music.messages.mashupStarted', 'Mashup wurde gestartet.'));
     }
 
     if (operationMode === 'add-instrumental') {
       const tags = operationTags || style;
-      if (!tags.trim()) return notify?.('Für Add Instrumental sind Tags/Style erforderlich.', 'error');
+      if (!tags.trim()) return notify?.(t('music.messages.addInstrumentalNeedsStyle', 'Für Add Instrumental sind Tags/Style erforderlich.'), 'error');
       const payload = {
         uploadUrl: selectedAudioUrl(),
         title: title || `${selectedAsset?.title || 'Audio'} Instrumental`,
@@ -1670,12 +1711,12 @@ export function MusicPage({ styles, voices = [], uploadedFiles = [], assets = []
         audioWeight: numberOrNull(audioWeight),
         model: addModels.includes(model) ? model : 'V4_5PLUS'
       };
-      if (assetId && !directAudioUrl) return startTask(() => api.archive.addInstrumental(assetId, payload), `Add Instrumental für „${assetTitle(selectedAsset)}“ wurde gestartet.`);
-      return startTask(() => api.music.addInstrumental(payload), 'Add Instrumental wurde gestartet.');
+      if (assetId && !directAudioUrl) return startTask(() => api.archive.addInstrumental(assetId, payload), t('music.messages.addInstrumentalStartedForAsset', 'Add Instrumental für „{{title}}“ wurde gestartet.', { title: assetTitle(selectedAsset, t) }));
+      return startTask(() => api.music.addInstrumental(payload), t('music.messages.addInstrumentalStarted', 'Add Instrumental wurde gestartet.'));
     }
 
     if (operationMode === 'add-vocals') {
-      if (!prompt.trim()) return notify?.('Für Add Voice/Vocals ist ein Vocal-/Lyrics-Prompt erforderlich.', 'error');
+      if (!prompt.trim()) return notify?.(t('music.messages.addVocalsNeedsPrompt', 'Für Add Voice/Vocals ist ein Vocal-/Lyrics-Prompt erforderlich.'), 'error');
       const payload = {
         uploadUrl: selectedAudioUrl(),
         prompt,
@@ -1688,42 +1729,47 @@ export function MusicPage({ styles, voices = [], uploadedFiles = [], assets = []
         audioWeight: numberOrNull(audioWeight),
         model: addModels.includes(model) ? model : 'V4_5PLUS'
       };
-      if (assetId && !directAudioUrl) return startTask(() => api.archive.addVocals(assetId, payload), `Add Voice/Vocals für „${assetTitle(selectedAsset)}“ wurde gestartet.`);
-      return startTask(() => api.music.addVocals(payload), 'Add Voice/Vocals wurde gestartet.');
+      if (assetId && !directAudioUrl) return startTask(() => api.archive.addVocals(assetId, payload), t('music.messages.addVocalsStartedForAsset', 'Add Voice/Vocals für „{{title}}“ wurde gestartet.', { title: assetTitle(selectedAsset, t) }));
+      return startTask(() => api.music.addVocals(payload), t('music.messages.addVocalsStarted', 'Add Voice/Vocals wurde gestartet.'));
     }
   }
 
   const canPrev = step > 0;
   const canNext = step < 4;
   const aiRuntimeLabel = styleSuggestionRuntime?.provider || styleSuggestionRuntime?.model
-    ? `${styleSuggestionRuntime?.provider || 'Provider'} · ${styleSuggestionRuntime?.model || 'Modell'}`
-    : 'nutzt die aktive KI-Konfiguration aus dem Adminbereich';
+    ? `${styleSuggestionRuntime?.provider || 'Provider'} · ${styleSuggestionRuntime?.model || t('music.fields.model', 'Modell')}`
+    : t('music.styleEngine.usesActiveAdminAi', 'nutzt die aktive KI-Konfiguration aus dem Adminbereich');
   const styleBatchingInfo = styleSuggestionRuntime?.style_batching;
   const styleBatchingLabel = styleBatchingInfo
-    ? `Batching: ${styleBatchingInfo.mode || 'auto'} · ${styleBatchingInfo.request_count || 1} Request(s) · Batchgröße ${styleBatchingInfo.batch_size || '—'}${styleBatchingInfo.low_token_runtime ? ' · Low-Token-Profil' : ''}`
+    ? t('music.styleEngine.batchingStatus', 'Batching: {{mode}} · {{requests}} Request(s) · Batchgröße {{batchSize}}{{profile}}', {
+      mode: styleBatchingInfo.mode || 'auto',
+      requests: styleBatchingInfo.request_count || 1,
+      batchSize: styleBatchingInfo.batch_size || '—',
+      profile: styleBatchingInfo.low_token_runtime ? t('music.styleEngine.lowTokenProfileSuffix', ' · Low-Token-Profil') : ''
+    })
     : '';
 
   const voiceSelector = voices.length > 0 ? (
     <label>Voice / Persona
       <select value={selectedVoiceId} onChange={(event) => setSelectedVoiceId(event.target.value)}>
-        <option value="">Keine Voice verwenden</option>
-        {voices.map((voice) => <option key={voice.id} value={voice.id}>{voiceLabel(voice)}</option>)}
+        <option value="">{t('music.fields.noVoice', 'Keine Voice verwenden')}</option>
+        {voices.map((voice) => <option key={voice.id} value={voice.id}>{voiceLabel(voice, t)}</option>)}
       </select>
     </label>
   ) : null;
 
   const audioSelector = !['generate', 'generate-lyrics', 'import-suno-song', 'sounds', 'boost-style'].includes(operationMode) ? (
     <>
-      <label>Generierte Audio auswählen
+      <label>{t('music.fields.selectGeneratedAudio', 'Generierte Audio auswählen')}
         <select value={selectedAssetId} onChange={(event) => setSelectedAssetId(event.target.value)}>
-          <option value="">Audio wählen…</option>
-          {playableAssets.map((asset) => <option key={asset.id} value={asset.id}>{assetTitle(asset)}</option>)}
+          <option value="">{t('music.fields.chooseAudio', 'Audio wählen…')}</option>
+          {playableAssets.map((asset) => <option key={asset.id} value={asset.id}>{assetTitle(asset, t)}</option>)}
         </select>
       </label>
       {uploadUrlOptions.length > 0 && ['upload-extend', 'upload-cover', 'add-instrumental', 'add-vocals', 'mashup'].includes(operationMode) && (
-        <label>Upload-URL aus Dateiablage
+        <label>{t('music.fields.uploadUrlFromFiles', 'Upload-URL aus Dateiablage')}
           <select value={selectedUploadId} onChange={(event) => setSelectedUploadId(event.target.value)}>
-            <option value="">Keine Upload-Datei</option>
+            <option value="">{t('music.fields.noUploadFile', 'Keine Upload-Datei')}</option>
             {uploadUrlOptions.map((file) => <option key={file.id} value={file.id}>{file.original_name || file.source_url || `Upload #${file.id}`}</option>)}
           </select>
         </label>
@@ -1732,30 +1778,30 @@ export function MusicPage({ styles, voices = [], uploadedFiles = [], assets = []
         <div className="wide nested-panel soft-panel operation-inline-upload-panel">
           <div className="row between align-start">
             <div>
-              <p className="eyebrow">Audioquelle für diese Operation</p>
-              <h3>Direkt hochladen oder URL verwenden</h3>
-              <p className="muted">Für Upload And Extend, Upload And Cover, Add Vocals und ähnliche Folgeaktionen kannst du die benötigte Audioquelle direkt hier vorbereiten. Die alte Dateiablage unter System bleibt nur als zentrale Übersicht/Expertenbereich.</p>
+              <p className="eyebrow">{t('music.uploadSource.eyebrow', 'Audioquelle für diese Operation')}</p>
+              <h3>{t('music.uploadSource.title', 'Direkt hochladen oder URL verwenden')}</h3>
+              <p className="muted">{t('music.uploadSource.text', 'Für Upload And Extend, Upload And Cover, Add Vocals und ähnliche Folgeaktionen kannst du die benötigte Audioquelle direkt hier vorbereiten. Die alte Dateiablage unter System bleibt nur als zentrale Übersicht/Expertenbereich.')}</p>
             </div>
           </div>
           <div className="form-grid two">
-            <label>Direktdatei hochladen
+            <label>{t('music.uploadSource.directFile', 'Direktdatei hochladen')}
               <input type="file" accept="audio/*,.mp3,.wav,.m4a,.aac,.flac,.ogg,.webm" onChange={(event) => setOperationUploadFile(event.target.files?.[0] || null)} disabled={operationUploadBusy} />
             </label>
-            <label>Quell-URL hochladen
+            <label>{t('music.uploadSource.sourceUrl', 'Quell-URL hochladen')}
               <input value={operationUploadUrl} onChange={(event) => setOperationUploadUrl(event.target.value)} placeholder="https://.../audio.mp3" disabled={operationUploadBusy} />
             </label>
           </div>
           <div className="button-row wrap">
-            <button type="button" onClick={uploadOperationFile} disabled={operationUploadBusy || !operationUploadFile}>Datei hochladen & übernehmen</button>
-            <button type="button" onClick={uploadOperationUrl} disabled={operationUploadBusy || !operationUploadUrl.trim()}>URL hochladen & übernehmen</button>
+            <button type="button" onClick={uploadOperationFile} disabled={operationUploadBusy || !operationUploadFile}>{t('music.uploadSource.uploadFileApply', 'Datei hochladen & übernehmen')}</button>
+            <button type="button" onClick={uploadOperationUrl} disabled={operationUploadBusy || !operationUploadUrl.trim()}>{t('music.uploadSource.uploadUrlApply', 'URL hochladen & übernehmen')}</button>
           </div>
-          <label>Verwendete Audio-URL
+          <label>{t('music.uploadSource.usedAudioUrl', 'Verwendete Audio-URL')}
             <input value={audioUrl} onChange={(event) => setAudioUrl(event.target.value)} placeholder="https://.../audio.mp3" />
           </label>
         </div>
       )}
-      {selectedAsset && localOnlyAssetHint(selectedAsset) && (
-        <p className="wide warning-text">{localOnlyAssetHint(selectedAsset)}</p>
+      {selectedAsset && localOnlyAssetHint(selectedAsset, t) && (
+        <p className="wide warning-text">{localOnlyAssetHint(selectedAsset, t)}</p>
       )}
     </>
   ) : null;
@@ -1767,8 +1813,8 @@ export function MusicPage({ styles, voices = [], uploadedFiles = [], assets = []
       : models;
 
   const operationActionLabel = operationMode === 'generate'
-    ? generationProvider === 'opencli' ? 'Mit OpenCLI generieren' : 'Musik generieren'
-    : `${operationModes.find(([key]) => key === operationMode)?.[1] || 'Operation'} starten`;
+    ? generationProvider === 'opencli' ? t('music.actions.generateOpenCli', 'Mit OpenCLI generieren') : t('music.actions.generateMusic', 'Musik generieren')
+    : t('music.actions.startOperation', '{{operation}} starten', { operation: localizedOperationModes.find(([key]) => key === operationMode)?.[1] || t('music.operation', 'Operation') });
 
   const supportsAdvancedSunoControls = ['generate', 'extend', 'upload-extend', 'upload-cover', 'add-instrumental', 'add-vocals'].includes(operationMode);
 
@@ -1776,26 +1822,26 @@ export function MusicPage({ styles, voices = [], uploadedFiles = [], assets = []
     <section className="wide generation-provider-panel">
       <div className="generation-provider-head">
         <div>
-          <p className="eyebrow">Song-Erzeugung</p>
-          <h3>Provider auswählen</h3>
-          <p className="muted">SunoAPI bleibt der Standard. OpenCLI ist optional und importiert lokal erzeugte Audiodateien danach in die Library.</p>
+          <p className="eyebrow">{t('music.provider.eyebrow', 'Song-Erzeugung')}</p>
+          <h3>{t('music.provider.title', 'Provider auswählen')}</h3>
+          <p className="muted">{t('music.provider.text', 'SunoAPI bleibt der Standard. OpenCLI ist optional und importiert lokal erzeugte Audiodateien danach in die Library.')}</p>
         </div>
-        <span className={generationProvider === 'opencli' && openCliReady ? 'status cached' : generationProvider === 'opencli' ? 'status error' : 'status'}>{generationProvider === 'opencli' ? openCliReady ? 'OpenCLI bereit' : 'OpenCLI nicht bereit' : 'SunoAPI aktiv'}</span>
+        <span className={generationProvider === 'opencli' && openCliReady ? 'status cached' : generationProvider === 'opencli' ? 'status error' : 'status'}>{generationProvider === 'opencli' ? openCliReady ? t('music.provider.openCliReady', 'OpenCLI bereit') : t('music.provider.openCliNotReady', 'OpenCLI nicht bereit') : t('music.provider.sunoActive', 'SunoAPI aktiv')}</span>
       </div>
       <div className="generation-provider-grid">
         <label>Provider
           <select value={generationProvider} onChange={(event) => setGenerationProvider(event.target.value)}>
-            <option value="sunoapi">SunoAPI · bestehender Standard</option>
-            {openCliEnabled && <option value="opencli">OpenCLI · lokaler Browser-Bridge-Provider</option>}
+            <option value="sunoapi">{t('music.provider.sunoOption', 'SunoAPI · bestehender Standard')}</option>
+            {openCliEnabled && <option value="opencli">{t('music.provider.openCliOption', 'OpenCLI · lokaler Browser-Bridge-Provider')}</option>}
           </select>
         </label>
         <label>OpenCLI Status
-          <input readOnly value={openCliRuntime.enabled ? openCliRuntime.installed ? `${openCliRuntime.binary || 'opencli'} bereit` : `${openCliRuntime.binary || 'opencli'} nicht gefunden` : 'deaktiviert per .env'} />
+          <input readOnly value={openCliRuntime.enabled ? openCliRuntime.installed ? t('music.provider.binaryReady', '{{binary}} bereit', { binary: openCliRuntime.binary || 'opencli' }) : t('music.provider.binaryMissing', '{{binary}} nicht gefunden', { binary: openCliRuntime.binary || 'opencli' }) : t('music.provider.disabledEnv', 'deaktiviert per .env')} />
         </label>
       </div>
       {generationProvider === 'opencli' && (
         <p className="muted small-status-line generation-provider-note">
-          OpenCLI unterstützt hier Generate Music, Custom Lyrics, Instrumental, Style/Tags, Negative Tags, Style Weight und Weirdness. Voice/Persona, Vocal Gender, Audio Weight, Extend, Cover Song und Upload-Operationen bleiben weiterhin SunoAPI-Funktionen.
+          {t('music.provider.openCliNote', 'OpenCLI unterstützt hier Generate Music, Custom Lyrics, Instrumental, Style/Tags, Negative Tags, Style Weight und Weirdness. Voice/Persona, Vocal Gender, Audio Weight, Extend, Cover Song und Upload-Operationen bleiben weiterhin SunoAPI-Funktionen.')}
         </p>
       )}
     </section>
@@ -1805,29 +1851,29 @@ export function MusicPage({ styles, voices = [], uploadedFiles = [], assets = []
     <section className="wide nested-panel soft-panel">
       <div className="row between align-start">
         <div>
-          <p className="eyebrow">Suno Advanced Controls</p>
-          <h3>Feinsteuerung optional</h3>
-          <p className="muted">Diese Werte werden nur gesetzt, wenn du sie ausfüllst.</p>
+          <p className="eyebrow">{t('music.advanced.eyebrow', 'Suno Advanced Controls')}</p>
+          <h3>{t('music.advanced.title', 'Feinsteuerung optional')}</h3>
+          <p className="muted">{t('music.advanced.text', 'Diese Werte werden nur gesetzt, wenn du sie ausfüllst.')}</p>
         </div>
       </div>
       <div className="form-grid two">
-        <label>Negative Tags
-          <input value={negativeTags} onChange={(event) => setNegativeTags(event.target.value)} placeholder="z. B. Heavy Metal, Aggressive Vocals" />
+        <label>{t('music.advanced.negativeTags', 'Negative Tags')}
+          <input value={negativeTags} onChange={(event) => setNegativeTags(event.target.value)} placeholder={t('music.placeholders.negativeTags', 'z. B. Heavy Metal, Aggressive Vocals')} />
         </label>
-        <label>Vocal Gender
+        <label>{t('music.advanced.vocalGender', 'Vocal Gender')}
           <select value={vocalGender} onChange={(event) => setVocalGender(event.target.value)}>
-            <option value="">Automatisch</option>
-            <option value="m">männlich / m</option>
-            <option value="f">weiblich / f</option>
+            <option value="">{t('music.advanced.auto', 'Automatisch')}</option>
+            <option value="m">{t('music.advanced.male', 'männlich / m')}</option>
+            <option value="f">{t('music.advanced.female', 'weiblich / f')}</option>
           </select>
         </label>
-        <label>Style Weight 0-1
+        <label>{t('music.advanced.styleWeight', 'Style Weight 0-1')}
           <input type="number" min="0" max="1" step="0.01" value={styleWeight} onChange={(event) => setStyleWeight(event.target.value)} placeholder="0.61" />
         </label>
-        <label>Weirdness 0-1
+        <label>{t('music.advanced.weirdness', 'Weirdness 0-1')}
           <input type="number" min="0" max="1" step="0.01" value={weirdnessConstraint} onChange={(event) => setWeirdnessConstraint(event.target.value)} placeholder="0.72" />
         </label>
-        <label>Audio Weight 0-1
+        <label>{t('music.advanced.audioWeight', 'Audio Weight 0-1')}
           <input type="number" min="0" max="1" step="0.01" value={audioWeight} onChange={(event) => setAudioWeight(event.target.value)} placeholder="0.65" />
         </label>
       </div>
@@ -1839,30 +1885,30 @@ export function MusicPage({ styles, voices = [], uploadedFiles = [], assets = []
       {audioSelector}
       {operationMode === 'generate-lyrics' && (
         <div className="wide nested-panel soft-panel">
-          <p className="eyebrow">Suno Lyrics API</p>
-          <p className="muted">Nutze das große Prompt-Feld für Thema, Stimmung, Sprache, Genre und gewünschte Struktur. Das Ergebnis erscheint nach Abschluss als Task/Archiv-Eintrag.</p>
+          <p className="eyebrow">{t('music.operationEyebrows.sunoLyricsApi', 'Suno Lyrics API')}</p>
+          <p className="muted">{t('music.operationHelp.generateLyrics', 'Nutze das große Prompt-Feld für Thema, Stimmung, Sprache, Genre und gewünschte Struktur. Das Ergebnis erscheint nach Abschluss als Task/Archiv-Eintrag.')}</p>
         </div>
       )}
       {operationMode === 'import-suno-song' && (
         <div className="wide nested-panel soft-panel">
-          <p className="eyebrow">Öffentlicher Suno-Clip Import</p>
-          <h3>Suno Song-ID oder URL importieren</h3>
-          <p className="muted">Importiert einen einzelnen öffentlichen Suno-Clip in Songs, AudioAssets und Tasks. Lokale Funktionen bleiben aktiv; SunoAPI.org-Folgeaktionen werden für diesen Import deaktiviert.</p>
-          <label className="wide">Suno Song-ID oder URL
-            <input value={sunoImportId} onChange={(event) => setSunoImportId(event.target.value)} placeholder="https://suno.com/song/96fdbd12-4ea1-41b4-a132-4b731ec6594e oder UUID" />
+          <p className="eyebrow">{t('music.importPublic.eyebrow', 'Öffentlicher Suno-Clip Import')}</p>
+          <h3>{t('music.importPublic.title', 'Suno Song-ID oder URL importieren')}</h3>
+          <p className="muted">{t('music.importPublic.text', 'Importiert einen einzelnen öffentlichen Suno-Clip in Songs, AudioAssets und Tasks. Lokale Funktionen bleiben aktiv; SunoAPI.org-Folgeaktionen werden für diesen Import deaktiviert.')}</p>
+          <label className="wide">{t('music.importPublic.songIdOrUrl', 'Suno Song-ID oder URL')}
+            <input value={sunoImportId} onChange={(event) => setSunoImportId(event.target.value)} placeholder={t('music.placeholders.sunoSongIdOrUrl', 'https://suno.com/song/96fdbd12-4ea1-41b4-a132-4b731ec6594e oder UUID')} />
           </label>
           <div className="button-row wrap">
-            <label className="check"><input type="checkbox" checked={sunoImportCacheAudio} onChange={(event) => setSunoImportCacheAudio(event.target.checked)} /> Audio lokal speichern</label>
-            <label className="check"><input type="checkbox" checked={sunoImportCacheCover} onChange={(event) => setSunoImportCacheCover(event.target.checked)} /> Cover lokal speichern</label>
-            <label className="check"><input type="checkbox" checked={sunoImportOverwrite} onChange={(event) => setSunoImportOverwrite(event.target.checked)} /> Vorhandenen Import aktualisieren</label>
+            <label className="check"><input type="checkbox" checked={sunoImportCacheAudio} onChange={(event) => setSunoImportCacheAudio(event.target.checked)} /> {t('music.importPublic.cacheAudio', 'Audio lokal speichern')}</label>
+            <label className="check"><input type="checkbox" checked={sunoImportCacheCover} onChange={(event) => setSunoImportCacheCover(event.target.checked)} /> {t('music.importPublic.cacheCover', 'Cover lokal speichern')}</label>
+            <label className="check"><input type="checkbox" checked={sunoImportOverwrite} onChange={(event) => setSunoImportOverwrite(event.target.checked)} /> {t('music.importPublic.overwrite', 'Vorhandenen Import aktualisieren')}</label>
           </div>
         </div>
       )}
       {operationMode === 'stem-separation' && (
         <div className="wide nested-panel soft-panel">
-          <p className="eyebrow">Stem Separation</p>
-          <p className="muted">Die offizielle SunoAPI Stem Separation nutzt Task-ID und Audio-ID einer Suno-Generierung, nicht eine beliebige Audio-URL.</p>
-          <label>Stem-Typ
+          <p className="eyebrow">{t('music.operationEyebrows.stemSeparation', 'Stem Separation')}</p>
+          <p className="muted">{t('music.operationHelp.stemSeparation', 'Die offizielle SunoAPI Stem Separation nutzt Task-ID und Audio-ID einer Suno-Generierung, nicht eine beliebige Audio-URL.')}</p>
+          <label>{t('music.fields.stemType', 'Stem-Typ')}
             <select value={stemSeparationType} onChange={(event) => setStemSeparationType(event.target.value)}>
               <option value="separate_vocal">separate_vocal · Vocal + Instrumental</option>
               <option value="split_stem">split_stem · mehrspurige Stem-Aufteilung</option>
@@ -1872,35 +1918,35 @@ export function MusicPage({ styles, voices = [], uploadedFiles = [], assets = []
       )}
       {operationMode === 'convert-wav' && (
         <div className="wide nested-panel soft-panel">
-          <p className="eyebrow">Convert to WAV</p>
-          <p className="muted">Task-ID und Audio-ID werden aus der ausgewählten Datei übernommen, können aber manuell überschrieben werden.</p>
+          <p className="eyebrow">{t('music.operationEyebrows.convertToWav', 'Convert to WAV')}</p>
+          <p className="muted">{t('music.operationHelp.convertWav', 'Task-ID und Audio-ID werden aus der ausgewählten Datei übernommen, können aber manuell überschrieben werden.')}</p>
         </div>
       )}
       {(operationMode === 'extend' || operationMode === 'upload-extend') && (
         <>
           {autoContinueAtEnabled && (
-            <label className="check"><input type="checkbox" checked={Boolean(autoContinueAt)} onChange={(event) => setAutoContinueAt(event.target.checked)} /> continueAt automatisch per Audioanalyse berechnen</label>
+            <label className="check"><input type="checkbox" checked={Boolean(autoContinueAt)} onChange={(event) => setAutoContinueAt(event.target.checked)} /> {t('music.fields.autoContinueAt', 'continueAt automatisch per Audioanalyse berechnen')}</label>
           )}
-          <label>Extend ab Sekunde (continueAt)
-            <input type="number" min="1" step="0.1" value={continueAt} onChange={(event) => setContinueAt(event.target.value)} placeholder={autoContinueAtEnabled && autoContinueAt ? 'Fallback, z. B. 60' : 'z. B. 60'} />
+          <label>{t('music.fields.continueAt', 'Extend ab Sekunde (continueAt)')}
+            <input type="number" min="1" step="0.1" value={continueAt} onChange={(event) => setContinueAt(event.target.value)} placeholder={autoContinueAtEnabled && autoContinueAt ? t('music.placeholders.continueAtFallback', 'Fallback, z. B. 60') : t('music.placeholders.continueAt', 'z. B. 60')} />
           </label>
         </>
       )}
       {operationMode === 'sounds' && (
         <>
-          <label>Sound Tempo optional
-            <input type="number" value={soundTempo} onChange={(event) => setSoundTempo(event.target.value)} placeholder="z. B. 100" />
+          <label>{t('music.fields.soundTempo', 'Sound Tempo optional')}
+            <input type="number" value={soundTempo} onChange={(event) => setSoundTempo(event.target.value)} placeholder={t('music.placeholders.soundTempo', 'z. B. 100')} />
           </label>
-          <label>Sound Key optional
-            <input value={soundKey} onChange={(event) => setSoundKey(event.target.value)} placeholder="z. B. C minor" />
+          <label>{t('music.fields.soundKey', 'Sound Key optional')}
+            <input value={soundKey} onChange={(event) => setSoundKey(event.target.value)} placeholder={t('music.placeholders.soundKey', 'z. B. C minor')} />
           </label>
-          <label className="check"><input type="checkbox" checked={soundLoop} onChange={(event) => setSoundLoop(event.target.checked)} /> Loop erzeugen</label>
-          <label className="check"><input type="checkbox" checked={grabLyrics} onChange={(event) => setGrabLyrics(event.target.checked)} /> Lyrics erfassen</label>
+          <label className="check"><input type="checkbox" checked={soundLoop} onChange={(event) => setSoundLoop(event.target.checked)} /> {t('music.fields.createLoop', 'Loop erzeugen')}</label>
+          <label className="check"><input type="checkbox" checked={grabLyrics} onChange={(event) => setGrabLyrics(event.target.checked)} /> {t('music.fields.grabLyrics', 'Lyrics erfassen')}</label>
         </>
       )}
       {operationMode === 'add-instrumental' && (
-        <label className="wide">Tags / Instrumental Style
-          <textarea rows={3} value={operationTags} onChange={(event) => setOperationTags(event.target.value)} placeholder="Relaxing Piano, Ambient, Boom Bap, Hard Drums…" />
+        <label className="wide">{t('music.fields.instrumentalStyleTags', 'Tags / Instrumental Style')}
+          <textarea rows={3} value={operationTags} onChange={(event) => setOperationTags(event.target.value)} placeholder={t('music.placeholders.instrumentalStyleTags', 'Relaxing Piano, Ambient, Boom Bap, Hard Drums…')} />
         </label>
       )}
       {(['cover-image', 'replace-section', 'persona', 'convert-wav', 'midi', 'video', 'stem-separation'].includes(operationMode)) && (
@@ -1915,52 +1961,52 @@ export function MusicPage({ styles, voices = [], uploadedFiles = [], assets = []
       )}
       {operationMode === 'video' && (
         <>
-          <label>Autor optional
-            <input value={videoAuthor} onChange={(event) => setVideoAuthor(event.target.value)} placeholder="z.B. KlangNeural" />
+          <label>{t('music.fields.authorOptional', 'Autor optional')}
+            <input value={videoAuthor} onChange={(event) => setVideoAuthor(event.target.value)} placeholder={t('music.placeholders.videoAuthor', 'z.B. KlangNeural')} />
           </label>
-          <label>Domain optional
-            <input value={videoDomain} onChange={(event) => setVideoDomain(event.target.value)} placeholder="z.B. klangneural.de" />
+          <label>{t('music.fields.domainOptional', 'Domain optional')}
+            <input value={videoDomain} onChange={(event) => setVideoDomain(event.target.value)} placeholder={t('music.placeholders.videoDomain', 'z.B. klangneural.de')} />
           </label>
         </>
       )}
       {operationMode === 'replace-section' && (
         <>
-          <label>Replace Start Sek.
+          <label>{t('music.fields.replaceStart', 'Replace Start Sek.')}
             <input type="number" min="0" step="0.01" value={replaceStart} onChange={(event) => setReplaceStart(event.target.value)} />
           </label>
-          <label>Replace Ende Sek.
+          <label>{t('music.fields.replaceEnd', 'Replace Ende Sek.')}
             <input type="number" min="0" step="0.01" value={replaceEnd} onChange={(event) => setReplaceEnd(event.target.value)} />
           </label>
-          <label className="wide">Tags / Style für Ersatz
-            <textarea rows={3} value={operationTags || style} onChange={(event) => setOperationTags(event.target.value)} placeholder="Jazz, Boom Bap, Dark Rap..." />
+          <label className="wide">{t('music.fields.replaceTagsStyle', 'Tags / Style für Ersatz')}
+            <textarea rows={3} value={operationTags || style} onChange={(event) => setOperationTags(event.target.value)} placeholder={t('music.placeholders.replaceTagsStyle', 'Jazz, Boom Bap, Dark Rap...')} />
           </label>
-          <label className="wide">Negative Tags optional
-            <input value={negativeTags} onChange={(event) => setNegativeTags(event.target.value)} placeholder="z. B. low quality, distorted, off key" />
+          <label className="wide">{t('music.fields.negativeTagsOptional', 'Negative Tags optional')}
+            <input value={negativeTags} onChange={(event) => setNegativeTags(event.target.value)} placeholder={t('music.placeholders.negativeQuality', 'z. B. low quality, distorted, off key')} />
           </label>
-          <label className="wide">Vollständige Lyrics / fullLyrics
-            <textarea rows={7} value={replaceFullLyrics} onChange={(event) => setReplaceFullLyrics(event.target.value)} placeholder={selectedAsset?.lyrics || selectedAsset?.prompt || 'Vollständigen Songtext einfügen. Wird für die Replace-Section API als fullLyrics gesendet.'} />
+          <label className="wide">{t('music.fields.fullLyrics', 'Vollständige Lyrics / fullLyrics')}
+            <textarea rows={7} value={replaceFullLyrics} onChange={(event) => setReplaceFullLyrics(event.target.value)} placeholder={selectedAsset?.lyrics || selectedAsset?.prompt || t('music.placeholders.replaceFullLyrics', 'Vollständigen Songtext einfügen. Wird für die Replace-Section API als fullLyrics gesendet.')} />
           </label>
         </>
       )}
       {operationMode === 'persona' && (
         <>
-          <label>Persona Name
-            <input value={personaName} onChange={(event) => setPersonaName(event.target.value)} placeholder="z.B. Grimy Rap Voice" />
+          <label>{t('music.fields.personaName', 'Persona Name')}
+            <input value={personaName} onChange={(event) => setPersonaName(event.target.value)} placeholder={t('music.placeholders.personaName', 'z.B. Grimy Rap Voice')} />
           </label>
-          <label>Vocal Start
+          <label>{t('music.fields.vocalStart', 'Vocal Start')}
             <input type="number" min="0" step="0.1" value={vocalStart} onChange={(event) => setVocalStart(event.target.value)} />
           </label>
-          <label>Vocal Ende
+          <label>{t('music.fields.vocalEnd', 'Vocal Ende')}
             <input type="number" min="0" step="0.1" value={vocalEnd} onChange={(event) => setVocalEnd(event.target.value)} />
           </label>
-          <label className="wide">Persona Beschreibung
-            <textarea rows={3} value={personaDescription} onChange={(event) => setPersonaDescription(event.target.value)} placeholder="Stimme, Energie, Flow, Sprache, Charakter..." />
+          <label className="wide">{t('music.fields.personaDescription', 'Persona Beschreibung')}
+            <textarea rows={3} value={personaDescription} onChange={(event) => setPersonaDescription(event.target.value)} placeholder={t('music.placeholders.personaDescription', 'Stimme, Energie, Flow, Sprache, Charakter...')} />
           </label>
         </>
       )}
       {operationMode === 'mashup' && (
-        <label className="wide">Mashup Audio-URLs
-          <textarea rows={4} value={mashupUrls} onChange={(event) => setMashupUrls(event.target.value)} placeholder="Eine URL pro Zeile. Optional wird die ausgewählte Audio-Datei ergänzt." />
+        <label className="wide">{t('music.fields.mashupUrls', 'Mashup Audio-URLs')}
+          <textarea rows={4} value={mashupUrls} onChange={(event) => setMashupUrls(event.target.value)} placeholder={t('music.placeholders.mashupUrls', 'Eine URL pro Zeile. Optional wird die ausgewählte Audio-Datei ergänzt.')} />
         </label>
       )}
       {advancedSunoControlFields}
@@ -1971,21 +2017,21 @@ export function MusicPage({ styles, voices = [], uploadedFiles = [], assets = []
     <section className="panel ai-style-panel">
       <div className="ai-style-header">
         <div>
-          <p className="eyebrow">KI Style Engine</p>
-          <h2>Optimale Suno-Styles aus Lyrics erzeugen</h2>
-          <p className="muted">Die KI liest Songtext, Vocal Tags, Stimmung und Zusatzwünsche und erstellt direkt übernehmbare Suno-Style-Prompts mit Instrumenten, Negative Tags und Score-Einschätzung.</p>
-          <p className="muted small-status-line">Aktive KI: {aiRuntimeLabel}</p>
+          <p className="eyebrow">{t('music.styleEngine.eyebrow', 'KI Style Engine')}</p>
+          <h2>{t('music.styleEngine.title', 'Optimale Suno-Styles aus Lyrics erzeugen')}</h2>
+          <p className="muted">{t('music.styleEngine.text', 'Die KI liest Songtext, Vocal Tags, Stimmung und Zusatzwünsche und erstellt direkt übernehmbare Suno-Style-Prompts mit Instrumenten, Negative Tags und Score-Einschätzung.')}</p>
+          <p className="muted small-status-line">{t('music.styleEngine.activeAi', 'Aktive KI')}: {aiRuntimeLabel}</p>
           {styleBatchingLabel && <p className="muted small-status-line">{styleBatchingLabel}</p>}
-          <p className="muted small-status-line">Limits: Songtext {STYLE_ENGINE_LYRICS_MAX_CHARS} Zeichen · Music Style {STYLE_ENGINE_MUSIC_STYLE_MAX_CHARS} Zeichen</p>
+          <p className="muted small-status-line">{t('music.styleEngine.limits', 'Limits')}: {t('music.styleEngine.lyricsLimit', 'Songtext {{count}} Zeichen', { count: STYLE_ENGINE_LYRICS_MAX_CHARS })} · {t('music.styleEngine.musicStyleLimit', 'Music Style {{count}} Zeichen', { count: STYLE_ENGINE_MUSIC_STYLE_MAX_CHARS })}</p>
         </div>
         <button type="button" className="primary" onClick={generateStyleSuggestions} disabled={styleSuggestionLoading || !prompt.trim()}>
           {styleSuggestionLoading ? <Loader2 size={16} className="spin-icon" /> : <Sparkles size={16} />}
-          {styleSuggestionLoading ? 'KI arbeitet…' : 'Styles generieren'}
+          {styleSuggestionLoading ? t('music.styleEngine.aiWorking', 'KI arbeitet…') : t('music.styleEngine.generateStyles', 'Styles generieren')}
         </button>
       </div>
 
       <div className="ai-style-strategy-grid">
-        {STYLE_VARIANT_STRATEGIES.map(([key, label, description]) => (
+        {localizedStyleVariantStrategies.map(([key, label, description]) => (
           <button key={key} type="button" className={styleVariantStrategy === key ? 'active' : ''} onClick={() => setStyleVariantStrategy(key)}>
             <strong>{label}</strong>
             <span>{description}</span>
@@ -1994,11 +2040,11 @@ export function MusicPage({ styles, voices = [], uploadedFiles = [], assets = []
       </div>
 
       <div className="form-grid ai-style-controls">
-        <label>Menge
+        <label>{t('music.styleEngine.amount', 'Menge')}
           <input type="number" min="1" max="5" value={styleAmount} onChange={(event) => setStyleAmount(clampStyleAmount(event.target.value))} />
         </label>
-        <div className="wide ai-style-feature-toggles" role="group" aria-label="Style-Features auswählen">
-          {STYLE_FEATURE_TOGGLE_OPTIONS.map(([key, label, description]) => {
+        <div className="wide ai-style-feature-toggles" role="group" aria-label={t('music.styleEngine.featureAria', 'Style-Features auswählen')}>
+          {localizedStyleFeatureOptions.map(([key, label, description]) => {
             const active = styleFeatureOptions[key] !== false;
             return (
               <button
@@ -2018,8 +2064,8 @@ export function MusicPage({ styles, voices = [], uploadedFiles = [], assets = []
             );
           })}
         </div>
-        <label className="wide">Zusatzprompt optional
-          <textarea rows={3} value={styleExtraPrompt} onChange={(event) => setStyleExtraPrompt(event.target.value)} placeholder="z.B. mehr grimy NYC boom bap, härtere Drums, männlicher Rapper, 101 BPM, Patwa Hook…" />
+        <label className="wide">{t('music.styleEngine.extraPrompt', 'Zusatzprompt optional')}
+          <textarea rows={3} value={styleExtraPrompt} onChange={(event) => setStyleExtraPrompt(event.target.value)} placeholder={t('music.placeholders.styleExtraPrompt', 'z.B. mehr grimy NYC boom bap, härtere Drums, männlicher Rapper, 101 BPM, Patwa Hook…')} />
         </label>
       </div>
 
@@ -2034,8 +2080,8 @@ export function MusicPage({ styles, voices = [], uploadedFiles = [], assets = []
             return (
               <article className="ai-style-card" key={`${suggestion.title || 'style'}-${index}`}>
                 <div>
-                  <span>{suggestion.role || `Vorschlag ${index + 1}`}</span>
-                  <h3>{suggestion.title || `KI-Style ${index + 1}`}</h3>
+                  <span>{suggestion.role || t('music.styleEngine.suggestionNumber', 'Vorschlag {{number}}', { number: index + 1 })}</span>
+                  <h3>{suggestion.title || t('music.styleEngine.aiStyleNumber', 'KI-Style {{number}}', { number: index + 1 })}</h3>
                 </div>
                 {(suggestion.bpm || suggestion.energy || suggestion.vocal_delivery) && (
                   <div className="ai-style-meta-row">
@@ -2051,26 +2097,26 @@ export function MusicPage({ styles, voices = [], uploadedFiles = [], assets = []
                     {formatScorePercent(scores.fit) && <span>Fit {formatScorePercent(scores.fit)}</span>}
                     {formatScorePercent(scores.hook_potential) && <span>Hook {formatScorePercent(scores.hook_potential)}</span>}
                     {formatScorePercent(scores.suno_clarity) && <span>Klarheit {formatScorePercent(scores.suno_clarity)}</span>}
-                    {formatScorePercent(scores.risk) && <span>Risiko {formatScorePercent(scores.risk)}</span>}
+                    {formatScorePercent(scores.risk) && <span>{t('music.safeCheck.risk', 'Risiko')} {formatScorePercent(scores.risk)}</span>}
                   </div>
                 )}
                 {negative && <p className="ai-negative-tags"><strong>Negative:</strong> {negative}</p>}
                 {lyricTags.length > 0 && (
                   <section className="ai-vocal-tag-preview-card">
                     <div>
-                      <span className="eyebrow">Songtext-Tags</span>
-                      <strong>{lyricTags.length} passende Section-Tags erzeugt</strong>
-                      <small>Vor Übernahme als vollständigen Songtext im Modal prüfen.</small>
+                      <span className="eyebrow">{t('music.lyricTags.title', 'Songtext-Tags')}</span>
+                      <strong>{t('music.lyricTags.generatedCount', '{{count}} passende Section-Tags erzeugt', { count: lyricTags.length })}</strong>
+                      <small>{t('music.lyricTags.previewHint', 'Vor Übernahme als vollständigen Songtext im Modal prüfen.')}</small>
                     </div>
-                    <button type="button" onClick={() => openLyricTagPreview(suggestion)}>Vorschau öffnen</button>
+                    <button type="button" onClick={() => openLyricTagPreview(suggestion)}>{t('music.actions.openPreview', 'Vorschau öffnen')}</button>
                   </section>
                 )}
                 <div className="button-row wrap">
-                  <button type="button" className="primary" onClick={() => applyAiStyle(suggestion)}>Master Style übernehmen</button>
-                  {lyricTags.length > 0 && <button type="button" onClick={() => openLyricTagPreview(suggestion)}>Songtext-Tags ansehen</button>}
-                  {negative && <button type="button" onClick={() => applyNegativeTagsOnly(suggestion, 'append')}>Nur Negative anhängen</button>}
-                  <button type="button" onClick={() => openStyleConsultation(suggestion)}>Mit KI verfeinern</button>
-                  <button type="button" onClick={() => saveAiStyle(suggestion)}>Als Style speichern</button>
+                  <button type="button" className="primary" onClick={() => applyAiStyle(suggestion)}>{t('music.actions.applyMasterStyle', 'Master Style übernehmen')}</button>
+                  {lyricTags.length > 0 && <button type="button" onClick={() => openLyricTagPreview(suggestion)}>{t('music.actions.viewLyricTags', 'Songtext-Tags ansehen')}</button>}
+                  {negative && <button type="button" onClick={() => applyNegativeTagsOnly(suggestion, 'append')}>{t('music.actions.appendNegativeOnly', 'Nur Negative anhängen')}</button>}
+                  <button type="button" onClick={() => openStyleConsultation(suggestion)}>{t('music.actions.refineWithAi', 'Mit KI verfeinern')}</button>
+                  <button type="button" onClick={() => saveAiStyle(suggestion)}>{t('music.actions.saveAsStyle', 'Als Style speichern')}</button>
                 </div>
               </article>
             );
@@ -2081,49 +2127,49 @@ export function MusicPage({ styles, voices = [], uploadedFiles = [], assets = []
   );
 
   const styleConsultationModal = (
-    <Modal open={styleConsultation.open} title="Style mit KI verfeinern" onClose={closeStyleConsultation} wide>
+    <Modal open={styleConsultation.open} title={t('music.styleConsultation.title', 'Style mit KI verfeinern')} onClose={closeStyleConsultation} wide>
       <div className="style-consultation-modal stack">
         <section className="nested-panel">
-          <p className="eyebrow">Arbeitsversion</p>
-          <h3>{styleConsultation.draft?.title || 'KI-Style'}</h3>
-          <p className="ai-style-text">{styleConsultation.draft?.style || 'Keine Style-Zeile vorhanden.'}</p>
+          <p className="eyebrow">{t('music.styleConsultation.workingVersion', 'Arbeitsversion')}</p>
+          <h3>{styleConsultation.draft?.title || t('music.aiStyleTitle', 'KI-Style')}</h3>
+          <p className="ai-style-text">{styleConsultation.draft?.style || t('music.styleConsultation.noStyleLine', 'Keine Style-Zeile vorhanden.')}</p>
           {styleConsultation.draft?.negative_tags && <p className="ai-negative-tags"><strong>Negative:</strong> {styleConsultation.draft.negative_tags}</p>}
           {suggestionLyricVocalTags(styleConsultation.draft).length > 0 && (
             <section className="ai-vocal-tag-preview-card">
               <div>
-                <span className="eyebrow">Songtext-Tags</span>
-                <strong>{suggestionLyricVocalTags(styleConsultation.draft).length} Section-Tags in der Arbeitsversion</strong>
-                <small>Im Modal als vollständigen Songtext prüfen, kopieren oder übernehmen.</small>
+                <span className="eyebrow">{t('music.lyricTags.title', 'Songtext-Tags')}</span>
+                <strong>{t('music.styleConsultation.workingTagCount', '{{count}} Section-Tags in der Arbeitsversion', { count: suggestionLyricVocalTags(styleConsultation.draft).length })}</strong>
+                <small>{t('music.styleConsultation.tagModalHint', 'Im Modal als vollständigen Songtext prüfen, kopieren oder übernehmen.')}</small>
               </div>
-              <button type="button" onClick={() => openLyricTagPreview(styleConsultation.draft)}>Vorschau öffnen</button>
+              <button type="button" onClick={() => openLyricTagPreview(styleConsultation.draft)}>{t('music.actions.openPreview', 'Vorschau öffnen')}</button>
             </section>
           )}
           <div className="button-row wrap">
-            <button type="button" className="primary" onClick={() => applyStyleDraft(styleConsultation.draft, true)}>Master übernehmen</button>
-            <button type="button" onClick={() => applyStyleDraft(styleConsultation.draft, false)}>Nur Style übernehmen</button>
-            {suggestionLyricVocalTags(styleConsultation.draft).length > 0 && <button type="button" onClick={() => openLyricTagPreview(styleConsultation.draft)}>Songtext-Tags ansehen</button>}
+            <button type="button" className="primary" onClick={() => applyStyleDraft(styleConsultation.draft, true)}>{t('music.actions.applyMaster', 'Master übernehmen')}</button>
+            <button type="button" onClick={() => applyStyleDraft(styleConsultation.draft, false)}>{t('music.actions.applyStyleOnly', 'Nur Style übernehmen')}</button>
+            {suggestionLyricVocalTags(styleConsultation.draft).length > 0 && <button type="button" onClick={() => openLyricTagPreview(styleConsultation.draft)}>{t('music.actions.viewLyricTags', 'Songtext-Tags ansehen')}</button>}
           </div>
         </section>
         <div className="style-consultation-chips">
-          {['Mehr Druck', 'Hook größer', 'Weniger überladen', 'Mehr Boom Bap', 'Mehr Trap', 'Mehr Kino', 'Negative Tags verbessern', 'Suno-kürzer formulieren'].map((chip) => (
+          {styleConsultationChips.map((chip) => (
             <button key={chip} type="button" onClick={() => sendStyleConsultationMessage(chip)} disabled={styleConsultation.loading}>{chip}</button>
           ))}
         </div>
         <div className="style-consultation-chat">
           {(styleConsultation.messages || []).map((message, index) => (
             <div key={`${message.role}-${index}`} className={`style-consultation-message ${message.role === 'assistant' ? 'assistant' : 'user'}`}>
-              <strong>{message.role === 'assistant' ? 'KI' : 'Du'}</strong>
+              <strong>{message.role === 'assistant' ? t('lyricsStudio.ai', 'KI') : t('lyricsStudio.you', 'Du')}</strong>
               <p>{message.content}</p>
             </div>
           ))}
-          {!styleConsultation.messages?.length && <p className="muted">Frag z.B. „Mach die Hook größer, aber die Verse roher.“ Die App übernimmt nichts automatisch.</p>}
+          {!styleConsultation.messages?.length && <p className="muted">{t('music.styleConsultation.emptyHint', 'Frag z.B. „Mach die Hook größer, aber die Verse roher.“ Die App übernimmt nichts automatisch.')}</p>}
         </div>
         {styleConsultation.error && <p className="form-error">{styleConsultation.error}</p>}
         <div className="style-consultation-input-row">
-          <textarea rows={3} value={styleConsultation.input || ''} onChange={(event) => setStyleConsultation((current) => ({ ...current, input: event.target.value }))} placeholder="Wunsch an die KI-Beratung…" />
+          <textarea rows={3} value={styleConsultation.input || ''} onChange={(event) => setStyleConsultation((current) => ({ ...current, input: event.target.value }))} placeholder={t('music.styleConsultation.placeholder', 'Wunsch an die KI-Beratung…')} />
           <button type="button" className="primary" disabled={styleConsultation.loading || !String(styleConsultation.input || '').trim()} onClick={() => sendStyleConsultationMessage()}>
             {styleConsultation.loading ? <Loader2 size={16} className="spin-icon" /> : <Sparkles size={16} />}
-            Senden
+            {t('music.actions.send', 'Senden')}
           </button>
         </div>
       </div>
@@ -2134,18 +2180,18 @@ export function MusicPage({ styles, voices = [], uploadedFiles = [], assets = []
   const lyricPreviewOverLimit = lyricPreviewCharCount > STYLE_ENGINE_LYRICS_MAX_CHARS;
 
   const lyricTagPreviewModal = (
-    <Modal open={lyricTagPreview.open} title={`Songtext-Tags prüfen · ${lyricTagPreview.title || 'KI-Style'}`} onClose={closeLyricTagPreview} wide contentClassName="lyric-tag-preview-modal-content">
+    <Modal open={lyricTagPreview.open} title={t('music.lyricTags.modalTitle', 'Songtext-Tags prüfen · {{title}}', { title: lyricTagPreview.title || t('music.aiStyleTitle', 'KI-Style') })} onClose={closeLyricTagPreview} wide contentClassName="lyric-tag-preview-modal-content">
       <div className="lyric-tag-preview-modal stack">
         <section className="nested-panel">
-          <p className="eyebrow">Vorschau vor Übernahme</p>
-          <h3>Vollständiger Songtext mit passenden Section-Tags</h3>
-          <p className="muted">Der Originaltext bleibt erhalten. Bestehende Abschnittsmarker werden gezielt durch die neuen Tags ersetzt; fehlende Tags werden oben ergänzt.</p>
-          {lyricTagPreview.loading && <p className="muted"><Loader2 size={14} className="spin-icon" /> Vollständige Vorschau wird erzeugt…</p>}
+          <p className="eyebrow">{t('music.lyricTags.previewBeforeApply', 'Vorschau vor Übernahme')}</p>
+          <h3>{t('music.lyricTags.fullTaggedLyrics', 'Vollständiger Songtext mit passenden Section-Tags')}</h3>
+          <p className="muted">{t('music.lyricTags.text', 'Der Originaltext bleibt erhalten. Bestehende Abschnittsmarker werden gezielt durch die neuen Tags ersetzt; fehlende Tags werden oben ergänzt.')}</p>
+          {lyricTagPreview.loading && <p className="muted"><Loader2 size={14} className="spin-icon" /> {t('music.lyricTags.generatingPreview', 'Vollständige Vorschau wird erzeugt…')}</p>}
           {lyricTagPreview.notes && <p className="muted small-status-line">{lyricTagPreview.notes}</p>}
           {lyricTagPreview.error && <p className="form-error">{lyricTagPreview.error}</p>}
           <div className="lyric-tag-preview-stats">
             <span>{lyricTagPreview.lyricTags.length || 0} Tags</span>
-            <span className={lyricPreviewOverLimit ? 'over-limit' : ''}>{lyricPreviewCharCount} / {STYLE_ENGINE_LYRICS_MAX_CHARS} Zeichen</span>
+            <span className={lyricPreviewOverLimit ? 'over-limit' : ''}>{lyricPreviewCharCount} / {STYLE_ENGINE_LYRICS_MAX_CHARS} {t('music.chars', 'Zeichen')}</span>
           </div>
         </section>
 
@@ -2153,15 +2199,15 @@ export function MusicPage({ styles, voices = [], uploadedFiles = [], assets = []
           <section className="ai-vocal-tag-details">
             <div className="row between align-start">
               <div>
-                <p className="eyebrow">Erkannte Tags</p>
-                <strong>Section-Tags aus dem gewählten Style</strong>
+                <p className="eyebrow">{t('music.lyricTags.detectedTags', 'Erkannte Tags')}</p>
+                <strong>{t('music.lyricTags.sectionTagsFromStyle', 'Section-Tags aus dem gewählten Style')}</strong>
               </div>
-              <button type="button" onClick={() => copyTextToClipboard(lyricTagPreview.tagText, 'Nur Songtext-Tags kopiert.')}>Nur Tags kopieren</button>
+              <button type="button" onClick={() => copyTextToClipboard(lyricTagPreview.tagText, t('music.messages.onlyTagsCopied', 'Nur Songtext-Tags kopiert.'))}>{t('music.actions.copyTagsOnly', 'Nur Tags kopieren')}</button>
             </div>
             <div className="ai-vocal-tag-list">
               {lyricTagPreview.lyricTags.map((item, tagIndex) => (
                 <div className="ai-vocal-tag-item" key={`${item.section || 'section'}-${tagIndex}`}>
-                  <span>{item.section || `Abschnitt ${tagIndex + 1}`}</span>
+                  <span>{item.section || t('music.lyricTags.sectionNumber', 'Abschnitt {{number}}', { number: tagIndex + 1 })}</span>
                   <code>{item.tag}</code>
                   {item.reason && <small>{item.reason}</small>}
                 </div>
@@ -2173,19 +2219,19 @@ export function MusicPage({ styles, voices = [], uploadedFiles = [], assets = []
         <section className="lyric-tag-full-preview">
           <div className="row between align-start">
             <div>
-              <p className="eyebrow">Getaggter Songtext</p>
-              <h3>So wird der Text übernommen</h3>
+              <p className="eyebrow">{t('music.lyricTags.taggedLyrics', 'Getaggter Songtext')}</p>
+              <h3>{t('music.lyricTags.applyPreviewTitle', 'So wird der Text übernommen')}</h3>
             </div>
-            <button type="button" disabled={lyricTagPreview.loading || !String(lyricTagPreview.taggedText || '').trim()} onClick={() => copyTextToClipboard(lyricTagPreview.taggedText, 'Vollständiger getaggter Songtext kopiert.')}>Vollen Songtext kopieren</button>
+            <button type="button" disabled={lyricTagPreview.loading || !String(lyricTagPreview.taggedText || '').trim()} onClick={() => copyTextToClipboard(lyricTagPreview.taggedText, t('music.messages.fullTaggedLyricsCopied', 'Vollständiger getaggter Songtext kopiert.'))}>{t('music.actions.copyFullLyrics', 'Vollen Songtext kopieren')}</button>
           </div>
           <textarea readOnly rows={18} className={lyricPreviewOverLimit ? 'field-over-limit' : ''} value={lyricTagPreview.taggedText || ''} />
-          {lyricPreviewOverLimit && <p className="field-limit-warning">Dieser getaggte Songtext ist zu lang und kann nicht übernommen werden.</p>}
+          {lyricPreviewOverLimit && <p className="field-limit-warning">{t('music.lyricTags.tooLongCannotApply', 'Dieser getaggte Songtext ist zu lang und kann nicht übernommen werden.')}</p>}
         </section>
 
         <div className="button-row wrap">
-          <button type="button" className="primary" disabled={lyricTagPreview.loading || lyricPreviewOverLimit || !String(lyricTagPreview.taggedText || '').trim()} onClick={applyPreviewedLyricTags}>Songtext-Tags übernehmen</button>
-          <button type="button" disabled={lyricTagPreview.loading || !String(lyricTagPreview.taggedText || '').trim()} onClick={() => copyTextToClipboard(lyricTagPreview.taggedText, 'Vollständiger getaggter Songtext kopiert.')}>In Zwischenablage kopieren</button>
-          <button type="button" onClick={closeLyricTagPreview}>Schließen</button>
+          <button type="button" className="primary" disabled={lyricTagPreview.loading || lyricPreviewOverLimit || !String(lyricTagPreview.taggedText || '').trim()} onClick={applyPreviewedLyricTags}>{t('music.actions.applyLyricTags', 'Songtext-Tags übernehmen')}</button>
+          <button type="button" disabled={lyricTagPreview.loading || !String(lyricTagPreview.taggedText || '').trim()} onClick={() => copyTextToClipboard(lyricTagPreview.taggedText, t('music.messages.fullTaggedLyricsCopied', 'Vollständiger getaggter Songtext kopiert.'))}>{t('music.actions.copyToClipboard', 'In Zwischenablage kopieren')}</button>
+          <button type="button" onClick={closeLyricTagPreview}>{t('common.close', 'Schließen')}</button>
         </div>
       </div>
     </Modal>
@@ -2196,22 +2242,22 @@ export function MusicPage({ styles, voices = [], uploadedFiles = [], assets = []
     <section className={`wide nested-panel safe-check-panel ${safeCheckResult?.risk || ''}`}>
       <div className="row between align-start">
         <div>
-          <p className="eyebrow">Suno-Safe-Check</p>
-          <h3>{safeCheckLoading ? 'Prüfe Request…' : `Risiko: ${safeCheckResult?.risk || '—'} · ${safeCheckResult?.score ?? 0}/100`}</h3>
-          <p className="muted">Hilft vor allem bei Voice/Persona, sensiblen Begriffen und zu langen Prompts.</p>
+          <p className="eyebrow">{t('music.safeCheck.title', 'Suno-Safe-Check')}</p>
+          <h3>{safeCheckLoading ? t('music.safeCheck.checkingRequest', 'Prüfe Request…') : t('music.safeCheck.riskScore', 'Risiko: {{risk}} · {{score}}/100', { risk: safeCheckResult?.risk || '—', score: safeCheckResult?.score ?? 0 })}</h3>
+          <p className="muted">{t('music.safeCheck.text', 'Hilft vor allem bei Voice/Persona, sensiblen Begriffen und zu langen Prompts.')}</p>
         </div>
-        <button type="button" onClick={runSafeCheck} disabled={safeCheckLoading}><RefreshCw size={15} className={safeCheckLoading ? 'spin-icon' : ''} /> Erneut prüfen</button>
+        <button type="button" onClick={runSafeCheck} disabled={safeCheckLoading}><RefreshCw size={15} className={safeCheckLoading ? 'spin-icon' : ''} /> {t('music.safeCheck.checkAgain', 'Erneut prüfen')}</button>
       </div>
       {safeCheckResult?.warnings?.length > 0 && <ul className="compact-advice-list">{safeCheckResult.warnings.map((item) => <li key={item}>{item}</li>)}</ul>}
-      {safeCheckResult?.voice_used && <button type="button" onClick={() => { setSelectedVoiceId(''); setSafeCheckResult(null); notify?.('Voice wurde entfernt. Bitte erneut prüfen oder generieren.', 'info'); }}>Voice entfernen</button>}
+      {safeCheckResult?.voice_used && <button type="button" onClick={() => { setSelectedVoiceId(''); setSafeCheckResult(null); notify?.(t('music.messages.voiceRemoved', 'Voice wurde entfernt. Bitte erneut prüfen oder generieren.'), 'info'); }}>{t('music.safeCheck.removeVoice', 'Voice entfernen')}</button>}
     </section>
   ) : null;
 
   const masterPackagePanel = masterPackageText ? (
     <section className="wide nested-panel master-package-panel">
       <div className="row between align-start">
-        <div><p className="eyebrow">Master-Paket</p><h3>Generierfertige Übersicht</h3></div>
-        <button type="button" onClick={() => navigator.clipboard?.writeText(masterPackageText)}><Copy size={15} /> Kopieren</button>
+        <div><p className="eyebrow">{t('music.masterPackage.title', 'Master-Paket')}</p><h3>{t('music.masterPackage.readyOverview', 'Generierfertige Übersicht')}</h3></div>
+        <button type="button" onClick={() => navigator.clipboard?.writeText(masterPackageText)}><Copy size={15} /> {t('common.copy', 'Kopieren')}</button>
       </div>
       <pre>{masterPackageText}</pre>
     </section>
@@ -2219,15 +2265,15 @@ export function MusicPage({ styles, voices = [], uploadedFiles = [], assets = []
 
   const abVariantPanel = abVariants.length ? (
     <section className="wide nested-panel ab-variant-panel">
-      <p className="eyebrow">A/B-Test-Modus</p>
-      <h3>3 vorbereitete Varianten</h3>
+      <p className="eyebrow">{t('music.abTest.eyebrow', 'A/B-Test-Modus')}</p>
+      <h3>{t('music.abTest.title', '3 vorbereitete Varianten')}</h3>
       <div className="variant-suggestion-grid">
         {abVariants.map((variant) => (
           <article key={variant.label} className="ai-style-card">
             <h4>{variant.label}</h4>
             <p className="ai-style-text">{variant.style}</p>
             <p className="muted">{variant.note}</p>
-            <button type="button" className="primary" onClick={() => applyAbVariant(variant)}>Übernehmen</button>
+            <button type="button" className="primary" onClick={() => applyAbVariant(variant)}>{t('lyricsStudio.apply', 'Übernehmen')}</button>
           </article>
         ))}
       </div>
@@ -2236,9 +2282,9 @@ export function MusicPage({ styles, voices = [], uploadedFiles = [], assets = []
 
   return (
     <section className="page stack">
-      <SectionHeader eyebrow="Create" title="Musik generieren">
+      <SectionHeader eyebrow={t('music.eyebrow', 'Create')} title={t('music.title', 'Musik generieren')}>
         <button type="button" className={wizard ? 'active' : ''} onClick={() => setWizard(true)}>Wizard</button>
-        <button type="button" className={!wizard ? 'active' : ''} onClick={() => setWizard(false)}>Expertenformular</button>
+        <button type="button" className={!wizard ? 'active' : ''} onClick={() => setWizard(false)}>{t('music.expertForm', 'Expertenformular')}</button>
       </SectionHeader>
 
       {styleConsultationModal}
@@ -2246,48 +2292,48 @@ export function MusicPage({ styles, voices = [], uploadedFiles = [], assets = []
 
       <section className="panel workflow-template-panel">
         <div>
-          <p className="eyebrow">Workflow-Vorlagen</p>
-          <h2>Schnell vorbereiten</h2>
-          <p className="muted">Setzt nur vorhandene Felder im Musikformular und erzeugt keine doppelte Oberfläche.</p>
+          <p className="eyebrow">{t('music.workflowTemplates.eyebrow', 'Workflow-Vorlagen')}</p>
+          <h2>{t('music.workflowTemplates.title', 'Schnell vorbereiten')}</h2>
+          <p className="muted">{t('music.workflowTemplates.text', 'Setzt nur vorhandene Felder im Musikformular und erzeugt keine doppelte Oberfläche.')}</p>
         </div>
         <div className="button-row wrap">
-          <button type="button" onClick={() => applyWorkflowTemplate('rap_voice')}>Rap mit Voice</button>
-          <button type="button" onClick={() => applyWorkflowTemplate('instrumental')}>Instrumental-Bauplan</button>
-          <button type="button" onClick={() => applyWorkflowTemplate('cover_video')}>Cover / Video</button>
-          <button type="button" onClick={() => applyWorkflowTemplate('stems')}>Stem Separation</button>
+          <button type="button" onClick={() => applyWorkflowTemplate('rap_voice')}>{t('music.workflowTemplates.rapVoice', 'Rap mit Voice')}</button>
+          <button type="button" onClick={() => applyWorkflowTemplate('instrumental')}>{t('music.workflowTemplates.instrumental', 'Instrumental-Bauplan')}</button>
+          <button type="button" onClick={() => applyWorkflowTemplate('cover_video')}>{t('music.workflowTemplates.coverVideo', 'Cover / Video')}</button>
+          <button type="button" onClick={() => applyWorkflowTemplate('stems')}>{t('music.workflowTemplates.stems', 'Stem Separation')}</button>
         </div>
       </section>
 
       <section className="panel task-status-panel">
         <div>
-          <p className="eyebrow">Suno Status</p>
-          <h2>Automatische Statusprüfung</h2>
-          <p className="muted">React prüft offene Tasks automatisch und lädt Library, Tasks und Benachrichtigungen nach.</p>
+          <p className="eyebrow">{t('music.status.eyebrow', 'Suno Status')}</p>
+          <h2>{t('music.status.title', 'Automatische Statusprüfung')}</h2>
+          <p className="muted">{t('music.status.text', 'React prüft offene Tasks automatisch und lädt Library, Tasks und Benachrichtigungen nach.')}</p>
           <p className="muted small-status-line">
-            Letzte Prüfung: {taskRefreshState?.lastCheck ? new Date(taskRefreshState.lastCheck).toLocaleString('de-DE') : 'noch keine'}
+            {t('music.status.lastCheck', 'Letzte Prüfung')}: {taskRefreshState?.lastCheck ? new Date(taskRefreshState.lastCheck).toLocaleString('de-DE') : t('status.live.noneYet', 'noch keine')}
             {taskRefreshState?.lastMessage ? ` · ${taskRefreshState.lastMessage}` : ''}
-            {taskRefreshState?.lastError ? ` · Fehler: ${taskRefreshState.lastError}` : ''}
+            {taskRefreshState?.lastError ? ` · ${t('status.stats.error', 'Fehler')}: ${taskRefreshState.lastError}` : ''}
           </p>
         </div>
         <button type="button" onClick={onCheckStatus} disabled={taskRefreshState?.running}>
           <RefreshCw size={16} className={taskRefreshState?.running ? 'spin-icon' : ''} />
-          {taskRefreshState?.running ? 'Prüfe…' : 'Status jetzt prüfen'}
+          {taskRefreshState?.running ? t('status.checking', 'Prüfe…') : t('music.status.checkNow', 'Status jetzt prüfen')}
         </button>
       </section>
 
       {wizard ? (
         <section className="panel wizard-shell">
           <div className="wizard-steps">
-            {['Start', 'Inhalt', 'Style', 'Modell', 'Prüfen'].map((label, index) => (
+            {wizardStepLabels.map((label, index) => (
               <button key={label} type="button" className={step === index ? 'active' : ''} onClick={() => setStep(index)}>{index + 1}. {label}</button>
             ))}
           </div>
 
           {step === 0 && (
             <div className="wizard-step">
-              <h2>Was möchtest du erstellen?</h2>
+              <h2>{t('music.wizard.whatCreate', 'Was möchtest du erstellen?')}</h2>
               <div className="workflow-card-grid">
-                {startModes.map(([key, label, text]) => (
+                {localizedStartModes.map(([key, label, text]) => (
                   <button key={key} className={startMode === key ? 'workflow-card active' : 'workflow-card'} type="button" onClick={() => applyStartMode(key)}>
                     <Music2 size={22} />
                     <span><strong>{label}</strong><small>{text}</small></span>
@@ -2299,15 +2345,15 @@ export function MusicPage({ styles, voices = [], uploadedFiles = [], assets = []
 
           {step === 1 && (
             <div className="wizard-step form-grid">
-              <label>Titel<input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Songtitel" /></label>
-              <label className={`wide ${promptOverLimit ? 'field-limit-active' : ''}`}>{instrumental ? 'Instrumental-Bauplan / Prompt ohne Lyrics' : customMode ? 'Lyrics / vollständiger Songtext' : 'Idee / kurze Beschreibung'} <span className={`field-counter ${promptOverLimit ? 'over-limit' : ''}`}>{prompt.length}{modelLimit ? ` / ${modelLimit}` : ''} Zeichen</span><textarea className={`large ${promptOverLimit ? 'field-over-limit' : ''}`} value={prompt} onChange={(event) => setPrompt(event.target.value)} placeholder={instrumental ? 'Füge den Timecode-Bauplan ohne Lyrics ein oder beschreibe das Instrumental.' : 'Beschreibe deine Idee oder füge vollständige Lyrics ein.'} /></label>
+              <label>{t('common.title', 'Titel')}<input value={title} onChange={(event) => setTitle(event.target.value)} placeholder={t('music.fields.titlePlaceholder', 'Songtitel')} /></label>
+              <label className={`wide ${promptOverLimit ? 'field-limit-active' : ''}`}>{instrumental ? t('music.fields.instrumentalBlueprintPrompt', 'Instrumental-Bauplan / Prompt ohne Lyrics') : customMode ? t('music.fields.fullLyrics', 'Lyrics / vollständiger Songtext') : t('music.fields.ideaShort', 'Idee / kurze Beschreibung')} <span className={`field-counter ${promptOverLimit ? 'over-limit' : ''}`}>{prompt.length}{modelLimit ? ` / ${modelLimit}` : ''} {t('music.chars', 'Zeichen')}</span><textarea className={`large ${promptOverLimit ? 'field-over-limit' : ''}`} value={prompt} onChange={(event) => setPrompt(event.target.value)} placeholder={instrumental ? t('music.placeholders.instrumentalBlueprint', 'Füge den Timecode-Bauplan ohne Lyrics ein oder beschreibe das Instrumental.') : t('music.placeholders.ideaOrLyrics', 'Beschreibe deine Idee oder füge vollständige Lyrics ein.')} /></label>
             </div>
           )}
 
           {step === 2 && (
             <div className="wizard-step form-grid">
-              <div className="style-preset-open-card"><span>Style Presets</span><button type="button" onClick={() => setStylePresetModalOpen(true)}><Search size={15} /> Style-Browser öffnen</button><small>Mit Filtertabs, Tags, Favoriten und Vorschlägen.</small></div>
-              <label className={`wide ${styleOverLimit ? 'field-limit-active' : ''}`}>Style / Genre <span className={`field-counter ${styleOverLimit ? 'over-limit' : ''}`}>{style.length}{styleLimit ? ` / ${styleLimit}` : ''} Zeichen</span><textarea className={styleOverLimit ? 'field-over-limit' : ''} value={style} onChange={(event) => setStyle(event.target.value)} rows={6} placeholder="Style, Genre, Stimmung, BPM, Vocals…" /></label>
+              <div className="style-preset-open-card"><span>{t('music.stylePresetModal.title', 'Style Presets')}</span><button type="button" onClick={() => setStylePresetModalOpen(true)}><Search size={15} /> {t('music.actions.openStyleBrowser', 'Style-Browser öffnen')}</button><small>{t('music.stylePresetModal.cardHint', 'Mit Filtertabs, Tags, Favoriten und Vorschlägen.')}</small></div>
+              <label className={`wide ${styleOverLimit ? 'field-limit-active' : ''}`}>Style / Genre <span className={`field-counter ${styleOverLimit ? 'over-limit' : ''}`}>{style.length}{styleLimit ? ` / ${styleLimit}` : ''} {t('music.chars', 'Zeichen')}</span><textarea className={styleOverLimit ? 'field-over-limit' : ''} value={style} onChange={(event) => setStyle(event.target.value)} rows={6} placeholder={t('music.placeholders.styleGenre', 'Style, Genre, Stimmung, BPM, Vocals…')} /></label>
               {generationBlockedByLimits && <p className="wide field-limit-warning">{generationLimitMessages.join(' ')}</p>}
               <div className="wide">{styleSuggestionPanel}</div>
             </div>
@@ -2316,28 +2362,28 @@ export function MusicPage({ styles, voices = [], uploadedFiles = [], assets = []
           {step === 3 && (
             <div className="wizard-step form-grid">
               {generationProviderSelector}
-              <label>Modell<select value={model} onChange={(event) => setModel(event.target.value)}>{models.map((item) => <option key={item}>{item}</option>)}</select></label>
+              <label>{t('music.fields.model', 'Modell')}<select value={model} onChange={(event) => setModel(event.target.value)}>{models.map((item) => <option key={item}>{item}</option>)}</select></label>
               {!instrumental && voiceSelector}
-              <label className="check"><input type="checkbox" checked={customMode} onChange={(event) => setCustomMode(event.target.checked)} /> Custom Mode verwenden</label>
-              <label className="check"><input type="checkbox" checked={instrumental} onChange={(event) => setInstrumental(event.target.checked)} /> Instrumental erzeugen</label>
+              <label className="check"><input type="checkbox" checked={customMode} onChange={(event) => setCustomMode(event.target.checked)} /> {t('music.fields.useCustomMode', 'Custom Mode verwenden')}</label>
+              <label className="check"><input type="checkbox" checked={instrumental} onChange={(event) => setInstrumental(event.target.checked)} /> {t('music.fields.createInstrumental', 'Instrumental erzeugen')}</label>
               {advancedSunoControlFields}
             </div>
           )}
 
           {step === 4 && (
             <div className="wizard-step summary-grid">
-              <div className="summary-card"><span>Titel</span><strong>{title || 'Unbenannt'}</strong></div>
-              <div className="summary-card"><span>Modell</span><strong>{model}</strong></div>
+              <div className="summary-card"><span>{t('common.title', 'Titel')}</span><strong>{title || t('common.untitled', 'Unbenannt')}</strong></div>
+              <div className="summary-card"><span>{t('music.fields.model', 'Modell')}</span><strong>{model}</strong></div>
               <div className="summary-card"><span>Provider</span><strong>{generationProvider === 'opencli' ? 'OpenCLI' : 'SunoAPI'}</strong></div>
-              {voices.length > 0 && !instrumental && <div className="summary-card"><span>Voice / Persona</span><strong>{selectedVoice ? voiceLabel(selectedVoice) : 'Keine'}</strong></div>}
-              <div className="summary-card"><span>Modus</span><strong>{customMode ? 'Custom Lyrics' : 'Idee / Simple'}</strong></div>
-              <div className="summary-card"><span>Instrumental</span><strong>{instrumental ? 'Ja' : 'Nein'}</strong></div>
-              <div className="summary-card wide"><span>Style</span><p>{style || 'Kein Style angegeben'}</p></div>
-              <div className="summary-card wide"><span>Lyrics / Prompt</span><pre>{prompt || 'Noch kein Inhalt'}</pre></div>
+              {voices.length > 0 && !instrumental && <div className="summary-card"><span>Voice / Persona</span><strong>{selectedVoice ? voiceLabel(selectedVoice, t) : t('common.none', 'Keine')}</strong></div>}
+              <div className="summary-card"><span>{t('music.fields.mode', 'Modus')}</span><strong>{customMode ? 'Custom Lyrics' : t('music.fields.ideaSimple', 'Idee / Simple')}</strong></div>
+              <div className="summary-card"><span>Instrumental</span><strong>{instrumental ? t('common.yes', 'Ja') : t('common.no', 'Nein')}</strong></div>
+              <div className="summary-card wide"><span>Style</span><p>{style || t('music.fields.noStyle', 'Kein Style angegeben')}</p></div>
+              <div className="summary-card wide"><span>Lyrics / Prompt</span><pre>{prompt || t('music.fields.noContentYet', 'Noch kein Inhalt')}</pre></div>
               <div className="wide button-row wrap">
-                <button type="button" onClick={runSafeCheck} disabled={safeCheckLoading}><RefreshCw size={15} className={safeCheckLoading ? 'spin-icon' : ''} /> Suno-Safe-Check</button>
-                <button type="button" onClick={createMasterPackage}><Copy size={15} /> Master-Paket</button>
-                <button type="button" onClick={prepareAbVariants}>3 Varianten vorbereiten</button>
+                <button type="button" onClick={runSafeCheck} disabled={safeCheckLoading}><RefreshCw size={15} className={safeCheckLoading ? 'spin-icon' : ''} /> {t('music.safeCheck.title', 'Suno-Safe-Check')}</button>
+                <button type="button" onClick={createMasterPackage}><Copy size={15} /> {t('music.masterPackage.title', 'Master-Paket')}</button>
+                <button type="button" onClick={prepareAbVariants}>{t('music.actions.prepareThreeVariants', '3 Varianten vorbereiten')}</button>
               </div>
               {safeCheckPanel}
               {masterPackagePanel}
@@ -2346,30 +2392,30 @@ export function MusicPage({ styles, voices = [], uploadedFiles = [], assets = []
           )}
 
           <div className="wizard-actions">
-            <button type="button" disabled={!canPrev} onClick={() => setStep((value) => Math.max(0, value - 1))}><ArrowLeft size={16} /> Zurück</button>
-            {canNext ? <button className="primary" type="button" onClick={() => setStep((value) => Math.min(4, value + 1))}>Weiter <ArrowRight size={16} /></button> : <button className="primary" type="button" disabled={loading || !prompt.trim() || generationBlockedByLimits} onClick={submit}><CheckCircle2 size={17} /> {loading ? 'Wird gestartet…' : 'Song jetzt generieren'}</button>}
+            <button type="button" disabled={!canPrev} onClick={() => setStep((value) => Math.max(0, value - 1))}><ArrowLeft size={16} /> {t('status.pagination.previous', 'Zurück')}</button>
+            {canNext ? <button className="primary" type="button" onClick={() => setStep((value) => Math.min(4, value + 1))}>{t('status.pagination.next', 'Weiter')} <ArrowRight size={16} /></button> : <button className="primary" type="button" disabled={loading || !prompt.trim() || generationBlockedByLimits} onClick={submit}><CheckCircle2 size={17} /> {loading ? t('music.actions.starting', 'Wird gestartet…') : t('music.actions.generateNow', 'Song jetzt generieren')}</button>}
           </div>
         </section>
       ) : (
         <>
           <form className="panel form-grid music-form" onSubmit={submitAdvancedOperation}>
-            <label>Optionale Operation
+            <label>{t('music.fields.optionalOperation', 'Optionale Operation')}
               <select value={operationMode} onChange={(event) => setOperationMode(event.target.value)}>
-                {operationModes.map(([key, label]) => <option key={key} value={key}>{label}</option>)}
+                {localizedOperationModes.map(([key, label]) => <option key={key} value={key}>{label}</option>)}
               </select>
             </label>
             {generationProviderSelector}
-            <label className={titleOverLimit ? 'field-limit-active' : ''}>Titel <span className={`field-counter ${titleOverLimit ? 'over-limit' : ''}`}>{title.length}{titleLimit ? ` / ${titleLimit}` : ''} Zeichen</span><input className={titleOverLimit ? 'field-over-limit' : ''} value={title} onChange={(event) => setTitle(event.target.value)} required={!['sounds', 'generate-lyrics', 'import-suno-song', 'stem-separation', 'convert-wav', 'midi', 'video', 'cover-image', 'persona', 'boost-style'].includes(operationMode)} placeholder="Songtitel" /></label>
-            <label>Modell<select value={model} onChange={(event) => setModel(event.target.value)}>{operationModelOptions.map((item) => <option key={item}>{item}</option>)}</select></label>
-            <div className="style-preset-open-card"><span>Style Preset</span><button type="button" onClick={() => setStylePresetModalOpen(true)}><Search size={15} /> Style-Browser öffnen</button><small>Filtertabs und Style-Tags statt Dropdown.</small></div>
+            <label className={titleOverLimit ? 'field-limit-active' : ''}>{t('common.title', 'Titel')} <span className={`field-counter ${titleOverLimit ? 'over-limit' : ''}`}>{title.length}{titleLimit ? ` / ${titleLimit}` : ''} {t('music.chars', 'Zeichen')}</span><input className={titleOverLimit ? 'field-over-limit' : ''} value={title} onChange={(event) => setTitle(event.target.value)} required={!['sounds', 'generate-lyrics', 'import-suno-song', 'stem-separation', 'convert-wav', 'midi', 'video', 'cover-image', 'persona', 'boost-style'].includes(operationMode)} placeholder={t('music.fields.titlePlaceholder', 'Songtitel')} /></label>
+            <label>{t('music.fields.model', 'Modell')}<select value={model} onChange={(event) => setModel(event.target.value)}>{operationModelOptions.map((item) => <option key={item}>{item}</option>)}</select></label>
+            <div className="style-preset-open-card"><span>{t('music.stylePresetModal.shortTitle', 'Style Preset')}</span><button type="button" onClick={() => setStylePresetModalOpen(true)}><Search size={15} /> {t('music.actions.openStyleBrowser', 'Style-Browser öffnen')}</button><small>{t('music.stylePresetModal.expertCardHint', 'Filtertabs und Style-Tags statt Dropdown.')}</small></div>
             {!instrumental && voiceSelector}
             {optionalOperationFields}
             <label className="check"><input type="checkbox" checked={customMode} onChange={(event) => setCustomMode(event.target.checked)} /> Custom Mode</label>
             <label className="check"><input type="checkbox" checked={instrumental} onChange={(event) => setInstrumental(event.target.checked)} /> Instrumental</label>
-            <label className={`wide ${styleOverLimit ? 'field-limit-active' : ''}`}>Style <span className={`field-counter ${styleOverLimit ? 'over-limit' : ''}`}>{style.length}{styleLimit ? ` / ${styleLimit}` : ''} Zeichen</span><textarea className={styleOverLimit ? 'field-over-limit' : ''} value={style} onChange={(event) => setStyle(event.target.value)} rows={5} placeholder="grimy NYC boom bap, hard snare crack, deep male rap lead…" /></label>
-            <label className={`wide ${promptOverLimit ? 'field-limit-active' : ''}`}>{instrumental ? 'Instrumental-Bauplan / Prompt ohne Lyrics' : operationMode === 'generate-lyrics' ? 'Lyrics-Prompt / Thema' : operationMode === 'stem-separation' || operationMode === 'convert-wav' ? 'Notiz / optionaler Kontext' : 'Lyrics / Prompt'} <span className={`field-counter ${promptOverLimit ? 'over-limit' : ''}`}>{prompt.length}{modelLimit ? ` / ${modelLimit}` : ''} Zeichen</span><textarea className={`large ${promptOverLimit ? 'field-over-limit' : ''}`} value={prompt} onChange={(event) => setPrompt(event.target.value)} required={!['import-suno-song', 'stem-separation', 'convert-wav', 'midi', 'video', 'cover-image', 'persona', 'replace-section'].includes(operationMode)} placeholder={instrumental ? 'Suno-kompatibler Instrumental-Bauplan ohne Lyrics, z.B. [0:00 - Intro] ...' : operationMode === 'generate-lyrics' ? 'z.B. deutscher Rap über Neuanfang, düster, Hook mit Ohrwurm, 2 Verse…' : 'Suno-kompatible Lyrics oder Prompt…'} /></label>
+            <label className={`wide ${styleOverLimit ? 'field-limit-active' : ''}`}>Style <span className={`field-counter ${styleOverLimit ? 'over-limit' : ''}`}>{style.length}{styleLimit ? ` / ${styleLimit}` : ''} {t('music.chars', 'Zeichen')}</span><textarea className={styleOverLimit ? 'field-over-limit' : ''} value={style} onChange={(event) => setStyle(event.target.value)} rows={5} placeholder={t('music.placeholders.expertStyle', 'grimy NYC boom bap, hard snare crack, deep male rap lead…')} /></label>
+            <label className={`wide ${promptOverLimit ? 'field-limit-active' : ''}`}>{instrumental ? t('music.fields.instrumentalBlueprintPrompt', 'Instrumental-Bauplan / Prompt ohne Lyrics') : operationMode === 'generate-lyrics' ? t('music.fields.lyricsPromptTopic', 'Lyrics-Prompt / Thema') : operationMode === 'stem-separation' || operationMode === 'convert-wav' ? t('music.fields.noteOptionalContext', 'Notiz / optionaler Kontext') : 'Lyrics / Prompt'} <span className={`field-counter ${promptOverLimit ? 'over-limit' : ''}`}>{prompt.length}{modelLimit ? ` / ${modelLimit}` : ''} {t('music.chars', 'Zeichen')}</span><textarea className={`large ${promptOverLimit ? 'field-over-limit' : ''}`} value={prompt} onChange={(event) => setPrompt(event.target.value)} required={!['import-suno-song', 'stem-separation', 'convert-wav', 'midi', 'video', 'cover-image', 'persona', 'replace-section'].includes(operationMode)} placeholder={instrumental ? t('music.placeholders.instrumentalSunoBlueprint', 'Suno-kompatibler Instrumental-Bauplan ohne Lyrics, z.B. [0:00 - Intro] ...') : operationMode === 'generate-lyrics' ? t('music.placeholders.lyricsTopic', 'z.B. deutscher Rap über Neuanfang, düster, Hook mit Ohrwurm, 2 Verse…') : t('music.placeholders.sunoLyricsOrPrompt', 'Suno-kompatible Lyrics oder Prompt…')} /></label>
             {generationBlockedByLimits && <p className="wide field-limit-warning">{generationLimitMessages.join(' ')}</p>}
-            <div className="wide button-row wrap"><button className="primary" disabled={loading || (operationMode === 'generate' && generationBlockedByLimits)}><Wand2 size={17} /> {loading ? 'Wird gestartet…' : operationActionLabel}</button><button type="button" onClick={runSafeCheck} disabled={safeCheckLoading}><RefreshCw size={15} className={safeCheckLoading ? 'spin-icon' : ''} /> Safe-Check</button><button type="button" onClick={createMasterPackage}><Copy size={15} /> Master-Paket</button><button type="button" onClick={prepareAbVariants}>3 Varianten</button><button type="button" onClick={clearMusicForm}>Leeren</button></div>
+            <div className="wide button-row wrap"><button className="primary" disabled={loading || (operationMode === 'generate' && generationBlockedByLimits)}><Wand2 size={17} /> {loading ? t('music.actions.starting', 'Wird gestartet…') : operationActionLabel}</button><button type="button" onClick={runSafeCheck} disabled={safeCheckLoading}><RefreshCw size={15} className={safeCheckLoading ? 'spin-icon' : ''} /> {t('music.safeCheck.shortTitle', 'Safe-Check')}</button><button type="button" onClick={createMasterPackage}><Copy size={15} /> {t('music.masterPackage.title', 'Master-Paket')}</button><button type="button" onClick={prepareAbVariants}>{t('music.actions.threeVariants', '3 Varianten')}</button><button type="button" onClick={clearMusicForm}>{t('music.actions.clear', 'Leeren')}</button></div>
             {safeCheckPanel}
             {masterPackagePanel}
             {abVariantPanel}
@@ -2377,7 +2423,7 @@ export function MusicPage({ styles, voices = [], uploadedFiles = [], assets = []
           {styleSuggestionPanel}
         </>
       )}
-          <StylePresetModal open={stylePresetModalOpen} onClose={() => setStylePresetModalOpen(false)} styles={styles} builtinStyles={styleCategories} onApply={applyStylePresetText} />
+          <StylePresetModal open={stylePresetModalOpen} onClose={() => setStylePresetModalOpen(false)} styles={styles} builtinStyles={styleCategories} onApply={applyStylePresetText} t={t} />
     </section>
   );
 }

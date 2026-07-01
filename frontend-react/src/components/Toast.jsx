@@ -1,6 +1,8 @@
 import React, { useEffect, useRef } from 'react';
+import { useI18n } from '../i18n/I18nContext.jsx';
 
 export function Toast({ message, type = 'info', onClose, onClick, autoCloseMs = 0, onAutoClose, toastKey = '' }) {
+  const { t } = useI18n();
   const onCloseRef = useRef(onClose);
   const onAutoCloseRef = useRef(onAutoClose);
 
@@ -25,7 +27,7 @@ export function Toast({ message, type = 'info', onClose, onClick, autoCloseMs = 
   return (
     <div className={`toast toast-${type}`} role="status" aria-live="polite">
       <button type="button" className="toast-main" onClick={onClick || undefined}>{message}</button>
-      <button type="button" onClick={onClose} aria-label="Meldung schließen">×</button>
+      <button type="button" onClick={onClose} aria-label={t('common.close', 'Schließen')}>×</button>
     </div>
   );
 }

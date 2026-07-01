@@ -6,6 +6,7 @@ import { EmptyState } from '../components/EmptyState.jsx';
 import { Modal } from '../components/Modal.jsx';
 import { SectionHeader } from '../components/SectionHeader.jsx';
 import { Waveform } from '../components/Waveform.jsx';
+import { useI18n } from '../i18n/I18nContext.jsx';
 import { assetSearchText, copyToClipboard, downloadTextFile, formatBoolean, formatDate, parseBackendDate, formatDuration, formatVocalGender, getGenerationOptions, groupAssetsByProject, handleCoverImageError, hasGenerationOptions, isPlayable, operationKey, operationLabel, pickCover, isCoverCached, pickLyrics, pickModel, pickPrompt, pickStyle, pickTitle, safeFilename, shortId, stableLibrarySortValue, updatedLibrarySortValue, summarizeStyle } from '../utils.js';
 
 
@@ -57,6 +58,11 @@ const libraryGalleryModeStorageKey = 'react-library-gallery-mode';
 const libraryFlatListModeStorageKey = 'react-library-flat-list-mode';
 const libraryViewModes = ['list', 'flat-list', 'gallery'];
 const librarySubModes = ['simple', 'advanced'];
+
+
+function translateFallback(translate, key, fallback, values) {
+  return typeof translate === 'function' ? translate(key, fallback, values) : fallback;
+}
 
 
 function readStoredChoice(key, allowed, fallback) {
@@ -161,12 +167,13 @@ function libraryAiTagList(asset) {
   return Array.isArray(tags?.tags) ? tags.tags.filter(Boolean) : [];
 }
 
-function audioAiAnalysisBlocks(analysis) {
+function audioAiAnalysisBlocks(analysis, translate = null) {
+  const tr = (key, fallback, values) => translateFallback(translate, key, fallback, values);
   const blocks = analysis?.ai_report?.blocks;
   if (Array.isArray(blocks) && blocks.length) {
     return blocks
       .filter((block) => block && typeof block === 'object')
-      .map((block) => ({ title: String(block.title || 'Abschnitt'), text: String(block.text || '').trim() }))
+      .map((block) => ({ title: String(block.title || tr('library.audioAnalysis.section', 'Abschnitt')), text: String(block.text || '').trim() }))
       .filter((block) => block.text);
   }
   const summary = analysis?.summary || {};
@@ -174,20 +181,20 @@ function audioAiAnalysisBlocks(analysis) {
   const tempo = analysis?.tempo_analysis || {};
   return [
     {
-      title: 'Kurzüberblick',
+      title: tr('library.audioAnalysis.quickOverview', 'Kurzüberblick'),
       text: [
-        `Titel: ${analysis?.title || summary.title || '—'}`,
-        `Dauer: ${summary.duration_label || '—'}`,
+        `${tr('common.title', 'Titel')}: ${analysis?.title || summary.title || '—'}`,
+        `${tr('common.duration', 'Dauer')}: ${summary.duration_label || '—'}`,
         `BPM: ${summary.bpm || tempo.bpm || '—'}`,
-        `Lautheit: ${summary.loudness || signal.estimated_loudness || '—'}`,
+        `${tr('library.audioAnalysis.loudness', 'Lautheit')}: ${summary.loudness || signal.estimated_loudness || '—'}`,
       ].join('\n')
     },
     {
       title: 'Tempo & Signal',
       text: [
-        `Beat-Konfidenz: ${tempo.confidence ?? '—'}`,
+        `${tr('library.audioAnalysis.beatConfidence', 'Beat-Konfidenz')}: ${tempo.confidence ?? '—'}`,
         `Beats: ${tempo.beat_count || 0}`,
-        `RMS Mittel: ${signal.rms_mean ?? '—'}`,
+        `${tr('library.audioAnalysis.rmsMean', 'RMS Mittel')}: ${signal.rms_mean ?? '—'}`,
         `Quiet Ratio: ${signal.quiet_ratio ?? '—'}`,
       ].join('\n')
     }
@@ -211,46 +218,48 @@ function audioAiAnalysisTopLabel(section) {
   return '—';
 }
 
-function audioAiAnalysisMethodLabel(value) {
+function audioAiAnalysisMethodLabel(value, translate = null) {
+  const tr = (key, fallback, values) => translateFallback(translate, key, fallback, values);
   const text = String(value || '').trim();
   const map = {
-    local_audio_feature_heuristic: 'Lokale Audio-Heuristik',
-    transformers_audio_classification: 'Internes Audio-Modell',
-    transformers_ast_audioset: 'AST / AudioSet Modell',
+    local_audio_feature_heuristic: tr('library.audioAnalysis.methods.localAudioFeatureHeuristic', 'Lokale Audio-Heuristik'),
+    transformers_audio_classification: tr('library.audioAnalysis.methods.transformersAudioClassification', 'Internes Audio-Modell'),
+    transformers_ast_audioset: tr('library.audioAnalysis.methods.transformersAstAudioset', 'AST / AudioSet Modell'),
     acoustid_chromaprint: 'AcoustID / Chromaprint',
-    internal_models: 'Interne Modelle',
-    ai_report: 'KI-Bericht'
+    internal_models: tr('library.audioAnalysis.methods.internalModels', 'Interne Modelle'),
+    ai_report: tr('library.audioAnalysis.methods.aiReport', 'KI-Bericht')
   };
-  return map[text] || text || 'nicht bestimmt';
+  return map[text] || text || tr('library.audioAnalysis.notDetermined', 'nicht bestimmt');
 }
 
-function audioAiCopyrightSummary(copyright = {}) {
+function audioAiCopyrightSummary(copyright = {}, translate = null) {
+  const tr = (key, fallback, values) => translateFallback(translate, key, fallback, values);
   const matches = Array.isArray(copyright.db_matches) ? copyright.db_matches : [];
   if (matches.length > 0) {
     const first = matches[0] || {};
     return {
-      value: 'Datenbanktreffer',
-      detail: `${first.title || 'Unbekannter Titel'}${first.artist ? ` - ${first.artist}` : ''}${first.score !== undefined ? ` (${first.score})` : ''}`,
+      value: tr('library.audioAnalysis.databaseMatch', 'Datenbanktreffer'),
+      detail: `${first.title || tr('library.audioAnalysis.unknownTitle', 'Unbekannter Titel')}${first.artist ? ` - ${first.artist}` : ''}${first.score !== undefined ? ` (${first.score})` : ''}`,
       tone: 'danger'
     };
   }
   if (copyright.ok && copyright.db_lookup_performed) {
     return {
-      value: 'Kein AcoustID-Treffer',
-      detail: 'Fingerprint geprüft. Das ist ein Hinweis, aber keine Rechtsfreigabe.',
+      value: tr('library.audioAnalysis.noAcoustIdMatch', 'Kein AcoustID-Treffer'),
+      detail: tr('library.audioAnalysis.fingerprintCheckedHint', 'Fingerprint geprüft. Das ist ein Hinweis, aber keine Rechtsfreigabe.'),
       tone: 'success'
     };
   }
   if (copyright.ok && !copyright.db_lookup_performed) {
     return {
-      value: 'Fingerprint erstellt',
-      detail: 'Keine AcoustID-Abfrage konfiguriert. API-Key im Adminbereich hinterlegen.',
+      value: tr('library.audioAnalysis.fingerprintCreated', 'Fingerprint erstellt'),
+      detail: tr('library.audioAnalysis.noAcoustIdConfigured', 'Keine AcoustID-Abfrage konfiguriert. API-Key im Adminbereich hinterlegen.'),
       tone: 'warning'
     };
   }
   return {
-    value: 'Nicht belastbar',
-    detail: copyright.error || copyright.verdict || 'Copyright-Prüfung nicht abgeschlossen.',
+    value: tr('library.audioAnalysis.notReliable', 'Nicht belastbar'),
+    detail: copyright.error || copyright.verdict || tr('library.audioAnalysis.copyrightIncomplete', 'Copyright-Prüfung nicht abgeschlossen.'),
     tone: 'warning'
   };
 }
@@ -265,16 +274,17 @@ function audioAiBlockTone(title) {
   return 'default';
 }
 
-function audioAiReportLead(blocks, analysis) {
+function audioAiReportLead(blocks, analysis, translate = null) {
+  const tr = (key, fallback, values) => translateFallback(translate, key, fallback, values);
   const preferred = blocks.find((block) => /ueberblick|überblick|summary|einschaetzung|einschätzung|kurz/i.test(block.title));
   const source = preferred || blocks[0] || null;
   if (source?.text) return source.text.split('\n').filter(Boolean).slice(0, 3).join(' ');
   const summary = analysis?.summary || {};
   return [
-    summary.duration_label ? `Dauer ${summary.duration_label}` : '',
+    summary.duration_label ? `${tr('common.duration', 'Dauer')} ${summary.duration_label}` : '',
     summary.bpm ? `${summary.bpm} BPM` : '',
-    summary.loudness ? `Lautheit ${summary.loudness}` : ''
-  ].filter(Boolean).join(' · ') || 'Analyse lokal gespeichert.';
+    summary.loudness ? `${tr('library.audioAnalysis.loudness', 'Lautheit')} ${summary.loudness}` : ''
+  ].filter(Boolean).join(' · ') || tr('library.audioAnalysis.savedLocally', 'Analyse lokal gespeichert.');
 }
 
 function audioAiReportLines(text) {
@@ -284,7 +294,8 @@ function audioAiReportLines(text) {
     .filter(Boolean);
 }
 
-function audioAiAnalysisMetricCards(analysis) {
+function audioAiAnalysisMetricCards(analysis, translate = null) {
+  const tr = (key, fallback, values) => translateFallback(translate, key, fallback, values);
   const summary = analysis?.summary || {};
   const copyright = analysis?.copyright_analysis || {};
   const content = analysis?.content_analysis || {};
@@ -292,14 +303,14 @@ function audioAiAnalysisMetricCards(analysis) {
   const mood = content.mood || {};
   const vocals = content.vocals || {};
   const authenticity = content.authenticity || {};
-  const copyrightSummary = audioAiCopyrightSummary(copyright);
+  const copyrightSummary = audioAiCopyrightSummary(copyright, translate);
   return [
     { label: 'Copyright', value: copyrightSummary.value, detail: copyrightSummary.detail, tone: copyrightSummary.tone },
-    { label: 'Genre', value: audioAiAnalysisTopLabel(genre), detail: audioAiAnalysisMethodLabel(genre.method), tone: genre.ok ? 'success' : 'warning' },
-    { label: 'Stimmung', value: audioAiAnalysisTopLabel(mood), detail: audioAiAnalysisMethodLabel(mood.method), tone: mood.ok ? 'success' : 'neutral' },
-    { label: 'Vocals', value: audioAiAnalysisTopLabel(vocals), detail: audioAiAnalysisMethodLabel(vocals.method), tone: vocals.ok ? 'success' : 'neutral' },
-    { label: 'KI-Indiz', value: authenticity.verdict || 'nicht geprüft', detail: authenticity.model || audioAiAnalysisMethodLabel(authenticity.method), tone: audioAiAnalysisRiskClass(authenticity.verdict) },
-    { label: 'Tempo', value: summary.bpm ? `${summary.bpm} BPM` : '—', detail: summary.tempo_confidence !== undefined ? `Sicherheit ${summary.tempo_confidence}` : '—', tone: 'success' },
+    { label: 'Genre', value: audioAiAnalysisTopLabel(genre), detail: audioAiAnalysisMethodLabel(genre.method, translate), tone: genre.ok ? 'success' : 'warning' },
+    { label: tr('library.audioAnalysis.mood', 'Stimmung'), value: audioAiAnalysisTopLabel(mood), detail: audioAiAnalysisMethodLabel(mood.method, translate), tone: mood.ok ? 'success' : 'neutral' },
+    { label: 'Vocals', value: audioAiAnalysisTopLabel(vocals), detail: audioAiAnalysisMethodLabel(vocals.method, translate), tone: vocals.ok ? 'success' : 'neutral' },
+    { label: tr('library.audioAnalysis.aiEvidence', 'KI-Indiz'), value: authenticity.verdict || tr('library.audioAnalysis.notChecked', 'nicht geprüft'), detail: authenticity.model || audioAiAnalysisMethodLabel(authenticity.method, translate), tone: audioAiAnalysisRiskClass(authenticity.verdict) },
+    { label: 'Tempo', value: summary.bpm ? `${summary.bpm} BPM` : '—', detail: summary.tempo_confidence !== undefined ? `${tr('common.confidence', 'Sicherheit')} ${summary.tempo_confidence}` : '—', tone: 'success' },
   ];
 }
 
@@ -332,11 +343,12 @@ function audioStatusClass(asset) {
   return status || 'remote';
 }
 
-function audioStatusLabel(asset) {
-  if (isAudioLocal(asset)) return 'Audio lokal';
+function audioStatusLabel(asset, translate = null) {
+  const tr = (key, fallback, values) => translateFallback(translate, key, fallback, values);
+  if (isAudioLocal(asset)) return tr('library.localFilter.audioLocal', 'Audio lokal');
   const status = String(asset?.audio_availability_status || asset?.status || 'remote').toLowerCase();
-  if (status === 'missing') return 'Audio fehlt';
-  if (asset?.audio_local_reason) return 'Remote / lokal veraltet';
+  if (status === 'missing') return tr('library.status.audioMissing', 'Audio fehlt');
+  if (asset?.audio_local_reason) return tr('library.status.remoteStale', 'Remote / lokal veraltet');
   return asset?.status || status || 'remote';
 }
 
@@ -467,19 +479,22 @@ function canRunSunoApiAction(asset, typeName) {
   return !key || canUseSunoApiCapability(asset, key);
 }
 
-function localOnlyHint(asset) {
+function localOnlyHint(asset, translate = null) {
+  const tr = (key, fallback, values) => translateFallback(translate, key, fallback, values);
   if (!isLocalOnlyAsset(asset)) return '';
   const metadata = assetMetadata(asset);
-  if (metadata.import_source === 'suno_public_clip' || metadata.is_suno_clip_import) return 'Öffentlicher Suno-Import: lokale Funktionen verfügbar, SunoAPI.org-Folgeaktionen deaktiviert.';
-  if (metadata.generation_source === 'opencli' || metadata.provider === 'opencli' || metadata.is_opencli_generation) return 'OpenCLI-Asset: lokale Funktionen verfügbar, SunoAPI.org-Folgeaktionen deaktiviert.';
-  return 'Lokales Asset: SunoAPI.org-Folgeaktionen deaktiviert.';
+  if (metadata.import_source === 'suno_public_clip' || metadata.is_suno_clip_import) return tr('library.messages.publicSunoImportLocalOnly', 'Öffentlicher Suno-Import: lokale Funktionen verfügbar, SunoAPI.org-Folgeaktionen deaktiviert.');
+  if (metadata.generation_source === 'opencli' || metadata.provider === 'opencli' || metadata.is_opencli_generation) return tr('library.messages.openCliAssetLocalOnly', 'OpenCLI-Asset: lokale Funktionen verfügbar, SunoAPI.org-Folgeaktionen deaktiviert.');
+  return tr('library.messages.localAssetSunoDisabled', 'Lokales Asset: SunoAPI.org-Folgeaktionen deaktiviert.');
 }
 
-function projectAudioLocalLabel(project) {
+function projectAudioLocalLabel(project, translate = null) {
+  const tr = (key, fallback, values) => translateFallback(translate, key, fallback, values);
   const count = (project?.assets || []).filter(isAudioLocal).length;
   const total = (project?.assets || []).length;
   if (!count) return '';
-  return count === total ? 'Audio lokal' : `${count}/${total} Audio lokal`;
+  const label = tr('library.localFilter.audioLocal', 'Audio lokal');
+  return count === total ? label : `${count}/${total} ${label}`;
 }
 
 function assetSrtState(asset, srtByAsset = {}) {
@@ -626,9 +641,10 @@ function variantTitle(asset, project) {
   return total > 1 ? `${title} ${index}/${total}` : title;
 }
 
-function variantEyebrow(asset, project) {
+function variantEyebrow(asset, project, translate = null) {
   const { index, total } = variantPosition(asset, project);
-  return `Variante ${index}/${total} · ${operationLabel(asset?.operation_type || asset?.task_type || asset?.operation_label)}`;
+  const tr = (key, fallback, values) => translateFallback(translate, key, fallback, values);
+  return `${tr('library.variant', 'Variante')} ${index}/${total} · ${operationLabel(asset?.operation_type || asset?.task_type || asset?.operation_label, translate)}`;
 }
 
 function withVariantPlaybackMeta(asset, project) {
@@ -692,6 +708,7 @@ function findActiveSrtSegment(segments, currentTime) {
 }
 
 export function LibraryPage({ assets, loadError = '', voices = [], playlists = [], onReload, onPlay, notify, onUseLyric, onReusePrompt, openAssetId, openAssetRequestKey = 0, onOpenAssetHandled, resetSignal = 0, onOpenDaw, playbackState = {}, onToggleCurrentPlayback, onDetailTitleChange, routeDetailSlug = '', searchQuery = '' }) {
+  const { t } = useI18n();
   const query = String(searchQuery || '');
   const [type, setType] = useState('all');
   const [sort, setSort] = useState('newest');
@@ -778,6 +795,9 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
   });
   const [locallyDeletedAssetIds, setLocallyDeletedAssetIds] = useState(() => new Set());
   const [bulkActionBusy, setBulkActionBusy] = useState('');
+  const localizedTypeFilters = useMemo(() => typeFilters.map(([key, label]) => [key, t(`library.typeFilters.${key}`, label)]), [t]);
+  const localizedPrimaryTypeFilters = useMemo(() => localizedTypeFilters.filter(([key]) => ['all', 'generate'].includes(key)), [localizedTypeFilters]);
+  const localizedSecondaryTypeFilters = useMemo(() => localizedTypeFilters.filter(([key]) => !['all', 'generate'].includes(key)), [localizedTypeFilters]);
   const [favoriteSavingIds, setFavoriteSavingIds] = useState(() => new Set());
   const [favoriteOverrides, setFavoriteOverrides] = useState({});
   const [coverOverrides, setCoverOverrides] = useState({});
@@ -1219,9 +1239,9 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
   function SrtLiveColorSelect({ compact = false } = {}) {
     return (
       <label className={`srt-live-color-select ${compact ? 'compact' : ''}`}>
-        <span>Untertitelfarbe</span>
+        <span>{t('library.srt.subtitleColor', 'Untertitelfarbe')}</span>
         <select value={srtLiveColor} onChange={(event) => setSrtLiveColor(event.target.value)}>
-          {srtLiveColorOptions.map((option) => <option key={option.key} value={option.key}>{option.label}</option>)}
+          {srtLiveColorOptions.map((option) => <option key={option.key} value={option.key}>{t(`library.srtLiveColors.${option.key}`, option.label)}</option>)}
         </select>
       </label>
     );
@@ -1262,17 +1282,17 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
   useEffect(() => {
     function focusEditor(event) {
       const assetId = resolveSrtTargetAssetId(event.detail || {});
-      if (!assetId) return notify?.('Kein AudioAsset für den SRT-Editor gefunden.', 'error');
+      if (!assetId) return notify?.(t('library.messages.noSrtEditorAsset', 'Kein AudioAsset für den SRT-Editor gefunden.'), 'error');
       ensureSrtEditorDraft(assetId);
       setSrtEditorOpen(assetId, true);
       window.setTimeout(() => document.querySelector(`[data-react-asset-row="${CSS.escape(String(assetId))}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 100);
-      notify?.('SRT-Editor geöffnet.', 'info');
+      notify?.(t('library.messages.srtEditorOpened', 'SRT-Editor geöffnet.'), 'info');
     }
     function addSegmentFromAssistant(event) {
       const assetId = resolveSrtTargetAssetId(event.detail || {});
       const asset = visibleAssets.find((item) => String(item.id) === String(assetId));
-      if (!asset) return notify?.('Kein AudioAsset für das neue SRT-Segment gefunden.', 'error');
-      addSrtSegment(asset, null, Number(event.detail?.start ?? playbackState?.currentTime ?? 0), event.detail?.text || 'Neue Untertitel-Zeile');
+      if (!asset) return notify?.(t('library.messages.noSrtSegmentAsset', 'Kein AudioAsset für das neue SRT-Segment gefunden.'), 'error');
+      addSrtSegment(asset, null, Number(event.detail?.start ?? playbackState?.currentTime ?? 0), event.detail?.text || t('library.srt.newSubtitleLine', 'Neue Untertitel-Zeile'));
       setSrtEditorOpen(asset.id, true);
     }
     window.addEventListener('assistant:srt-focus-editor', focusEditor);
@@ -1508,7 +1528,7 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
   async function addToPlaylist(asset, playlistId) {
     if (!playlistId) return;
     await api.library.addPlaylistItem(playlistId, { audio_asset_id: Number(asset.id) });
-    notify('Track wurde zur Playlist hinzugefügt.', 'success');
+    notify(t('library.messages.trackAddedToPlaylist', 'Track wurde zur Playlist hinzugefügt.'), 'success');
     setPlaylistAsset(null);
     await onReload();
   }
@@ -1516,22 +1536,22 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
   async function addSelectedToPlaylist(playlistId) {
     if (!playlistId) return;
     const rows = selectedAssets.filter((asset) => asset?.id);
-    if (!rows.length) return notify('Keine ausgewählten Tracks gefunden.', 'error');
+    if (!rows.length) return notify(t('library.messages.noSelectedTracks', 'Keine ausgewählten Tracks gefunden.'), 'error');
     try {
       await Promise.all(rows.map((asset) => api.library.addPlaylistItem(playlistId, { audio_asset_id: Number(asset.id) })));
-      notify(`${rows.length} Track${rows.length === 1 ? '' : 's'} wurden zur Playlist hinzugefügt.`, 'success');
+      notify(t('library.messages.tracksAddedToPlaylist', '{{count}} Track(s) wurden zur Playlist hinzugefügt.', { count: rows.length }), 'success');
       setSelectedPlaylistOpen(false);
       await onReload?.();
     } catch (err) {
-      notify(err?.message || 'Auswahl konnte nicht zur Playlist hinzugefügt werden.', 'error');
+      notify(err?.message || t('library.messages.selectionPlaylistFailed', 'Auswahl konnte nicht zur Playlist hinzugefügt werden.'), 'error');
     }
   }
 
   async function renameAsset(asset) {
-    const title = prompt('Neuer Titel', pickTitle(asset));
+    const title = prompt(t('library.messages.newTitlePrompt', 'Neuer Titel'), pickTitle(asset));
     if (!title?.trim()) return;
     await api.library.updateTitle('audio', asset.id, title.trim());
-    notify('Titel wurde gespeichert.', 'success');
+    notify(t('library.messages.titleSaved', 'Titel wurde gespeichert.'), 'success');
     await onReload();
   }
 
@@ -1565,11 +1585,11 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
 
   async function deleteAsset(asset) {
     if (!asset?.id) return;
-    if (!confirm(`„${pickTitle(asset)}“ in den Papierkorb verschieben?`)) return;
+    if (!confirm(t('library.messages.moveAssetToTrashConfirm', '„{{title}}“ in den Papierkorb verschieben?', { title: pickTitle(asset) }))) return;
     await api.library.deleteContent('audio', asset.id);
     stopPlaybackForDeletedAssets([asset.id]);
     hideDeletedAssetsLocally([asset.id]);
-    notify('Audio wurde in den Papierkorb verschoben.', 'success');
+    notify(t('library.messages.audioMovedToTrash', 'Audio wurde in den Papierkorb verschoben.'), 'success');
     setActionAsset(null);
     closeAudioMenu();
     await reloadAfterLibraryMutation();
@@ -1591,11 +1611,11 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
     });
     try {
       await api.archive.setFavorite(asset.id, nextValue);
-      notify(nextValue ? 'Song wurde zu den Favoriten hinzugefügt.' : 'Song wurde aus den Favoriten entfernt.', 'success');
+      notify(nextValue ? t('library.messages.favoriteAdded', 'Song wurde zu den Favoriten hinzugefügt.') : t('library.messages.favoriteRemoved', 'Song wurde aus den Favoriten entfernt.'), 'success');
       await preserveWindowScrollAsync(() => onReload?.());
     } catch (err) {
       preserveWindowScroll(() => setFavoriteOverrides((current) => ({ ...current, [key]: Boolean(asset.is_favorite) })));
-      notify(err?.message || 'Favorit konnte nicht gespeichert werden.', 'error');
+      notify(err?.message || t('library.messages.favoriteSaveFailed', 'Favorit konnte nicht gespeichert werden.'), 'error');
     } finally {
       preserveWindowScroll(() => {
         setFavoriteSavingIds((current) => {
@@ -1678,41 +1698,41 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
   async function runWorkflowWizard(asset) {
     if (!asset?.id) return;
     const selected = Object.entries(workflowCaptureState).filter(([, enabled]) => enabled).map(([key]) => key);
-    if (!selected.length) return notify('Keine Erfassungsfunktion im Wizard aktiviert.', 'error');
+    if (!selected.length) return notify(t('library.messages.noWorkflowCaptureSelected', 'Keine Erfassungsfunktion im Wizard aktiviert.'), 'error');
     setWorkflowWizardBusy(true);
     const results = [];
     try {
       if (workflowCaptureState.timestampedLyrics) {
         if (!asset.audio_id) {
-          results.push('Timestamped Lyrics übersprungen: keine Audio-ID vorhanden.');
+          results.push(t('library.workflow.timestampedSkippedNoAudioId', 'Timestamped Lyrics übersprungen: keine Audio-ID vorhanden.'));
         } else {
           await api.archive.timestampedLyrics(asset.id);
-          results.push('Timestamped Lyrics gespeichert');
+          results.push(t('library.workflow.timestampedSaved', 'Timestamped Lyrics gespeichert'));
         }
       }
       if (workflowCaptureState.srt) {
         const srt = await api.archive.generateSrt(asset.id, { force: true });
         if (srt?.queued || srt?.task_local_id) {
-          results.push(`SRT gestartet (#${srt.task_local_id || '—'})`);
+          results.push(t('library.workflow.srtStarted', 'SRT gestartet (#{{task}})', { task: srt.task_local_id || '—' }));
         } else {
           setSrtByAsset((current) => ({ ...current, [asset.id]: srt }));
           notifySrtUpdated(asset.id, srt);
-          results.push('SRT erzeugt');
+          results.push(t('library.workflow.srtCreated', 'SRT erzeugt'));
         }
       }
       if (workflowCaptureState.stems) {
         await api.archive.generateStems(asset.id);
-        results.push('Stems erzeugt');
+        results.push(t('library.workflow.stemsCreated', 'Stems erzeugt'));
       }
       if (workflowCaptureState.waveform) {
         await api.archive.rebuildWaveform(asset.id);
-        results.push('Waveform neu berechnet');
+        results.push(t('library.workflow.waveformRebuilt', 'Waveform neu berechnet'));
       }
-      notify(`Wizard abgeschlossen: ${results.join(' · ') || 'keine Änderung'}`, 'success');
+      notify(t('library.messages.workflowDone', 'Wizard abgeschlossen: {{result}}', { result: results.join(' · ') || t('library.messages.noChange', 'keine Änderung') }), 'success');
       await onReload?.();
       setWorkflowWizardAsset((current) => current?.id === asset.id ? { ...current } : current);
     } catch (err) {
-      notify(err?.message || 'Wizard-Ausführung fehlgeschlagen.', 'error');
+      notify(err?.message || t('library.messages.workflowFailed', 'Wizard-Ausführung fehlgeschlagen.'), 'error');
       await onReload?.();
     } finally {
       setWorkflowWizardBusy(false);
@@ -1721,14 +1741,14 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
 
   async function generateAssetStems(asset) {
     if (!asset?.id) return;
-    if (!confirm(`Stem-Dateien für „${pickTitle(asset)}“ erzeugen?\n\nDies kann je nach Songlänge und Hardware mehrere Minuten dauern.`)) return;
+    if (!confirm(t('library.messages.generateStemsConfirm', 'Stem-Dateien für „{{title}}“ erzeugen?\n\nDies kann je nach Songlänge und Hardware mehrere Minuten dauern.', { title: pickTitle(asset) }))) return;
     setStemLoadingIds((current) => new Set([...current, asset.id]));
     try {
       const result = await api.archive.generateStems(asset.id);
-      notify(result?.exists ? 'Stem-Dateien wurden erzeugt.' : 'Stem-Erzeugung wurde abgeschlossen.', 'success');
+      notify(result?.exists ? t('library.messages.stemsCreated', 'Stem-Dateien wurden erzeugt.') : t('library.messages.stemsDone', 'Stem-Erzeugung wurde abgeschlossen.'), 'success');
       await onReload?.();
     } catch (err) {
-      notify(err?.message || 'Stem-Erzeugung fehlgeschlagen.', 'error');
+      notify(err?.message || t('library.messages.stemsFailed', 'Stem-Erzeugung fehlgeschlagen.'), 'error');
     } finally {
       setStemLoadingIds((current) => {
         const next = new Set(current);
@@ -1744,18 +1764,18 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
 
   async function generateProjectSrt(project) {
     const rows = projectBulkAssets(project);
-    if (!rows.length) return notify('Keine Varianten für SRT-Erzeugung gefunden.', 'error');
-    if (!confirm(`SRT für alle ${rows.length} Varianten von „${project.title}“ erzeugen?\n\nDer Sammellauf wird im Hintergrund gestartet und ist im Status-Frontend als aktiver Task sichtbar.`)) return;
+    if (!rows.length) return notify(t('library.messages.noProjectSrtRows', 'Keine Varianten für SRT-Erzeugung gefunden.'), 'error');
+    if (!confirm(t('library.messages.projectSrtConfirm', 'SRT für alle {{count}} Varianten von „{{title}}“ erzeugen?\n\nDer Sammellauf wird im Hintergrund gestartet und ist im Status-Frontend als aktiver Task sichtbar.', { count: rows.length, title: project.title }))) return;
     const ids = rows.map((asset) => asset.id);
     setBulkActionBusy('srt');
     setSrtLoadingIds((current) => new Set([...current, ...ids]));
     try {
       const result = await api.archive.bulkGenerateSrt(ids, { force: true });
-      notify(`SRT-Sammellauf gestartet: Task #${result?.task_local_id || '—'} · ${rows.length} Varianten.`, 'success');
+      notify(t('library.messages.projectSrtStarted', 'SRT-Sammellauf gestartet: Task #{{task}} · {{count}} Varianten.', { task: result?.task_local_id || '—', count: rows.length }), 'success');
       await onReload?.();
       window.setTimeout(() => onReload?.(), 1200);
     } catch (err) {
-      notify(err?.message || 'SRT-Sammellauf konnte nicht gestartet werden.', 'error');
+      notify(err?.message || t('library.messages.bulkSrtFailed', 'SRT-Sammellauf konnte nicht gestartet werden.'), 'error');
     } finally {
       setBulkActionBusy('');
       setSrtLoadingIds((current) => {
@@ -1770,18 +1790,18 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
     const allRows = projectBulkAssets(project);
     const rows = allRows.filter(isAudioLocal);
     const skipped = allRows.length - rows.length;
-    if (!rows.length) return notify('Keine lokal gespeicherten Audios für Stem-Erzeugung gefunden.', 'error');
-    if (!confirm(`Stems für ${rows.length} lokale Varianten von „${project.title}“ erzeugen?${skipped ? `\n\n${skipped} nicht lokale Varianten werden übersprungen.` : ''}\n\nDer Sammellauf wird im Hintergrund gestartet und ist im Status-Frontend als aktiver Task sichtbar.`)) return;
+    if (!rows.length) return notify(t('library.messages.noProjectLocalStems', 'Keine lokal gespeicherten Audios für Stem-Erzeugung gefunden.'), 'error');
+    if (!confirm(t('library.messages.projectStemsConfirm', 'Stems für {{count}} lokale Varianten von „{{title}}“ erzeugen?{{skipped}}\n\nDer Sammellauf wird im Hintergrund gestartet und ist im Status-Frontend als aktiver Task sichtbar.', { count: rows.length, title: project.title, skipped: skipped ? t('library.messages.projectStemsSkipped', '\n\n{{count}} nicht lokale Varianten werden übersprungen.', { count: skipped }) : '' }))) return;
     const ids = rows.map((asset) => asset.id);
     setBulkActionBusy('stems');
     setStemLoadingIds((current) => new Set([...current, ...ids]));
     try {
       const result = await api.archive.bulkGenerateStems(ids);
-      notify(`Stem-Sammellauf gestartet: Task #${result?.task_local_id || '—'} · ${rows.length} Varianten${skipped ? ` · ${skipped} übersprungen` : ''}.`, 'success');
+      notify(t('library.messages.projectStemsStarted', 'Stem-Sammellauf gestartet: Task #{{task}} · {{count}} Varianten{{skipped}}.', { task: result?.task_local_id || '—', count: rows.length, skipped: skipped ? t('library.messages.bulkSkippedSuffix', ' · {{count}} übersprungen', { count: skipped }) : '' }), 'success');
       await onReload?.();
       window.setTimeout(() => onReload?.(), 1200);
     } catch (err) {
-      notify(err?.message || 'Stem-Sammellauf konnte nicht gestartet werden.', 'error');
+      notify(err?.message || t('library.messages.bulkStemsFailed', 'Stem-Sammellauf konnte nicht gestartet werden.'), 'error');
     } finally {
       setBulkActionBusy('');
       setStemLoadingIds((current) => {
@@ -1795,12 +1815,12 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
   async function convertAssetToWav(asset, { force = false, download = false } = {}) {
     if (!asset?.id) return;
     const wav = readAssetWavConversion(asset);
-    const shouldForce = Boolean(force || (wav.available && confirm(`Für „${pickTitle(asset)}“ existiert bereits eine WAV-Datei. Neu erzeugen?`)));
-    if (!wav.available && !confirm(`„${pickTitle(asset)}“ lokal nach WAV konvertieren?\n\nDie Originaldatei bleibt unverändert. Die WAV-Datei wird als zusätzlicher Inhalt gespeichert.`)) return;
+    const shouldForce = Boolean(force || (wav.available && confirm(t('library.messages.wavExistsConfirm', 'Für „{{title}}“ existiert bereits eine WAV-Datei. Neu erzeugen?', { title: pickTitle(asset) }))));
+    if (!wav.available && !confirm(t('library.messages.wavConvertConfirm', '„{{title}}“ lokal nach WAV konvertieren?\n\nDie Originaldatei bleibt unverändert. Die WAV-Datei wird als zusätzlicher Inhalt gespeichert.', { title: pickTitle(asset) }))) return;
     setWavLoadingIds((current) => new Set([...current, asset.id]));
     try {
       const result = await api.archive.convertToWav(asset.id, { force: shouldForce });
-      notify(result?.already_wav ? 'Audio liegt bereits als WAV vor.' : result?.created ? 'WAV-Datei wurde erzeugt.' : 'WAV-Datei ist bereits vorhanden.', 'success');
+      notify(result?.already_wav ? t('library.messages.alreadyWav', 'Audio liegt bereits als WAV vor.') : result?.created ? t('library.messages.wavCreated', 'WAV-Datei wurde erzeugt.') : t('library.messages.wavExists', 'WAV-Datei ist bereits vorhanden.'), 'success');
       await onReload?.();
       if (download && result?.download_url) {
         const link = document.createElement('a');
@@ -1811,7 +1831,7 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
         link.remove();
       }
     } catch (err) {
-      notify(err?.message || 'WAV-Konvertierung fehlgeschlagen.', 'error');
+      notify(err?.message || t('library.messages.wavFailed', 'WAV-Konvertierung fehlgeschlagen.'), 'error');
     } finally {
       setWavLoadingIds((current) => {
         const next = new Set(current);
@@ -1828,56 +1848,56 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
       {
         kind: 'srt',
         label: 'SRT',
-        detail: 'Untertiteldatei und SRT-Datensatz',
+        detail: t('library.content.srtDetail', 'Untertiteldatei und SRT-Datensatz'),
         available: Boolean(srtState.exists && srtState.srt_text),
       },
       {
         kind: 'timestamped_lyrics',
         label: 'Timestamped Lyrics',
-        detail: 'synchronisierte Lyrics aus Metadaten',
+        detail: t('library.content.timestampedDetail', 'synchronisierte Lyrics aus Metadaten'),
         available: Boolean(metadata.timestamped_lyrics || metadata.timestampedLyrics),
       },
       {
         kind: 'cover',
         label: 'Cover',
-        detail: 'lokaler Cover-Cache',
+        detail: t('library.content.coverDetail', 'lokaler Cover-Cache'),
         available: Boolean(isCoverCached(asset) || asset.image_url),
       },
       {
         kind: 'audio',
-        label: 'Lokale Audiodatei',
-        detail: 'nur lokale Datei/Cache, nicht der Library-Eintrag',
+        label: t('library.content.localAudio', 'Lokale Audiodatei'),
+        detail: t('library.content.localAudioDetail', 'nur lokale Datei/Cache, nicht der Library-Eintrag'),
         available: Boolean(asset.local_path || asset.public_url),
       },
       {
         kind: 'wav',
-        label: 'WAV-Datei',
-        detail: 'lokal konvertierte WAV-Datei',
+        label: t('library.content.wavFile', 'WAV-Datei'),
+        detail: t('library.content.wavDetail', 'lokal konvertierte WAV-Datei'),
         available: readAssetWavConversion(asset).available,
       },
       {
         kind: 'lyrics',
         label: 'Songtext / Prompt',
-        detail: 'Lyrics/Prompt aus Datenbank-Metadaten',
+        detail: t('library.content.lyricsDetail', 'Lyrics/Prompt aus Datenbank-Metadaten'),
         available: Boolean(pickPrompt(asset) || pickLyrics(asset)),
         danger: true,
       },
       {
         kind: 'stems',
-        label: 'Stem-Dateien',
-        detail: 'Vocals und Instrumental aus lokaler Stem-Erzeugung',
+        label: t('library.content.stemFiles', 'Stem-Dateien'),
+        detail: t('library.content.stemDetail', 'Vocals und Instrumental aus lokaler Stem-Erzeugung'),
         available: readAssetStems(asset).available,
       },
       {
         kind: 'waveform',
         label: 'Waveform',
-        detail: 'berechnete Wellenformdaten',
+        detail: t('library.content.waveformDetail', 'berechnete Wellenformdaten'),
         available: Boolean(asset.waveform_json),
       },
       {
         kind: 'structure',
-        label: 'Songstruktur',
-        detail: 'erkannte Struktursegmente',
+        label: t('library.content.songStructure', 'Songstruktur'),
+        detail: t('library.content.structureDetail', 'erkannte Struktursegmente'),
         available: Boolean(asset.structure_segments_json),
       },
     ].filter((item) => item.available);
@@ -1886,11 +1906,11 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
   async function deleteAssetSingleContent(asset, item) {
     const title = pickTitle(asset);
     const extraWarning = item.kind === 'lyrics'
-      ? '\n\nAchtung: Dadurch werden Songtext/Prompt aus den gespeicherten Metadaten dieses Assets entfernt. Die Audiodatei bleibt erhalten.'
+      ? t('library.messages.deleteLyricsWarning', '\n\nAchtung: Dadurch werden Songtext/Prompt aus den gespeicherten Metadaten dieses Assets entfernt. Die Audiodatei bleibt erhalten.')
       : item.kind === 'audio'
-        ? '\n\nDie Library-Variante bleibt erhalten, aber die lokale Audiodatei wird entfernt. Remote-Quelle bleibt, falls vorhanden.'
+        ? t('library.messages.deleteAudioWarning', '\n\nDie Library-Variante bleibt erhalten, aber die lokale Audiodatei wird entfernt. Remote-Quelle bleibt, falls vorhanden.')
         : '';
-    if (!confirm(`${item.label} von „${title}“ wirklich löschen?\n\n${item.detail}.${extraWarning}`)) return;
+    if (!confirm(t('library.messages.deleteSingleContentConfirm', '{{label}} von „{{title}}“ wirklich löschen?\n\n{{detail}}.{{warning}}', { label: item.label, title, detail: item.detail, warning: extraWarning }))) return;
     try {
       await api.archive.deleteAssetContent(asset.id, item.kind);
       if (item.kind === 'srt') {
@@ -1898,10 +1918,10 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
         setSrtDraftByAsset((current) => ({ ...current, [asset.id]: [] }));
         setSrtEditorOpen(asset.id, false);
       }
-      notify(`${item.label} wurde gelöscht.`, 'success');
+      notify(t('library.messages.singleContentDeleted', '{{label}} wurde gelöscht.', { label: item.label }), 'success');
       await onReload?.();
     } catch (err) {
-      notify(err?.message || `${item.label} konnte nicht gelöscht werden.`, 'error');
+      notify(err?.message || t('library.messages.singleContentDeleteFailed', '{{label}} konnte nicht gelöscht werden.', { label: item.label }), 'error');
     }
   }
 
@@ -1946,15 +1966,15 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
   function generationOptionsLines(asset) {
     const options = getGenerationOptions(asset);
     return [
-      ['Negative Tags', options.negative_tags || '—'],
-      ['Vocal Gender', formatVocalGender(options.vocal_gender)],
-      ['Style Weight', options.styleWeight !== '' ? options.styleWeight : '—'],
-      ['Weirdness', options.weirdnessConstraint !== '' ? options.weirdnessConstraint : '—'],
-      ['Audio Weight', options.audioWeight !== '' ? options.audioWeight : '—'],
-      ['Persona ID', options.personaId ? shortId(options.personaId, 22) : '—'],
-      ['Persona Model', options.personaModel || '—'],
-      ['Custom Mode', formatBoolean(options.customMode)],
-      ['Instrumental', formatBoolean(options.instrumental)],
+      [t('library.generationOptions.negativeTags', 'Negative Tags'), options.negative_tags || '—'],
+      [t('library.generationOptions.vocalGender', 'Vocal Gender'), formatVocalGender(options.vocal_gender, t)],
+      [t('library.generationOptions.styleWeight', 'Style Weight'), options.styleWeight !== '' ? options.styleWeight : '—'],
+      [t('library.generationOptions.weirdness', 'Weirdness'), options.weirdnessConstraint !== '' ? options.weirdnessConstraint : '—'],
+      [t('library.generationOptions.audioWeight', 'Audio Weight'), options.audioWeight !== '' ? options.audioWeight : '—'],
+      [t('library.generationOptions.personaId', 'Persona ID'), options.personaId ? shortId(options.personaId, 22) : '—'],
+      [t('library.generationOptions.personaModel', 'Persona Model'), options.personaModel || '—'],
+      [t('library.generationOptions.customMode', 'Custom Mode'), formatBoolean(options.customMode, t)],
+      [t('library.generationOptions.instrumental', 'Instrumental'), formatBoolean(options.instrumental, t)],
     ];
   }
 
@@ -1964,24 +1984,24 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
     return [
       {
         className: 'generation-options-row negative-tags-row',
-        items: [{ label: 'Negative Tags', value: options.negative_tags || missing, copyValue: options.negative_tags || '' }]
+        items: [{ label: t('library.generationOptions.negativeTags', 'Negative Tags'), value: options.negative_tags || missing, copyValue: options.negative_tags || '' }]
       },
       {
         className: 'generation-options-row main-options-row',
         items: [
-          { label: 'Vocal Gender', value: formatVocalGender(options.vocal_gender), copyValue: options.vocal_gender || '' },
-          { label: 'Style Weight', value: options.styleWeight !== '' ? options.styleWeight : missing, copyValue: options.styleWeight !== '' ? options.styleWeight : '' },
-          { label: 'Weirdness', value: options.weirdnessConstraint !== '' ? options.weirdnessConstraint : missing, copyValue: options.weirdnessConstraint !== '' ? options.weirdnessConstraint : '' },
-          { label: 'Audio Weight', value: options.audioWeight !== '' ? options.audioWeight : missing, copyValue: options.audioWeight !== '' ? options.audioWeight : '' },
-          { label: 'Custom Mode', value: formatBoolean(options.customMode), copyValue: options.customMode === null || options.customMode === undefined || options.customMode === '' ? '' : formatBoolean(options.customMode) },
-          { label: 'Instrumental', value: formatBoolean(options.instrumental), copyValue: options.instrumental === null || options.instrumental === undefined || options.instrumental === '' ? '' : formatBoolean(options.instrumental) },
+          { label: t('library.generationOptions.vocalGender', 'Vocal Gender'), value: formatVocalGender(options.vocal_gender, t), copyValue: options.vocal_gender || '' },
+          { label: t('library.generationOptions.styleWeight', 'Style Weight'), value: options.styleWeight !== '' ? options.styleWeight : missing, copyValue: options.styleWeight !== '' ? options.styleWeight : '' },
+          { label: t('library.generationOptions.weirdness', 'Weirdness'), value: options.weirdnessConstraint !== '' ? options.weirdnessConstraint : missing, copyValue: options.weirdnessConstraint !== '' ? options.weirdnessConstraint : '' },
+          { label: t('library.generationOptions.audioWeight', 'Audio Weight'), value: options.audioWeight !== '' ? options.audioWeight : missing, copyValue: options.audioWeight !== '' ? options.audioWeight : '' },
+          { label: t('library.generationOptions.customMode', 'Custom Mode'), value: formatBoolean(options.customMode, t), copyValue: options.customMode === null || options.customMode === undefined || options.customMode === '' ? '' : formatBoolean(options.customMode, t) },
+          { label: t('library.generationOptions.instrumental', 'Instrumental'), value: formatBoolean(options.instrumental, t), copyValue: options.instrumental === null || options.instrumental === undefined || options.instrumental === '' ? '' : formatBoolean(options.instrumental, t) },
         ]
       },
       {
         className: 'generation-options-row persona-options-row',
         items: [
-          { label: 'Persona ID', value: options.personaId ? shortId(options.personaId, 22) : missing, copyValue: options.personaId || '' },
-          { label: 'Persona Model', value: options.personaModel || missing, copyValue: options.personaModel || '' },
+          { label: t('library.generationOptions.personaId', 'Persona ID'), value: options.personaId ? shortId(options.personaId, 22) : missing, copyValue: options.personaId || '' },
+          { label: t('library.generationOptions.personaModel', 'Persona Model'), value: options.personaModel || missing, copyValue: options.personaModel || '' },
         ]
       },
     ];
@@ -1996,8 +2016,8 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
     return (
       <div className="meta-card wide generation-options-card">
         <div className="row between">
-          <h4>Verwendete Optionen</h4>
-          <button type="button" onClick={async () => { await copyToClipboard(generationOptionsText(asset)); notify('Optionen kopiert.', 'success'); }}><Copy size={14} /></button>
+          <h4>{t('library.generationOptions.title', 'Verwendete Optionen')}</h4>
+          <button type="button" onClick={async () => { await copyToClipboard(generationOptionsText(asset)); notify(t('library.messages.optionsCopied', 'Optionen kopiert.'), 'success'); }}><Copy size={14} /></button>
         </div>
         <div className="generation-options-rows">
           {generationOptionsRows(asset).map((row) => (
@@ -2009,12 +2029,12 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
                     <button
                       type="button"
                       className="generation-option-copy"
-                      title={`${label} kopieren`}
-                      aria-label={`${label} kopieren`}
+                      title={t('library.messages.copyLabel', `${label} kopieren`, { label })}
+                      aria-label={t('library.messages.copyLabel', `${label} kopieren`, { label })}
                       disabled={!String(copyValue || '').trim()}
                       onClick={async () => {
                         await copyToClipboard(String(copyValue || value || ''));
-                        notify(`${label} kopiert.`, 'success');
+                        notify(t('library.messages.labelCopied', '{{label}} kopiert.', { label }), 'success');
                       }}
                     >
                       <Copy size={13} />
@@ -2050,14 +2070,14 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
     try {
       const result = await api.archive.generateAudioAiAnalysis(asset.id, { profile: 'standard', include_ai_report: true, force });
       if (result?.queued) {
-        notify('Audioanalyse wurde gestartet. Der Fortschritt ist auf der Statusseite sichtbar.', 'success');
+        notify(t('library.messages.audioAnalysisStarted', 'Audioanalyse wurde gestartet. Der Fortschritt ist auf der Statusseite sichtbar.'), 'success');
       } else if (result?.analysis) {
         setAudioAnalysisModal({ asset, analysis: result.analysis });
-        notify('Audioanalyse ist bereits vorhanden.', 'success');
+        notify(t('library.messages.audioAnalysisExists', 'Audioanalyse ist bereits vorhanden.'), 'success');
       }
       await preserveWindowScrollAsync(() => onReload?.());
     } catch (err) {
-      notify(err?.message || 'Audioanalyse konnte nicht gestartet werden.', 'error');
+      notify(err?.message || t('library.messages.audioAnalysisStartFailed', 'Audioanalyse konnte nicht gestartet werden.'), 'error');
     } finally {
       setAudioAnalysisLoading(asset.id, false);
     }
@@ -2068,13 +2088,13 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
     try {
       const result = await api.archive.generateAiTags(asset.id, { force });
       if (result?.queued) {
-        notify('KI-Tagging wurde gestartet. Der Fortschritt ist auf der Statusseite sichtbar.', 'success');
+        notify(t('library.messages.aiTaggingStarted', 'KI-Tagging wurde gestartet. Der Fortschritt ist auf der Statusseite sichtbar.'), 'success');
       } else if (result?.ai_tags) {
-        notify('KI-Tags sind bereits vorhanden.', 'success');
+        notify(t('library.messages.aiTagsExist', 'KI-Tags sind bereits vorhanden.'), 'success');
       }
       await preserveWindowScrollAsync(() => onReload?.());
     } catch (err) {
-      notify(err?.message || 'KI-Tags konnten nicht gestartet werden.', 'error');
+      notify(err?.message || t('library.messages.aiTagsStartFailed', 'KI-Tags konnten nicht gestartet werden.'), 'error');
     }
   }
 
@@ -2084,12 +2104,12 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
     try {
       const analysis = await refreshAudioAiAnalysis(asset);
       if (!analysis) {
-        notify('Für diese Variante ist noch kein Audioanalyse-Report vorhanden.', 'error');
+        notify(t('library.messages.noAudioAnalysisReport', 'Für diese Variante ist noch kein Audioanalyse-Report vorhanden.'), 'error');
         return;
       }
       setAudioAnalysisModal({ asset, analysis });
     } catch (err) {
-      notify(err?.message || 'Audioanalyse-Report konnte nicht geladen werden.', 'error');
+      notify(err?.message || t('library.messages.audioAnalysisReportLoadFailed', 'Audioanalyse-Report konnte nicht geladen werden.'), 'error');
     } finally {
       setAudioAnalysisLoading(asset.id, false);
     }
@@ -2097,44 +2117,44 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
 
   async function copyAudioAiAnalysisBlock(block) {
     await copyToClipboard(`${block.title}\n\n${block.text}`.trim());
-    notify('Report-Block kopiert.', 'success');
+    notify(t('library.messages.reportBlockCopied', 'Report-Block kopiert.'), 'success');
   }
 
   async function copyAudioAiAnalysisReport(analysis) {
-    const text = audioAiAnalysisBlocks(analysis).map((block) => `${block.title}\n${block.text}`).join('\n\n');
+    const text = audioAiAnalysisBlocks(analysis, t).map((block) => `${block.title}\n${block.text}`).join('\n\n');
     await copyToClipboard(text);
-    notify('Audioanalyse-Report kopiert.', 'success');
+    notify(t('library.messages.audioAnalysisReportCopied', 'Audioanalyse-Report kopiert.'), 'success');
   }
 
   function downloadAudioAiAnalysisReport(analysis, asset) {
     const text = JSON.stringify(analysis || {}, null, 2);
     downloadTextFile(`${safeFilename(pickTitle(asset) || 'audioanalyse')}-audio-ai-analysis.json`, text, 'application/json;charset=utf-8');
-    notify('Audioanalyse-JSON wurde heruntergeladen.', 'success');
+    notify(t('library.messages.audioAnalysisJsonDownloaded', 'Audioanalyse-JSON wurde heruntergeladen.'), 'success');
   }
 
   function AudioAiAnalysisCard({ asset }) {
     const analysis = readAudioAiAnalysis(asset);
     const loading = audioAnalysisLoadingIds.has(asset.id);
-    const statusLabel = loading ? 'läuft' : analysis ? 'fertig' : 'nicht erstellt';
+    const statusLabel = loading ? t('library.status.running', 'läuft') : analysis ? t('library.status.done', 'fertig') : t('library.status.notCreated', 'nicht erstellt');
     return (
       <div className="meta-card wide audio-ai-analysis-card">
         <div className="row between align-start">
           <div>
-            <h4>Lokale Audioanalyse</h4>
-            <p className="muted">Tempo, Beatgrid, Lautheit und ein kompakter Report werden lokal gespeichert.</p>
+            <h4>{t('library.audioAnalysis.title', 'Lokale Audioanalyse')}</h4>
+            <p className="muted">{t('library.audioAnalysis.text', 'Tempo, Beatgrid, Lautheit und ein kompakter Report werden lokal gespeichert.')}</p>
           </div>
           <span className={`status ${analysis ? 'cached' : loading ? 'processing' : ''}`}>{statusLabel}</span>
         </div>
-        {analysis?.generated_at && <p className="muted">Erstellt: {formatDate(analysis.generated_at)}{analysis?.summary?.bpm ? ` · ${analysis.summary.bpm} BPM` : ''}{analysis?.task_local_id ? ` · Status-Task #${analysis.task_local_id}` : ''}</p>}
+        {analysis?.generated_at && <p className="muted">{t('library.createdAt', 'Erstellt')}: {formatDate(analysis.generated_at)}{analysis?.summary?.bpm ? ` · ${analysis.summary.bpm} BPM` : ''}{analysis?.task_local_id ? ` · Status-Task #${analysis.task_local_id}` : ''}</p>}
         <div className="button-row wrap">
-          <button className="primary" type="button" onClick={() => generateAudioAiAnalysis(asset, Boolean(analysis))} disabled={loading || !isAudioLocal(asset)}>{loading ? 'Analyse läuft…' : analysis ? 'Analyse neu erstellen' : 'Analyse starten'}</button>
-          <button type="button" onClick={() => openAudioAiAnalysisReport(asset)} disabled={loading || !analysis}><FileText size={15} /> Report öffnen</button>
+          <button className="primary" type="button" onClick={() => generateAudioAiAnalysis(asset, Boolean(analysis))} disabled={loading || !isAudioLocal(asset)}>{loading ? t('library.actions.analysisRunning', 'Analyse läuft…') : analysis ? t('library.actions.regenerateAnalysis', 'Analyse neu erstellen') : t('library.actions.startAnalysis', 'Analyse starten')}</button>
+          <button type="button" onClick={() => openAudioAiAnalysisReport(asset)} disabled={loading || !analysis}><FileText size={15} /> {t('library.actions.openReport', 'Report öffnen')}</button>
           {analysis?.exports?.markdown && <a className="button" href={api.archive.audioAiAnalysisExportUrl(asset.id, 'markdown')}><Download size={15} /> Markdown</a>}
           {analysis && <a className="button" href={api.archive.audioAiAnalysisExportUrl(asset.id, 'html')}><Download size={15} /> HTML</a>}
           {analysis && <a className="button" href={api.archive.audioAiAnalysisExportUrl(asset.id, 'pdf')}><Download size={15} /> PDF</a>}
           {analysis?.exports?.beatgrid_csv && <a className="button" href={api.archive.audioAiAnalysisExportUrl(asset.id, 'beatgrid_csv')}><Download size={15} /> Beatgrid CSV</a>}
         </div>
-        {!isAudioLocal(asset) && <p className="warning-text">Die Analyse benötigt eine lokal gespeicherte Audiodatei.</p>}
+        {!isAudioLocal(asset) && <p className="warning-text">{t('library.audioAnalysis.needsLocalAudio', 'Die Analyse benötigt eine lokal gespeicherte Audiodatei.')}</p>}
       </div>
     );
   }
@@ -2146,16 +2166,16 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
       <div className="meta-card wide library-ai-tags-card">
         <div className="row between align-start">
           <div>
-            <h4>KI-Library-Tags</h4>
-            <p className="muted">Kompakte Such-Tags fuer die zentrale Header-Suche.</p>
+            <h4>{t('library.aiTags.title', 'KI-Library-Tags')}</h4>
+            <p className="muted">{t('library.aiTags.text', 'Kompakte Such-Tags fuer die zentrale Header-Suche.')}</p>
           </div>
-          <span className={`status ${tags.length ? 'cached' : ''}`}>{tags.length ? `${tags.length} Tags` : 'nicht erstellt'}</span>
+          <span className={`status ${tags.length ? 'cached' : ''}`}>{tags.length ? t('library.aiTags.count', '{{count}} Tags', { count: tags.length }) : t('library.status.notCreated', 'nicht erstellt')}</span>
         </div>
         {tags.length > 0 && <div className="ai-tag-chip-row">{tags.map((tag) => <span className="ai-tag-chip" key={tag}>{tag}</span>)}</div>}
-        {aiTags?.generated_at && <p className="muted">Erstellt: {formatDate(aiTags.generated_at)}{aiTags?.confidence ? ` · Sicherheit ${Math.round(Number(aiTags.confidence) * 100)}%` : ''}</p>}
+        {aiTags?.generated_at && <p className="muted">{t('library.createdAt', 'Erstellt')}: {formatDate(aiTags.generated_at)}{aiTags?.confidence ? ` · ${t('library.confidence', 'Sicherheit')} ${Math.round(Number(aiTags.confidence) * 100)}%` : ''}</p>}
         <div className="button-row wrap">
-          <button type="button" className="primary" onClick={() => generateLibraryAiTags(asset, Boolean(aiTags))}><Tag size={15} /> {aiTags ? 'Tags neu erzeugen' : 'Tags erzeugen'}</button>
-          <button type="button" disabled={!tags.length} onClick={async () => { await copyToClipboard(tags.join(', ')); notify('KI-Tags kopiert.', 'success'); }}><Copy size={14} /> Tags kopieren</button>
+          <button type="button" className="primary" onClick={() => generateLibraryAiTags(asset, Boolean(aiTags))}><Tag size={15} /> {aiTags ? t('library.aiTags.regenerate', 'Tags neu erzeugen') : t('library.aiTags.generate', 'Tags erzeugen')}</button>
+          <button type="button" disabled={!tags.length} onClick={async () => { await copyToClipboard(tags.join(', ')); notify(t('library.messages.aiTagsCopied', 'KI-Tags kopiert.'), 'success'); }}><Copy size={14} /> {t('library.aiTags.copy', 'Tags kopieren')}</button>
         </div>
       </div>
     );
@@ -2164,7 +2184,7 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
 
   async function fetchTimestampedLyrics(asset) {
     if (!asset?.audio_id) {
-      notify('Für diese Variante fehlt die Audio-ID. Timestamped Lyrics können nicht abgerufen werden.', 'error');
+      notify(t('library.messages.timestampedMissingAudioId', 'Für diese Variante fehlt die Audio-ID. Timestamped Lyrics können nicht abgerufen werden.'), 'error');
       return;
     }
     setTimestampLoading(true);
@@ -2179,10 +2199,10 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
         }
       };
       setTimestampAsset(updatedAsset);
-      notify('Timestamped Lyrics wurden abgerufen und gespeichert.', 'success');
+      notify(t('library.messages.timestampedFetched', 'Timestamped Lyrics wurden abgerufen und gespeichert.'), 'success');
       await onReload?.();
     } catch (err) {
-      notify(err?.message || 'Timestamped Lyrics konnten nicht abgerufen werden.', 'error');
+      notify(err?.message || t('library.messages.timestampedFetchFailed', 'Timestamped Lyrics konnten nicht abgerufen werden.'), 'error');
     } finally {
       setTimestampLoading(false);
     }
@@ -2190,16 +2210,16 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
 
   async function copyTimestampedLyrics(asset) {
     const text = timestampedLyricsText(asset);
-    if (!text) return notify('Noch keine Timestamped Lyrics vorhanden.', 'error');
+    if (!text) return notify(t('library.messages.noTimestampedLyrics', 'Noch keine Timestamped Lyrics vorhanden.'), 'error');
     await copyToClipboard(text);
-    notify('Timestamped Lyrics kopiert.', 'success');
+    notify(t('library.messages.timestampedCopied', 'Timestamped Lyrics kopiert.'), 'success');
   }
 
   function downloadTimestampedLyrics(asset) {
     const text = timestampedLyricsText(asset);
-    if (!text) return notify('Noch keine Timestamped Lyrics vorhanden.', 'error');
+    if (!text) return notify(t('library.messages.noTimestampedLyrics', 'Noch keine Timestamped Lyrics vorhanden.'), 'error');
     downloadTextFile(`${safeFilename(pickTitle(asset))} - timestamped-lyrics.json`, text, 'application/json;charset=utf-8');
-    notify('Timestamped Lyrics wurden heruntergeladen.', 'success');
+    notify(t('library.messages.timestampedDownloaded', 'Timestamped Lyrics wurden heruntergeladen.'), 'success');
   }
 
   function setSrtLoading(assetId, loading) {
@@ -2283,9 +2303,9 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
             const state = await refreshSrt(assetId);
             notifySrtUpdated(assetId, state);
           } catch (refreshError) {
-            notify(refreshError?.message || 'SRT wurde erzeugt, konnte aber noch nicht geladen werden.', 'warning');
+            notify(refreshError?.message || t('library.messages.srtCreatedLoadPending', 'SRT wurde erzeugt, konnte aber noch nicht geladen werden.'), 'warning');
           }
-          notify(`SRT fertig${assetTitle ? `: ${assetTitle}` : ''}.`, 'success');
+          notify(t('library.messages.srtDone', 'SRT fertig{{title}}.', { title: assetTitle ? `: ${assetTitle}` : '' }), 'success');
           await onReload?.();
           setSrtLoading(assetId, false);
           return;
@@ -2305,14 +2325,14 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
         }
       } catch (err) {
         if (watcher.attempts >= 3) {
-          notify(err?.message || `SRT-Status für Task #${taskId} konnte nicht geladen werden.`, 'warning');
+          notify(err?.message || t('library.messages.srtTaskStatusLoadFailed', 'SRT-Status für Task #{{task}} konnte nicht geladen werden.', { task: taskId }), 'warning');
         }
       }
 
       if (watcher.attempts >= 120) {
         clearSrtTaskWatcher(assetId);
         setSrtLoading(assetId, false);
-        notify(`SRT-Task #${taskId} läuft weiterhin. Die Statusseite zeigt den aktuellen Stand.`, 'warning');
+        notify(t('library.messages.srtTaskStillRunning', 'SRT-Task #{{task}} läuft weiterhin. Die Statusseite zeigt den aktuellen Stand.', { task: taskId }), 'warning');
         await onReload?.();
         return;
       }
@@ -2348,7 +2368,7 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
           }
         }));
         notifySrtUpdated(asset.id, { audio_asset_id: asset.id, status: 'running', task_local_id: taskId });
-        notify(`SRT-Erzeugung gestartet: Task #${taskId || '—'}.`, 'info');
+        notify(t('library.messages.srtGenerationStarted', 'SRT-Erzeugung gestartet: Task #{{task}}.', { task: taskId || '—' }), 'info');
         if (taskId) {
           keepLoadingForWatcher = true;
           startSrtTaskWatcher(asset, taskId);
@@ -2370,12 +2390,12 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
       }
       setSrtByAsset((current) => ({ ...current, [asset.id]: result }));
       notifySrtUpdated(asset.id, result);
-      notify('SRT wurde erzeugt und gespeichert.', 'success');
+      notify(t('library.messages.srtCreatedSaved', 'SRT wurde erzeugt und gespeichert.'), 'success');
       await onReload?.();
     } catch (err) {
       clearSrtTaskWatcher(asset.id);
-      setSrtByAsset((current) => ({ ...current, [asset.id]: { audio_asset_id: asset.id, exists: false, status: 'error', error_message: err?.message || 'SRT-Erzeugung fehlgeschlagen.' } }));
-      notify(err?.message || 'SRT-Erzeugung fehlgeschlagen.', 'error');
+      setSrtByAsset((current) => ({ ...current, [asset.id]: { audio_asset_id: asset.id, exists: false, status: 'error', error_message: err?.message || t('library.messages.srtGenerationFailed', 'SRT-Erzeugung fehlgeschlagen.') } }));
+      notify(err?.message || t('library.messages.srtGenerationFailed', 'SRT-Erzeugung fehlgeschlagen.'), 'error');
       await onReload?.();
     } finally {
       if (!keepLoadingForWatcher) setSrtLoading(asset.id, false);
@@ -2385,33 +2405,33 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
   async function copySrt(asset) {
     const state = srtByAsset[asset?.id] || await refreshSrt(asset.id);
     const text = state?.srt_text || '';
-    if (!text.trim()) return notify('Für diese Variante ist noch keine SRT vorhanden.', 'error');
+    if (!text.trim()) return notify(t('library.messages.noSrtForVariant', 'Für diese Variante ist noch keine SRT vorhanden.'), 'error');
     await copyToClipboard(text);
-    notify('SRT wurde kopiert.', 'success');
+    notify(t('library.messages.srtCopied', 'SRT wurde kopiert.'), 'success');
   }
 
   async function downloadSrtText(asset) {
     const state = srtByAsset[asset?.id] || await refreshSrt(asset.id);
     const text = state?.srt_text || '';
-    if (!text.trim()) return notify('Für diese Variante ist noch keine SRT vorhanden.', 'error');
+    if (!text.trim()) return notify(t('library.messages.noSrtForVariant', 'Für diese Variante ist noch keine SRT vorhanden.'), 'error');
     downloadTextFile(state.srt_filename || `${safeFilename(pickTitle(asset))}.srt`, text, 'application/x-subrip;charset=utf-8');
-    notify('SRT wurde heruntergeladen.', 'success');
+    notify(t('library.messages.srtDownloaded', 'SRT wurde heruntergeladen.'), 'success');
   }
 
   async function copyHalfSrt(asset) {
     const state = srtByAsset[asset?.id] || await refreshSrt(asset.id);
     const text = state?.half_srt_text || '';
-    if (!text.trim()) return notify('Für diese Variante ist noch keine Half-SRT vorhanden.', 'error');
+    if (!text.trim()) return notify(t('library.messages.noHalfSrtForVariant', 'Für diese Variante ist noch keine Half-SRT vorhanden.'), 'error');
     await copyToClipboard(text);
-    notify('Half-SRT wurde kopiert.', 'success');
+    notify(t('library.messages.halfSrtCopied', 'Half-SRT wurde kopiert.'), 'success');
   }
 
   async function downloadHalfSrtText(asset) {
     const state = srtByAsset[asset?.id] || await refreshSrt(asset.id);
     const text = state?.half_srt_text || '';
-    if (!text.trim()) return notify('Für diese Variante ist noch keine Half-SRT vorhanden.', 'error');
+    if (!text.trim()) return notify(t('library.messages.noHalfSrtForVariant', 'Für diese Variante ist noch keine Half-SRT vorhanden.'), 'error');
     downloadTextFile(state.half_srt_filename || `${safeFilename(pickTitle(asset))}.half.srt`, text, 'application/x-subrip;charset=utf-8');
-    notify('Half-SRT wurde heruntergeladen.', 'success');
+    notify(t('library.messages.halfSrtDownloaded', 'Half-SRT wurde heruntergeladen.'), 'success');
   }
 
   function setSrtSaving(assetId, saving) {
@@ -2449,7 +2469,7 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
     const next = current[insertAt] || null;
     const start = Math.max(0, Number(startOverride ?? playbackState?.currentTime ?? previous?.end ?? 0));
     const end = next ? Math.min(Math.max(start + 1, start + 0.25), Number(next.start || start + 2)) : start + 2;
-    const row = normalizeSrtSegment({ start, end, text: textOverride || 'Neue Untertitel-Zeile' }, insertAt);
+    const row = normalizeSrtSegment({ start, end, text: textOverride || t('library.srt.newSubtitleLine', 'Neue Untertitel-Zeile') }, insertAt);
     const merged = [...current.slice(0, insertAt), row, ...current.slice(insertAt)].map(normalizeSrtSegment);
     setSrtDraftByAsset((map) => ({ ...map, [asset.id]: merged }));
     setSrtEditorOpen(asset.id, true);
@@ -2465,17 +2485,17 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
   async function saveSrtEditor(asset) {
     if (!asset?.id) return;
     const segments = draftSegmentsForAsset(asset).filter((row) => row.text.trim());
-    if (!segments.length) return notify('Keine SRT-Segmente zum Speichern vorhanden.', 'error');
+    if (!segments.length) return notify(t('library.messages.noSrtSegmentsToSave', 'Keine SRT-Segmente zum Speichern vorhanden.'), 'error');
     setSrtSaving(asset.id, true);
     try {
       const result = await api.archive.updateSrt(asset.id, { segments });
       setSrtByAsset((current) => ({ ...current, [asset.id]: result }));
       setSrtDraftByAsset((current) => ({ ...current, [asset.id]: srtSegmentsFromState(result) }));
       notifySrtUpdated(asset.id, result);
-      notify('SRT-Segmente wurden gespeichert.', 'success');
+      notify(t('library.messages.srtSegmentsSaved', 'SRT-Segmente wurden gespeichert.'), 'success');
       await onReload?.();
     } catch (err) {
-      notify(err?.message || 'SRT-Segmente konnten nicht gespeichert werden.', 'error');
+      notify(err?.message || t('library.messages.srtSegmentsSaveFailed', 'SRT-Segmente konnten nicht gespeichert werden.'), 'error');
     } finally {
       setSrtSaving(asset.id, false);
     }
@@ -2484,7 +2504,7 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
   function resetSrtEditor(asset) {
     if (!asset?.id) return;
     setSrtDraftByAsset((current) => ({ ...current, [asset.id]: srtSegmentsFromState(srtByAsset[asset.id] || {}) }));
-    notify('SRT-Editor wurde auf gespeicherte Daten zurückgesetzt.', 'info');
+    notify(t('library.messages.srtEditorReset', 'SRT-Editor wurde auf gespeicherte Daten zurückgesetzt.'), 'info');
   }
 
   function openSrtAssistant(asset) {
@@ -2503,15 +2523,15 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
       <div className="meta-card wide asset-content-manager">
         <div className="row between align-start">
           <div>
-            <h4>Einzelinhalte</h4>
-            <p className="muted">Nur einzelne Bestandteile dieser Variante löschen. Die Song-Variante selbst bleibt erhalten.</p>
+            <h4>{t('library.content.title', 'Einzelinhalte')}</h4>
+            <p className="muted">{t('library.content.text', 'Nur einzelne Bestandteile dieser Variante löschen. Die Song-Variante selbst bleibt erhalten.')}</p>
           </div>
         </div>
         <div className="button-row wrap asset-content-actions">
-          <button className="primary" type="button" onClick={() => openWorkflowWizard(asset)}><FileText size={15} /> Audio-Wizard</button>
-          <button type="button" onClick={() => convertAssetToWav(asset, { download: true })} disabled={wavLoadingIds.has(asset.id) || !canConvertAssetToWav(asset)}><Download size={15} /> {wavLoadingIds.has(asset.id) ? 'Konvertiere…' : 'Convert to WAV'}</button>
-          {readAssetWavConversion(asset).available && <a className="button" href={api.archive.wavDownloadUrl(asset.id)}><Download size={15} /> WAV herunterladen</a>}
-          <a className="button" href={api.archive.assetBundleUrl(asset.id)}><Download size={15} /> Komplettes ZIP</a>
+          <button className="primary" type="button" onClick={() => openWorkflowWizard(asset)}><FileText size={15} /> {t('library.workflow.audioWizard', 'Audio-Wizard')}</button>
+          <button type="button" onClick={() => convertAssetToWav(asset, { download: true })} disabled={wavLoadingIds.has(asset.id) || !canConvertAssetToWav(asset)}><Download size={15} /> {wavLoadingIds.has(asset.id) ? t('library.actions.converting', 'Konvertiere…') : t('library.actions.convertToWav', 'Convert to WAV')}</button>
+          {readAssetWavConversion(asset).available && <a className="button" href={api.archive.wavDownloadUrl(asset.id)}><Download size={15} /> {t('library.actions.downloadWav', 'WAV herunterladen')}</a>}
+          <a className="button" href={api.archive.assetBundleUrl(asset.id)}><Download size={15} /> {t('library.actions.completeZip', 'Komplettes ZIP')}</a>
           {readAssetStems(asset).available && <a className="button" href={api.archive.stemsDownloadUrl(asset.id)}><Download size={15} /> Stems ZIP</a>}
           {readAssetStems(asset).files?.vocals && <a className="button" href={api.archive.stemDownloadUrl(asset.id, 'vocals')}><Download size={15} /> Vocals</a>}
           {readAssetStems(asset).files?.instrumental && <a className="button" href={api.archive.stemDownloadUrl(asset.id, 'instrumental')}><Download size={15} /> Instrumental</a>}
@@ -2526,7 +2546,7 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
               <button
                 className={`icon-danger ${item.danger ? 'danger' : ''}`.trim()}
                 type="button"
-                title={`${item.label} löschen`}
+                title={t('library.messages.deleteLabel', '{{label}} löschen', { label: item.label })}
                 onClick={() => deleteAssetSingleContent(asset, item)}
               >
                 <Trash2 size={15} />
@@ -2549,36 +2569,36 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
     const stems = readAssetStems(asset);
     const files = stems.files || {};
     const playableStems = [
-      files.vocals ? { kind: 'vocals', label: 'Vocals', description: 'Nur Stimme / Vocal-Stem' } : null,
-      files.instrumental ? { kind: 'instrumental', label: 'Instrumental', description: 'Instrumental ohne Vocals' } : null,
+      files.vocals ? { kind: 'vocals', label: 'Vocals', description: t('library.stems.vocalDescription', 'Nur Stimme / Vocal-Stem') } : null,
+      files.instrumental ? { kind: 'instrumental', label: 'Instrumental', description: t('library.stems.instrumentalDescription', 'Instrumental ohne Vocals') } : null,
     ].filter(Boolean);
     return (
-      <Modal open={Boolean(asset)} title={`Stem-Player: ${pickTitle(asset)}`} onClose={() => setStemPreviewAsset(null)} wide cardClassName="stem-preview-modal">
+      <Modal open={Boolean(asset)} title={t('library.stems.playerTitle', 'Stem-Player: {{title}}', { title: pickTitle(asset) })} onClose={() => setStemPreviewAsset(null)} wide cardClassName="stem-preview-modal">
         <div className="stem-preview stack">
           <div className="stem-preview-header">
             <img src={pickCover(asset)} alt="Cover" onError={handleCoverImageError} />
             <div>
-              <p className="eyebrow">Stem-Wiedergabe</p>
+              <p className="eyebrow">{t('library.stems.playback', 'Stem-Wiedergabe')}</p>
               <h3>{pickTitle(asset)}</h3>
-              <p className="muted">Die normale Wiedergabe wurde pausiert. Spiele Vocals oder Instrumental direkt hier im Modal ab.</p>
-              <p className="muted">{stems.backend ? `Backend: ${stems.backend}` : 'Stem-Dateien'}{stems.bpm ? ` · ${stems.bpm} BPM` : ''}</p>
+              <p className="muted">{t('library.stems.previewText', 'Die normale Wiedergabe wurde pausiert. Spiele Vocals oder Instrumental direkt hier im Modal ab.')}</p>
+              <p className="muted">{stems.backend ? `Backend: ${stems.backend}` : t('library.stems.files', 'Stem-Dateien')}{stems.bpm ? ` · ${stems.bpm} BPM` : ''}</p>
             </div>
           </div>
-          {!playableStems.length && <p className="warning-text">Für diese Variante sind noch keine abspielbaren Stem-Dateien vorhanden.</p>}
+          {!playableStems.length && <p className="warning-text">{t('library.stems.noPlayableFiles', 'Für diese Variante sind noch keine abspielbaren Stem-Dateien vorhanden.')}</p>}
           <div className="stem-preview-grid">
             {playableStems.map((stem) => (
               <section className="stem-preview-card" key={stem.kind}>
                 <div>
                   <p className="eyebrow">{stem.label}</p>
                   <h4>{stem.description}</h4>
-                  <p className="muted">{files[stem.kind]?.filename || files[stem.kind]?.local_path || 'Stem-Datei'}</p>
+                  <p className="muted">{files[stem.kind]?.filename || files[stem.kind]?.local_path || t('library.stems.file', 'Stem-Datei')}</p>
                 </div>
                 <audio controls preload="metadata" src={api.archive.stemStreamUrl(asset.id, stem.kind)} />
-                <a className="button" href={api.archive.stemDownloadUrl(asset.id, stem.kind)}><Download size={15} /> {stem.label} herunterladen</a>
+                <a className="button" href={api.archive.stemDownloadUrl(asset.id, stem.kind)}><Download size={15} /> {t('library.stems.downloadStem', '{{label}} herunterladen', { label: stem.label })}</a>
               </section>
             ))}
           </div>
-          {stems.available && <a className="button" href={api.archive.stemsDownloadUrl(asset.id)}><Download size={15} /> Alle Stems als ZIP herunterladen</a>}
+          {stems.available && <a className="button" href={api.archive.stemsDownloadUrl(asset.id)}><Download size={15} /> {t('library.stems.downloadAllZip', 'Alle Stems als ZIP herunterladen')}</a>}
         </div>
       </Modal>
     );
@@ -2591,21 +2611,21 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
       <div className="meta-card wide stem-card">
         <div className="row between align-start">
           <div>
-            <h4>Stem-Dateien</h4>
-            <p className="muted">Vocals und Instrumental lokal erzeugen und einzeln oder als ZIP herunterladen.</p>
+            <h4>{t('library.stems.title', 'Stem-Dateien')}</h4>
+            <p className="muted">{t('library.stems.text', 'Vocals und Instrumental lokal erzeugen und einzeln oder als ZIP herunterladen.')}</p>
           </div>
-          <span className={`status ${stems.available ? 'cached' : String(stems.status || '').toLowerCase() === 'failed' ? 'error' : loading ? 'processing' : ''}`}>{loading ? 'läuft' : stems.available ? 'fertig' : String(stems.status || '').toLowerCase() === 'failed' ? 'Fehler' : 'nicht erzeugt'}</span>
+          <span className={`status ${stems.available ? 'cached' : String(stems.status || '').toLowerCase() === 'failed' ? 'error' : loading ? 'processing' : ''}`}>{loading ? t('library.status.running', 'läuft') : stems.available ? t('library.status.done', 'fertig') : String(stems.status || '').toLowerCase() === 'failed' ? t('status.stats.error', 'Fehler') : t('library.status.notGenerated', 'nicht erzeugt')}</span>
         </div>
-        {stems.task_local_id && <p className="muted">Status-Task: #{stems.task_local_id} · im Status-Frontend sichtbar.</p>}
+        {stems.task_local_id && <p className="muted">{t('library.statusTaskVisible', 'Status-Task: #{{id}} · im Status-Frontend sichtbar.', { id: stems.task_local_id })}</p>}
         {stems.error_message && <p className="warning-text">{stems.error_message}</p>}
         <div className="button-row wrap">
-          <button className="primary" type="button" onClick={() => generateAssetStems(asset)} disabled={loading || !isAudioLocal(asset)}>{loading ? 'Erzeuge Stems…' : stems.available ? 'Stems neu erzeugen' : 'Stems erzeugen'}</button>
-          {stems.available && <button type="button" onClick={() => openStemPreview(asset)}><Headphones size={15} /> Stems abspielen</button>}
+          <button className="primary" type="button" onClick={() => generateAssetStems(asset)} disabled={loading || !isAudioLocal(asset)}>{loading ? t('library.stems.generating', 'Erzeuge Stems…') : stems.available ? t('library.actions.regenerateStems', 'Stems neu erzeugen') : t('library.bulk.createStems', 'Stems erzeugen')}</button>
+          {stems.available && <button type="button" onClick={() => openStemPreview(asset)}><Headphones size={15} /> {t('library.actions.playStems', 'Stems abspielen')}</button>}
           {stems.available && <a className="button" href={api.archive.stemsDownloadUrl(asset.id)}><Download size={15} /> Stems ZIP</a>}
           {stems.files?.vocals && <a className="button" href={api.archive.stemDownloadUrl(asset.id, 'vocals')}><Download size={15} /> Vocals</a>}
           {stems.files?.instrumental && <a className="button" href={api.archive.stemDownloadUrl(asset.id, 'instrumental')}><Download size={15} /> Instrumental</a>}
         </div>
-        <p className="muted">{stems.available ? `Backend: ${stems.backend || 'demucs'}${stems.bpm ? ` · ${stems.bpm} BPM` : ''}` : 'Benötigt lokal installiertes Demucs im FastAPI-Python-Environment.'}</p>
+        <p className="muted">{stems.available ? `Backend: ${stems.backend || 'demucs'}${stems.bpm ? ` · ${stems.bpm} BPM` : ''}` : t('library.stems.needsDemucs', 'Benötigt lokal installiertes Demucs im FastAPI-Python-Environment.')}</p>
       </div>
     );
   }
@@ -2613,37 +2633,37 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
   function AudioAiAnalysisReportModal() {
     const asset = audioAnalysisModal.asset;
     const analysis = audioAnalysisModal.analysis;
-    const blocks = audioAiAnalysisBlocks(analysis);
-    const metrics = audioAiAnalysisMetricCards(analysis);
+    const blocks = audioAiAnalysisBlocks(analysis, t);
+    const metrics = audioAiAnalysisMetricCards(analysis, t);
     const summary = analysis?.summary || {};
     const copyright = analysis?.copyright_analysis || {};
-    const leadText = audioAiReportLead(blocks, analysis);
+    const leadText = audioAiReportLead(blocks, analysis, t);
     return (
-      <Modal open={Boolean(asset && analysis)} title={asset ? `Audioanalyse-Report: ${pickTitle(asset)}` : 'Audioanalyse-Report'} onClose={() => setAudioAnalysisModal({ asset: null, analysis: null })} wide cardClassName="audio-ai-report-modal">
+      <Modal open={Boolean(asset && analysis)} title={asset ? t('library.audioAnalysis.reportTitleForAsset', 'Audioanalyse-Report: {{title}}', { title: pickTitle(asset) }) : t('library.audioAnalysis.reportTitle', 'Audioanalyse-Report')} onClose={() => setAudioAnalysisModal({ asset: null, analysis: null })} wide cardClassName="audio-ai-report-modal">
         {asset && analysis && <div className="stack audio-ai-report">
           <div className="audio-ai-report-hero">
             <div className="audio-ai-cover-frame">
               <img src={pickCover(asset)} alt="Cover" onError={handleCoverImageError} />
             </div>
             <div className="audio-ai-report-headline">
-              <p className="eyebrow">Lokaler Analysebericht</p>
+              <p className="eyebrow">{t('library.audioAnalysis.localReport', 'Lokaler Analysebericht')}</p>
               <h3>{pickTitle(asset)}</h3>
               <div className="audio-ai-meta-row">
                 <span>Asset #{asset.id}</span>
                 <span>{summary.duration_label || formatDuration(asset.duration_seconds)}</span>
                 <span>{formatDate(analysis.generated_at)}</span>
-                <span>App-interne Analyse</span>
+                <span>{t('library.audioAnalysis.internalAnalysis', 'App-interne Analyse')}</span>
               </div>
               {analysis?.ai_report?.error && <p className="warning-text">{analysis.ai_report.error}</p>}
               <div className="audio-ai-lead-card">
-                <span>Einschätzung</span>
+                <span>{t('library.audioAnalysis.assessment', 'Einschätzung')}</span>
                 <p>{leadText}</p>
               </div>
             </div>
           </div>
           <div className="audio-ai-report-actions button-row wrap">
-            <button type="button" onClick={() => copyAudioAiAnalysisReport(analysis)}><Copy size={15} /> Alles kopieren</button>
-            {analysis?.exports?.json && <a className="button" href={api.archive.audioAiAnalysisExportUrl(asset.id, 'json')}><Download size={15} /> JSON-Datei</a>}
+            <button type="button" onClick={() => copyAudioAiAnalysisReport(analysis)}><Copy size={15} /> {t('library.audioAnalysis.copyAll', 'Alles kopieren')}</button>
+            {analysis?.exports?.json && <a className="button" href={api.archive.audioAiAnalysisExportUrl(asset.id, 'json')}><Download size={15} /> {t('library.audioAnalysis.jsonFile', 'JSON-Datei')}</a>}
             {analysis?.exports?.markdown && <a className="button" href={api.archive.audioAiAnalysisExportUrl(asset.id, 'markdown')}><Download size={15} /> Markdown</a>}
             <a className="button" href={api.archive.audioAiAnalysisExportUrl(asset.id, 'html')}><Download size={15} /> HTML</a>
             <a className="button" href={api.archive.audioAiAnalysisExportUrl(asset.id, 'pdf')}><Download size={15} /> PDF</a>
@@ -2660,8 +2680,8 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
           </div>
           {Array.isArray(copyright.db_matches) && copyright.db_matches.length > 0 && (
             <div className="audio-ai-warning-strip">
-              <strong>AcoustID Treffer gefunden</strong>
-              <span>{copyright.db_matches.slice(0, 2).map((match) => `${match.title || 'Unbekannt'}${match.artist ? ` - ${match.artist}` : ''} (${match.score})`).join(' · ')}</span>
+              <strong>{t('library.audioAnalysis.acoustIdMatches', 'AcoustID Treffer gefunden')}</strong>
+              <span>{copyright.db_matches.slice(0, 2).map((match) => `${match.title || t('common.unknown', 'Unbekannt')}${match.artist ? ` - ${match.artist}` : ''} (${match.score})`).join(' · ')}</span>
             </div>
           )}
           <div className="audio-ai-report-grid">
@@ -2669,7 +2689,7 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
               <article className={`audio-ai-report-block tone-${audioAiBlockTone(block.title)}`} key={block.title}>
                 <div className="row between">
                   <h4>{block.title}</h4>
-                  <button type="button" title="Abschnitt kopieren" onClick={() => copyAudioAiAnalysisBlock(block)}><Copy size={14} /></button>
+                  <button type="button" title={t('library.audioAnalysis.copySection', 'Abschnitt kopieren')} onClick={() => copyAudioAiAnalysisBlock(block)}><Copy size={14} /></button>
                 </div>
                 <div className="audio-ai-block-text keyboard-scroll-region" onWheel={(event) => event.stopPropagation()} onTouchMove={(event) => event.stopPropagation()}>
                   {audioAiReportLines(block.text).map((line, index) => (
@@ -2680,7 +2700,7 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
             ))}
           </div>
           <details className="tech-details">
-            <summary>Rohdaten anzeigen</summary>
+            <summary>{t('library.audioAnalysis.showRawData', 'Rohdaten anzeigen')}</summary>
             <pre className="large-pre keyboard-scroll-region" onWheel={(event) => event.stopPropagation()} onTouchMove={(event) => event.stopPropagation()}>{JSON.stringify(analysis, null, 2)}</pre>
           </details>
         </div>}
@@ -2693,24 +2713,24 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
     const selectedBundleKeys = selectedBundleContentKeys();
     const bundleHref = selectedBundleKeys.length ? api.archive.assetBundleUrl(asset.id, selectedBundleKeys) : '#';
     return (
-      <Modal open={Boolean(asset)} title={`Audio-Wizard: ${pickTitle(asset)}`} onClose={() => setWorkflowWizardAsset(null)} wide cardClassName="asset-wizard-modal">
+      <Modal open={Boolean(asset)} title={t('library.workflow.titleForAsset', 'Audio-Wizard: {{title}}', { title: pickTitle(asset) })} onClose={() => setWorkflowWizardAsset(null)} wide cardClassName="asset-wizard-modal">
         <div className="asset-wizard stack">
           <div className="asset-wizard-header">
             <img src={pickCover(asset)} alt="Cover" onError={handleCoverImageError} />
             <div>
-              <p className="eyebrow">Ein Audio · mehrere Arbeitsschritte</p>
+              <p className="eyebrow">{t('library.workflow.eyebrow', 'Ein Audio · mehrere Arbeitsschritte')}</p>
               <h3>{pickTitle(asset)}</h3>
-              <p className="muted">Aktiviere nur die Funktionen, die für diese Variante ausgeführt oder exportiert werden sollen.</p>
+              <p className="muted">{t('library.workflow.text', 'Aktiviere nur die Funktionen, die für diese Variante ausgeführt oder exportiert werden sollen.')}</p>
             </div>
           </div>
 
           <section className="asset-wizard-section">
             <div className="row between align-start">
               <div>
-                <h4>Erfassen / erzeugen</h4>
-                <p className="muted">Die aktivierten Aufgaben werden nacheinander ausgeführt.</p>
+                <h4>{t('library.workflow.captureTitle', 'Erfassen / erzeugen')}</h4>
+                <p className="muted">{t('library.workflow.captureText', 'Die aktivierten Aufgaben werden nacheinander ausgeführt.')}</p>
               </div>
-              <button className="primary" type="button" onClick={() => runWorkflowWizard(asset)} disabled={workflowWizardBusy}>{workflowWizardBusy ? 'Läuft…' : 'Aktivierte Aufgaben starten'}</button>
+              <button className="primary" type="button" onClick={() => runWorkflowWizard(asset)} disabled={workflowWizardBusy}>{workflowWizardBusy ? t('library.status.running', 'Läuft…') : t('library.workflow.startActiveTasks', 'Aktivierte Aufgaben starten')}</button>
             </div>
             <div className="wizard-toggle-grid">
               {wizardCaptureOptions.map((option) => {
@@ -2723,9 +2743,9 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
                     onClick={() => !disabled && toggleWizardCapture(option.key)}
                     disabled={disabled || workflowWizardBusy}
                   >
-                    <span>{workflowCaptureState[option.key] ? 'aktiv' : 'aus'}</span>
-                    <strong>{option.label}</strong>
-                    <small>{disabled ? 'Nicht verfügbar für diese Variante.' : option.description}</small>
+                    <span>{workflowCaptureState[option.key] ? t('common.active', 'aktiv') : t('common.off', 'aus')}</span>
+                    <strong>{t(`library.workflow.captureOptions.${option.key}.label`, option.label)}</strong>
+                    <small>{disabled ? t('library.workflow.notAvailableForVariant', 'Nicht verfügbar für diese Variante.') : t(`library.workflow.captureOptions.${option.key}.description`, option.description)}</small>
                   </button>
                 );
               })}
@@ -2735,10 +2755,10 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
           <section className="asset-wizard-section">
             <div className="row between align-start">
               <div>
-                <h4>ZIP-Inhalte auswählen</h4>
-                <p className="muted">Das ZIP wird nur für diese Audio-Variante erstellt und enthält nur die ausgewählten Inhalte.</p>
+                <h4>{t('library.workflow.zipTitle', 'ZIP-Inhalte auswählen')}</h4>
+                <p className="muted">{t('library.workflow.zipText', 'Das ZIP wird nur für diese Audio-Variante erstellt und enthält nur die ausgewählten Inhalte.')}</p>
               </div>
-              <a className={`button primary ${!selectedBundleKeys.length ? 'disabled' : ''}`} href={selectedBundleKeys.length ? bundleHref : undefined}><Download size={15} /> Ausgewähltes ZIP</a>
+              <a className={`button primary ${!selectedBundleKeys.length ? 'disabled' : ''}`} href={selectedBundleKeys.length ? bundleHref : undefined}><Download size={15} /> {t('library.bulk.selectionZip', 'Ausgewähltes ZIP')}</a>
             </div>
             <div className="wizard-toggle-grid bundle-toggle-grid">
               {bundleContentOptions.map((option) => (
@@ -2748,9 +2768,9 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
                   className={`wizard-toggle compact ${bundleContentState[option.key] ? 'is-on' : ''}`}
                   onClick={() => toggleBundleContent(option.key)}
                 >
-                  <span>{bundleContentState[option.key] ? 'im ZIP' : 'aus'}</span>
-                  <strong>{option.label}</strong>
-                  <small>{option.description}</small>
+                  <span>{bundleContentState[option.key] ? t('library.workflow.inZip', 'im ZIP') : t('common.off', 'aus')}</span>
+                  <strong>{t(`library.workflow.bundleOptions.${option.key}.label`, option.label)}</strong>
+                  <small>{t(`library.workflow.bundleOptions.${option.key}.description`, option.description)}</small>
                 </button>
               ))}
             </div>
@@ -2776,41 +2796,41 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
       <div className="meta-card wide srt-card">
         <div className="row between align-start">
           <div>
-            <h4>SRT-Untertitel</h4>
-            <p className="muted">Lyrics sind Source of Truth · Live-Anzeige und Segment-Editor</p>
+            <h4>{t('library.srt.title', 'SRT-Untertitel')}</h4>
+            <p className="muted">{t('library.srt.text', 'Lyrics sind Source of Truth · Live-Anzeige und Segment-Editor')}</p>
           </div>
-          <span className={`status ${hasSrt ? 'cached' : state.status === 'error' ? 'error' : ''}`}>{busy ? 'läuft' : hasSrt ? 'fertig' : state.status === 'error' ? 'Fehler' : 'nicht erzeugt'}</span>
+          <span className={`status ${hasSrt ? 'cached' : state.status === 'error' ? 'error' : ''}`}>{busy ? t('library.status.running', 'läuft') : hasSrt ? t('library.status.done', 'fertig') : state.status === 'error' ? t('status.stats.error', 'Fehler') : t('library.status.notGenerated', 'nicht erzeugt')}</span>
         </div>
         {state.error_message && <p className="warning-text">{state.error_message}</p>}
         <div className="button-row wrap">
-          <button className="primary" type="button" onClick={() => generateSrt(asset)} disabled={busy || saving}>{busy ? 'Erzeuge SRT…' : hasSrt ? 'SRT neu erzeugen' : 'SRT erzeugen'}</button>
-          <button type="button" onClick={() => copySrt(asset)} disabled={!hasSrt || busy}><Copy size={14} /> Kopieren</button>
-          <button type="button" onClick={() => downloadSrtText(asset)} disabled={!hasSrt || busy}><Download size={14} /> Herunterladen</button>
-          <button type="button" onClick={() => copyHalfSrt(asset)} disabled={!hasHalfSrt || busy}><Copy size={14} /> Half kopieren</button>
-          <button type="button" onClick={() => downloadHalfSrtText(asset)} disabled={!hasHalfSrt || busy}><Download size={14} /> Half herunterladen</button>
-          <button type="button" onClick={() => openSrtEditor(asset)} disabled={!hasSrt && !segments.length}>{editorOpen ? 'Zum Editor' : 'SRT-Editor öffnen'}</button>
+          <button className="primary" type="button" onClick={() => generateSrt(asset)} disabled={busy || saving}>{busy ? t('library.srt.generating', 'Erzeuge SRT…') : hasSrt ? t('library.srt.regenerate', 'SRT neu erzeugen') : t('library.bulk.createSrt', 'SRT erzeugen')}</button>
+          <button type="button" onClick={() => copySrt(asset)} disabled={!hasSrt || busy}><Copy size={14} /> {t('common.copy', 'Kopieren')}</button>
+          <button type="button" onClick={() => downloadSrtText(asset)} disabled={!hasSrt || busy}><Download size={14} /> {t('common.download', 'Herunterladen')}</button>
+          <button type="button" onClick={() => copyHalfSrt(asset)} disabled={!hasHalfSrt || busy}><Copy size={14} /> {t('library.srt.copyHalf', 'Half kopieren')}</button>
+          <button type="button" onClick={() => downloadHalfSrtText(asset)} disabled={!hasHalfSrt || busy}><Download size={14} /> {t('library.srt.downloadHalf', 'Half herunterladen')}</button>
+          <button type="button" onClick={() => openSrtEditor(asset)} disabled={!hasSrt && !segments.length}>{editorOpen ? t('library.srt.toEditor', 'Zum Editor') : t('library.srt.openEditor', 'SRT-Editor öffnen')}</button>
           <button type="button" onClick={() => addSrtSegment(asset)} disabled={!hasSrt && !segments.length}><Plus size={14} /> Segment</button>
-          <button type="button" onClick={() => openSrtAssistant(asset)}>KI-Hilfe</button>
-          {hasSrt && <a className="button" href={api.archive.srtDownloadUrl(asset.id)}><Download size={14} /> Datei</a>}
-          {hasHalfSrt && <a className="button" href={api.archive.srtHalfDownloadUrl(asset.id)}><Download size={14} /> Half-Datei</a>}
+          <button type="button" onClick={() => openSrtAssistant(asset)}>{t('globalAi.help', 'KI-Hilfe')}</button>
+          {hasSrt && <a className="button" href={api.archive.srtDownloadUrl(asset.id)}><Download size={14} /> {t('library.srt.file', 'Datei')}</a>}
+          {hasHalfSrt && <a className="button" href={api.archive.srtHalfDownloadUrl(asset.id)}><Download size={14} /> {t('library.srt.halfFile', 'Half-Datei')}</a>}
           {hasSrt && <SrtLiveColorSelect compact />}
         </div>
         {hasSrt && (
           <div className={`srt-live-container ${isCurrentAsset(asset) ? 'is-live' : ''}`} style={srtLiveColorStyle}>
             <div className="srt-live-label">
-              <span>{isCurrentAsset(asset) ? playbackState?.isPlaying ? 'Live-Untertitel läuft' : 'Live-Untertitel bereit' : 'Live-Untertitel'}</span>
-              <small>{isCurrentAsset(asset) ? `${formatDuration(playbackState?.currentTime || 0)} / ${formatDuration(playbackState?.duration || asset.duration_seconds)}` : 'Starte diese Variante zum Mitlesen'}</small>
+              <span>{isCurrentAsset(asset) ? playbackState?.isPlaying ? t('library.srt.liveRunning', 'Live-Untertitel läuft') : t('library.srt.liveReady', 'Live-Untertitel bereit') : t('library.srt.live', 'Live-Untertitel')}</span>
+              <small>{isCurrentAsset(asset) ? `${formatDuration(playbackState?.currentTime || 0)} / ${formatDuration(playbackState?.duration || asset.duration_seconds)}` : t('library.srt.startVariantToRead', 'Starte diese Variante zum Mitlesen')}</small>
             </div>
-            <strong>{activeSegment?.text || nextSegment?.text || 'Noch keine aktive Untertitel-Zeile.'}</strong>
+            <strong>{activeSegment?.text || nextSegment?.text || t('player.noActiveSubtitle', 'Noch keine aktive Untertitel-Zeile.')}</strong>
             {(activeSegment || nextSegment) && <small>{formatDuration((activeSegment || nextSegment).start)} → {formatDuration((activeSegment || nextSegment).end)}</small>}
           </div>
         )}
         <div className="srt-editor-inline-note">
-          <strong>Großer SRT-Editor</strong>
-          <p className="muted">Der Segment-Editor öffnet sich in einem großen Arbeitsbereich, damit Untertitel, Roh-SRT und Live-Anzeige nicht mehr gequetscht sind.</p>
+          <strong>{t('library.srt.largeEditor', 'Großer SRT-Editor')}</strong>
+          <p className="muted">{t('library.srt.largeEditorText', 'Der Segment-Editor öffnet sich in einem großen Arbeitsbereich, damit Untertitel, Roh-SRT und Live-Anzeige nicht mehr gequetscht sind.')}</p>
           <div className="button-row wrap">
-            <button type="button" onClick={() => openSrtEditor(asset)} disabled={!hasSrt && !segments.length}>{editorOpen ? 'Zum offenen Editor' : 'Editor jetzt öffnen'}</button>
-            <button type="button" onClick={() => addSrtSegment(asset, null, playbackState?.currentTime || null)} disabled={!hasSrt && !segments.length}><Plus size={14} /> Segment bei Playerzeit</button>
+            <button type="button" onClick={() => openSrtEditor(asset)} disabled={!hasSrt && !segments.length}>{editorOpen ? t('library.srt.toOpenEditor', 'Zum offenen Editor') : t('library.srt.openEditorNow', 'Editor jetzt öffnen')}</button>
+            <button type="button" onClick={() => addSrtSegment(asset, null, playbackState?.currentTime || null)} disabled={!hasSrt && !segments.length}><Plus size={14} /> {t('library.srt.segmentAtPlayerTime', 'Segment bei Playerzeit')}</button>
           </div>
         </div>
         {hasSrt && (
@@ -2821,7 +2841,7 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
               aria-expanded={rawOpen}
               onClick={() => setSrtRawOpen(asset.id, !rawOpen)}
             >
-              {rawOpen ? 'Roh-SRT ausblenden' : 'Roh-SRT anzeigen'}
+              {rawOpen ? t('library.srt.hideRaw', 'Roh-SRT ausblenden') : t('library.srt.showRaw', 'Roh-SRT anzeigen')}
             </button>
             {rawOpen && <pre className="large-pre srt-preview keyboard-scroll-region" onWheel={(event) => event.stopPropagation()} onTouchMove={(event) => event.stopPropagation()}>{state.srt_text}</pre>}
           </div>
@@ -2845,7 +2865,7 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
     return (
       <Modal
         open={Boolean(asset)}
-        title={`SRT-Editor: ${pickTitle(asset)}`}
+        title={t('library.srt.editorTitle', 'SRT-Editor: {{title}}', { title: pickTitle(asset) })}
         onClose={() => setSrtEditorOpen(asset.id, false)}
         wide
         cardClassName="srt-editor-modal"
@@ -2854,42 +2874,42 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
         <div className="srt-modal-shell">
           <div className="srt-modal-toolbar">
             <div>
-              <strong>Untertitel bearbeiten</strong>
-              <p className="muted">Großer Arbeitsbereich für Live-Zeile, Segmentliste und Roh-SRT.</p>
+              <strong>{t('library.srt.editSubtitles', 'Untertitel bearbeiten')}</strong>
+              <p className="muted">{t('library.srt.editorWorkspaceText', 'Großer Arbeitsbereich für Live-Zeile, Segmentliste und Roh-SRT.')}</p>
             </div>
             <div className="button-row wrap">
-              <button className="primary" type="button" onClick={() => generateSrt(asset)} disabled={busy || saving}>{busy ? 'Erzeuge SRT…' : hasSrt ? 'SRT neu erzeugen' : 'SRT erzeugen'}</button>
-              <button type="button" onClick={() => addSrtSegment(asset, null, playbackState?.currentTime || null)}><Plus size={14} /> Bei aktueller Zeit</button>
-              <button type="button" onClick={() => resetSrtEditor(asset)}>Zurücksetzen</button>
-              <button type="button" onClick={() => openSrtAssistant(asset)}>KI-Hilfe</button>
+              <button className="primary" type="button" onClick={() => generateSrt(asset)} disabled={busy || saving}>{busy ? t('library.srt.generating', 'Erzeuge SRT…') : hasSrt ? t('library.srt.regenerate', 'SRT neu erzeugen') : t('library.bulk.createSrt', 'SRT erzeugen')}</button>
+              <button type="button" onClick={() => addSrtSegment(asset, null, playbackState?.currentTime || null)}><Plus size={14} /> {t('library.srt.atCurrentTime', 'Bei aktueller Zeit')}</button>
+              <button type="button" onClick={() => resetSrtEditor(asset)}>{t('common.reset', 'Zurücksetzen')}</button>
+              <button type="button" onClick={() => openSrtAssistant(asset)}>{t('globalAi.help', 'KI-Hilfe')}</button>
               <SrtLiveColorSelect compact />
-              <button className="primary" type="button" onClick={() => saveSrtEditor(asset)} disabled={saving}>{saving ? 'Speichert…' : 'Speichern'}</button>
+              <button className="primary" type="button" onClick={() => saveSrtEditor(asset)} disabled={saving}>{saving ? t('common.saving', 'Speichert…') : t('common.save', 'Speichern')}</button>
             </div>
           </div>
           <div className="srt-modal-workbench">
             <aside className="srt-modal-sidebar">
               <div className={`srt-live-container ${isCurrentAsset(asset) ? 'is-live' : ''}`} style={srtLiveColorStyle}>
                 <div className="srt-live-label">
-                  <span>{isCurrentAsset(asset) ? playbackState?.isPlaying ? 'Live-Untertitel läuft' : 'Live-Untertitel bereit' : 'Live-Untertitel'}</span>
-                  <small>{isCurrentAsset(asset) ? `${formatDuration(playbackState?.currentTime || 0)} / ${formatDuration(playbackState?.duration || asset.duration_seconds)}` : 'Starte diese Variante zum Mitlesen'}</small>
+                  <span>{isCurrentAsset(asset) ? playbackState?.isPlaying ? t('library.srt.liveRunning', 'Live-Untertitel läuft') : t('library.srt.liveReady', 'Live-Untertitel bereit') : t('library.srt.live', 'Live-Untertitel')}</span>
+                  <small>{isCurrentAsset(asset) ? `${formatDuration(playbackState?.currentTime || 0)} / ${formatDuration(playbackState?.duration || asset.duration_seconds)}` : t('library.srt.startVariantToRead', 'Starte diese Variante zum Mitlesen')}</small>
                 </div>
-                <strong>{activeSegment?.text || nextSegment?.text || 'Noch keine aktive Untertitel-Zeile.'}</strong>
+                <strong>{activeSegment?.text || nextSegment?.text || t('player.noActiveSubtitle', 'Noch keine aktive Untertitel-Zeile.')}</strong>
                 {(activeSegment || nextSegment) && <small>{formatDuration((activeSegment || nextSegment).start)} → {formatDuration((activeSegment || nextSegment).end)}</small>}
               </div>
               <div className="meta-card srt-modal-summary-card">
-                <h4>Bedienhilfe</h4>
+                <h4>{t('library.srt.helpTitle', 'Bedienhilfe')}</h4>
                 <ul className="srt-help-list">
-                  <li><strong>Speichern</strong> schreibt nur deine aktuellen Segmentänderungen zurück.</li>
-                  <li><strong>Bei aktueller Zeit</strong> setzt schnell ein neues Segment an der Playerposition.</li>
-                  <li><strong>Roh-SRT</strong> bleibt unten sichtbar und kann direkt kopiert oder heruntergeladen werden.</li>
+                  <li><strong>{t('common.save', 'Speichern')}</strong> {t('library.srt.helpSave', 'schreibt nur deine aktuellen Segmentänderungen zurück.')}</li>
+                  <li><strong>{t('library.srt.atCurrentTime', 'Bei aktueller Zeit')}</strong> {t('library.srt.helpCurrentTime', 'setzt schnell ein neues Segment an der Playerposition.')}</li>
+                  <li><strong>{t('library.srt.rawSrt', 'Roh-SRT')}</strong> {t('library.srt.helpRaw', 'bleibt unten sichtbar und kann direkt kopiert oder heruntergeladen werden.')}</li>
                 </ul>
                 <div className="button-row wrap">
-                  <button type="button" onClick={() => copySrt(asset)} disabled={!hasSrt || busy}><Copy size={14} /> Kopieren</button>
-                  <button type="button" onClick={() => downloadSrtText(asset)} disabled={!hasSrt || busy}><Download size={14} /> Herunterladen</button>
-                  <button type="button" onClick={() => copyHalfSrt(asset)} disabled={!hasHalfSrt || busy}><Copy size={14} /> Half kopieren</button>
-                  <button type="button" onClick={() => downloadHalfSrtText(asset)} disabled={!hasHalfSrt || busy}><Download size={14} /> Half herunterladen</button>
-                  {hasSrt && <a className="button" href={api.archive.srtDownloadUrl(asset.id)}><Download size={14} /> Datei</a>}
-                  {hasHalfSrt && <a className="button" href={api.archive.srtHalfDownloadUrl(asset.id)}><Download size={14} /> Half-Datei</a>}
+                  <button type="button" onClick={() => copySrt(asset)} disabled={!hasSrt || busy}><Copy size={14} /> {t('common.copy', 'Kopieren')}</button>
+                  <button type="button" onClick={() => downloadSrtText(asset)} disabled={!hasSrt || busy}><Download size={14} /> {t('common.download', 'Herunterladen')}</button>
+                  <button type="button" onClick={() => copyHalfSrt(asset)} disabled={!hasHalfSrt || busy}><Copy size={14} /> {t('library.srt.copyHalf', 'Half kopieren')}</button>
+                  <button type="button" onClick={() => downloadHalfSrtText(asset)} disabled={!hasHalfSrt || busy}><Download size={14} /> {t('library.srt.downloadHalf', 'Half herunterladen')}</button>
+                  {hasSrt && <a className="button" href={api.archive.srtDownloadUrl(asset.id)}><Download size={14} /> {t('library.srt.file', 'Datei')}</a>}
+                  {hasHalfSrt && <a className="button" href={api.archive.srtHalfDownloadUrl(asset.id)}><Download size={14} /> {t('library.srt.halfFile', 'Half-Datei')}</a>}
                 </div>
               </div>
               {hasSrt && (
@@ -2900,7 +2920,7 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
                     aria-expanded={rawOpen}
                     onClick={() => setSrtRawOpen(asset.id, !rawOpen)}
                   >
-                    {rawOpen ? 'Roh-SRT ausblenden' : 'Roh-SRT anzeigen'}
+                    {rawOpen ? t('library.srt.hideRaw', 'Roh-SRT ausblenden') : t('library.srt.showRaw', 'Roh-SRT anzeigen')}
                   </button>
                   {rawOpen && <pre className="large-pre srt-preview srt-modal-preview keyboard-scroll-region" onWheel={(event) => event.stopPropagation()} onTouchMove={(event) => event.stopPropagation()}>{state.srt_text}</pre>}
                 </div>
@@ -2911,10 +2931,10 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
               <div className="srt-segment-editor srt-segment-editor-modal">
                 <div className="row between align-start">
                   <div>
-                    <strong>Segment-Liste</strong>
-                    <p className="muted">Zeiten und Text korrigieren, neue Zeilen ergänzen oder problematische Stellen direkt bereinigen.</p>
+                    <strong>{t('library.srt.segmentList', 'Segment-Liste')}</strong>
+                    <p className="muted">{t('library.srt.segmentListText', 'Zeiten und Text korrigieren, neue Zeilen ergänzen oder problematische Stellen direkt bereinigen.')}</p>
                   </div>
-                  <span className={`status ${hasSrt ? 'cached' : state.status === 'error' ? 'error' : ''}`}>{busy ? 'läuft' : hasSrt ? 'fertig' : state.status === 'error' ? 'Fehler' : 'nicht erzeugt'}</span>
+                  <span className={`status ${hasSrt ? 'cached' : state.status === 'error' ? 'error' : ''}`}>{busy ? t('library.status.running', 'läuft') : hasSrt ? t('library.status.done', 'fertig') : state.status === 'error' ? t('status.stats.error', 'Fehler') : t('library.status.notGenerated', 'nicht erzeugt')}</span>
                 </div>
                 <div className="srt-editor-list srt-editor-list-modal">
                   {segments.map((segment, index) => {
@@ -2922,20 +2942,20 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
                     return (
                       <div className={`srt-editor-row ${rowActive ? 'is-active' : ''}`} key={`${asset.id}-${index}`}>
                         <span className="srt-editor-index">{index + 1}</span>
-                        <label>Start<input type="number" min="0" step="0.05" value={segment.start} onChange={(event) => updateSrtDraftSegment(asset.id, index, { start: event.target.value })} /></label>
-                        <label>Ende<input type="number" min="0" step="0.05" value={segment.end} onChange={(event) => updateSrtDraftSegment(asset.id, index, { end: event.target.value })} /></label>
+                        <label>{t('library.srt.start', 'Start')}<input type="number" min="0" step="0.05" value={segment.start} onChange={(event) => updateSrtDraftSegment(asset.id, index, { start: event.target.value })} /></label>
+                        <label>{t('library.srt.end', 'Ende')}<input type="number" min="0" step="0.05" value={segment.end} onChange={(event) => updateSrtDraftSegment(asset.id, index, { end: event.target.value })} /></label>
                         <textarea value={segment.text} rows={3} onChange={(event) => updateSrtDraftSegment(asset.id, index, { text: event.target.value })} />
                         <div className="srt-editor-actions">
-                          <button type="button" onClick={() => updateSrtDraftSegment(asset.id, index, { start: playbackState?.currentTime || 0 })} disabled={!isCurrentAsset(asset)}>Start = Jetzt</button>
-                          <button type="button" onClick={() => updateSrtDraftSegment(asset.id, index, { end: playbackState?.currentTime || segment.end })} disabled={!isCurrentAsset(asset)}>Ende = Jetzt</button>
-                          <button type="button" onClick={() => addSrtSegment(asset, index, segment.end)}><Plus size={13} /> danach</button>
-                          <button type="button" onClick={() => addSrtSegment(asset, index, Math.max(0, segment.start - 1), 'Neue Untertitel-Zeile')}><Plus size={13} /> davor</button>
-                          <button type="button" onClick={() => deleteSrtSegment(asset.id, index)}><Trash2 size={13} /> löschen</button>
+                          <button type="button" onClick={() => updateSrtDraftSegment(asset.id, index, { start: playbackState?.currentTime || 0 })} disabled={!isCurrentAsset(asset)}>{t('library.srt.startNow', 'Start = Jetzt')}</button>
+                          <button type="button" onClick={() => updateSrtDraftSegment(asset.id, index, { end: playbackState?.currentTime || segment.end })} disabled={!isCurrentAsset(asset)}>{t('library.srt.endNow', 'Ende = Jetzt')}</button>
+                          <button type="button" onClick={() => addSrtSegment(asset, index, segment.end)}><Plus size={13} /> {t('library.srt.after', 'danach')}</button>
+                          <button type="button" onClick={() => addSrtSegment(asset, index, Math.max(0, segment.start - 1), t('library.srt.newSubtitleLine', 'Neue Untertitel-Zeile'))}><Plus size={13} /> {t('library.srt.before', 'davor')}</button>
+                          <button type="button" onClick={() => deleteSrtSegment(asset.id, index)}><Trash2 size={13} /> {t('common.delete', 'löschen')}</button>
                         </div>
                       </div>
                     );
                   })}
-                  {!segments.length && <p className="warning-text">Keine Segmente im Editor. Erzeuge zuerst eine SRT oder füge ein Segment hinzu.</p>}
+                  {!segments.length && <p className="warning-text">{t('library.srt.noSegments', 'Keine Segmente im Editor. Erzeuge zuerst eine SRT oder füge ein Segment hinzu.')}</p>}
                 </div>
               </div>
             </section>
@@ -3006,7 +3026,7 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
   function openAudioOperationModal(asset, typeName) {
     if (!asset?.id) return;
     if (!canRunSunoApiAction(asset, typeName)) {
-      notify(localOnlyHint(asset) || `${typeName} ist für dieses AudioAsset deaktiviert.`, 'info');
+      notify(localOnlyHint(asset, t) || t('library.messages.actionDisabledForAsset', '{{type}} ist für dieses AudioAsset deaktiviert.', { type: typeName }), 'info');
       return;
     }
     setActionAsset(null);
@@ -3029,14 +3049,14 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
       const result = await api.archive.analyzeExtendContinueAt(asset.id);
       const continueAt = Number(result?.continue_at ?? result?.continueAt);
       if (!Number.isFinite(continueAt) || continueAt <= 0) {
-        notify('continueAt-Analyse hat keinen gültigen Wert geliefert.', 'error');
+        notify(t('library.messages.continueAtInvalidResult', 'continueAt-Analyse hat keinen gültigen Wert geliefert.'), 'error');
         return;
       }
       writeExtendContinueAtOverride(asset.id, continueAt);
       setAudioOperationForm((state) => ({ ...state, continueAt: String(continueAt) }));
-      notify(`continueAt berechnet: ${continueAt.toFixed(3)}s`, 'success');
+      notify(t('library.messages.continueAtCalculated', 'continueAt berechnet: {{seconds}}s', { seconds: continueAt.toFixed(3) }), 'success');
     } catch (err) {
-      notify(err?.message || 'continueAt-Analyse fehlgeschlagen.', 'error');
+      notify(err?.message || t('library.messages.continueAtFailed', 'continueAt-Analyse fehlgeschlagen.'), 'error');
     } finally {
       setContinueAtAnalysisBusy(false);
     }
@@ -3058,9 +3078,9 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
       persona_model: voiceInfo.source_type === 'persona' ? 'style_persona' : 'voice_persona'
     } : {};
 
-    if (!title) return notify('Bitte einen Titel angeben.', 'error');
-    if (!prompt && typeName === 'Cover Song' && !audioOperationForm.instrumental) return notify('Bitte Songtext/Prompt für den Cover Song angeben.', 'error');
-    if (!prompt && typeName === 'Extend') return notify('Bitte den erweiterten Songtext/Prompt angeben.', 'error');
+    if (!title) return notify(t('library.messages.titleRequired', 'Bitte einen Titel angeben.'), 'error');
+    if (!prompt && typeName === 'Cover Song' && !audioOperationForm.instrumental) return notify(t('library.messages.coverPromptRequired', 'Bitte Songtext/Prompt für den Cover Song angeben.'), 'error');
+    if (!prompt && typeName === 'Extend') return notify(t('library.messages.extendPromptRequired', 'Bitte den erweiterten Songtext/Prompt angeben.'), 'error');
 
     setAudioOperationBusy(true);
     try {
@@ -3068,11 +3088,11 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
       if (typeName === 'Extend') {
         const continueAt = Number(String(audioOperationForm.continueAt || '').replace(',', '.'));
         if (!Number.isFinite(continueAt) || continueAt <= 0) {
-          notify('Bitte eine gültige Extend-Startzeit in Sekunden angeben.', 'error');
+          notify(t('library.messages.extendStartRequired', 'Bitte eine gültige Extend-Startzeit in Sekunden angeben.'), 'error');
           return;
         }
         if (!style) {
-          notify('Bitte Style/Tags für die Extension angeben.', 'error');
+          notify(t('library.messages.extendStyleRequired', 'Bitte Style/Tags für die Extension angeben.'), 'error');
           return;
         }
         const useCustomExtend = Boolean(prompt && style && title && Number.isFinite(continueAt) && continueAt > 0);
@@ -3093,7 +3113,7 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
       } else {
         const customMode = Boolean(audioOperationForm.customMode);
         if (customMode && !style) {
-          notify('Bitte Style/Tags für den Custom-Cover-Song angeben oder Custom-Modus deaktivieren.', 'error');
+          notify(t('library.messages.coverStyleRequired', 'Bitte Style/Tags für den Custom-Cover-Song angeben oder Custom-Modus deaktivieren.'), 'error');
           return;
         }
         result = await api.archive.coverSong(asset.id, {
@@ -3106,11 +3126,11 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
           negative_tags: negativeTags || undefined
         });
       }
-      notify(`${typeName} gestartet: ${result.task_id || result.external_task_id || 'Task erstellt'}`, 'success');
+      notify(t('library.messages.operationStarted', '{{type}} gestartet: {{task}}', { type: typeName, task: result.task_id || result.external_task_id || t('library.messages.taskCreated', 'Task erstellt') }), 'success');
       setAudioOperationModal({ type: '', asset: null });
       await onReload?.();
     } catch (err) {
-      notify(err.message || `${typeName} fehlgeschlagen.`, 'error');
+      notify(err.message || t('library.messages.operationFailed', '{{type}} fehlgeschlagen.', { type: typeName }), 'error');
     } finally {
       setAudioOperationBusy(false);
     }
@@ -3118,7 +3138,7 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
 
   async function runAction(asset, typeName) {
     if (!canRunSunoApiAction(asset, typeName)) {
-      notify(localOnlyHint(asset) || `${typeName} ist für dieses AudioAsset deaktiviert.`, 'info');
+      notify(localOnlyHint(asset, t) || t('library.messages.actionDisabledForAsset', '{{type}} ist für dieses AudioAsset deaktiviert.', { type: typeName }), 'info');
       return;
     }
     if (typeName === 'Extend' || typeName === 'Cover Song') {
@@ -3161,29 +3181,29 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
               : typeName === 'Persona'
                 ? await api.archive.createPersona(asset.id, { name: `${title} Persona`, description: title })
                 : await api.archive.createCoverImage(asset.id, { prompt: title });
-      notify(`${typeName} gestartet: ${result.task_id || result.external_task_id || 'Task erstellt'}`, 'success');
+      notify(t('library.messages.operationStarted', '{{type}} gestartet: {{task}}', { type: typeName, task: result.task_id || result.external_task_id || t('library.messages.taskCreated', 'Task erstellt') }), 'success');
       setActionAsset(null);
       await onReload();
     } catch (err) {
-      notify(err.message || `${typeName} fehlgeschlagen.`, 'error');
+      notify(err.message || t('library.messages.operationFailed', '{{type}} fehlgeschlagen.', { type: typeName }), 'error');
     }
   }
 
 
   async function exportProjectJson(project) {
-    downloadTextFile(`${safeFilename(project.title)} - Projekt.json`, JSON.stringify(project, null, 2), 'application/json;charset=utf-8');
-    notify('Projekt-JSON wurde exportiert.', 'success');
+    downloadTextFile(`${safeFilename(project.title)} - ${t('library.export.projectJsonFilename', 'Projekt')}.json`, JSON.stringify(project, null, 2), 'application/json;charset=utf-8');
+    notify(t('library.messages.projectJsonExported', 'Projekt-JSON wurde exportiert.'), 'success');
   }
 
   async function exportProjectText(project) {
     const lines = [
-      `Projekt: ${project.title}`,
-      `Varianten: ${project.assets.length}`,
+      `${t('library.export.project', 'Projekt')}: ${project.title}`,
+      `${t('library.stats.variants', 'Varianten')}: ${project.assets.length}`,
       '',
       ...project.assets.map((asset, index) => [
-        `--- Variante ${index + 1}/${project.assets.length || 1}: ${pickTitle(asset)} ---`,
-        `Vorgang: ${operationLabel(asset.operation_type || asset.task_type || asset.operation_label)}`,
-        `Dauer: ${formatDuration(asset.duration_seconds)}`,
+        `--- ${t('library.export.variant', 'Variante')} ${index + 1}/${project.assets.length || 1}: ${pickTitle(asset)} ---`,
+        `${t('library.export.operation', 'Vorgang')}: ${operationLabel(asset.operation_type || asset.task_type || asset.operation_label, t)}`,
+        `${t('library.audioOperation.duration', 'Dauer')}: ${formatDuration(asset.duration_seconds)}`,
         `Audio-ID: ${asset.audio_id || ''}`,
         `Task-ID: ${asset.suno_task_id || asset.task_id || ''}`,
         '',
@@ -3195,16 +3215,16 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
         ''
       ].join('\n'))
     ];
-    downloadTextFile(`${safeFilename(project.title)} - Songtext und Style.txt`, lines.join('\n'), 'text/plain;charset=utf-8');
-    notify('Projekt-Text wurde exportiert.', 'success');
+    downloadTextFile(`${safeFilename(project.title)} - ${t('library.export.lyricsAndStyleFilename', 'Songtext und Style')}.txt`, lines.join('\n'), 'text/plain;charset=utf-8');
+    notify(t('library.messages.projectTextExported', 'Projekt-Text wurde exportiert.'), 'success');
   }
 
   async function saveProjectLyrics(project) {
     const best = project.assets.find((asset) => asset.is_final) || project.assets.find((asset) => asset.is_favorite) || project.assets[0];
     const text = pickPrompt(best) || pickLyrics(best);
-    if (!text) return notify('Kein Songtext/Prompt zum Speichern gefunden.', 'error');
+    if (!text) return notify(t('library.messages.noLyricsPromptToSave', 'Kein Songtext/Prompt zum Speichern gefunden.'), 'error');
     await api.library.createLyric({ title: project.title, content: text, lyrics: text, tags: pickStyle(best) });
-    notify('Songtext wurde im Songtext-Archiv gespeichert.', 'success');
+    notify(t('library.messages.lyricsSavedToArchive', 'Songtext wurde im Songtext-Archiv gespeichert.'), 'success');
     await onReload();
   }
 
@@ -3212,14 +3232,14 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
     const best = project.assets.find((asset) => asset.is_final) || project.assets.find((asset) => asset.is_favorite) || project.assets.find((asset) => pickPrompt(asset) || pickLyrics(asset) || pickStyle(asset)) || project.assets[0];
     const text = pickPrompt(best) || pickLyrics(best);
     const nextStyle = pickStyle(best);
-    if (!text && !nextStyle) return notify('Kein Prompt oder Style zum Wiederverwenden gefunden.', 'error');
+    if (!text && !nextStyle) return notify(t('library.messages.noPromptOrStyleToReuse', 'Kein Prompt oder Style zum Wiederverwenden gefunden.'), 'error');
     onReusePrompt?.({ title: project.title, prompt: text || '', lyrics: text || '', style: nextStyle || '' });
   }
 
   function reuseAssetPrompt(asset) {
     const text = pickPrompt(asset) || pickLyrics(asset);
     const nextStyle = pickStyle(asset);
-    if (!text && !nextStyle) return notify('Kein Prompt oder Style zum Wiederverwenden gefunden.', 'error');
+    if (!text && !nextStyle) return notify(t('library.messages.noPromptOrStyleToReuse', 'Kein Prompt oder Style zum Wiederverwenden gefunden.'), 'error');
     onReusePrompt?.({ title: pickTitle(asset), prompt: text || '', lyrics: text || '', style: nextStyle || '' });
   }
 
@@ -3250,16 +3270,16 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
       work_mode: 'extend',
       forceAdvanced: true,
       message: hasReusableAudioId
-        ? 'Musik erweitern wurde im Generator vorbereitet.'
-        : 'Upload And Extend wurde vorbereitet. Prüfe bei lokalen Importen, ob eine extern erreichbare Audio-URL vorhanden ist.'
+        ? t('library.messages.extendPreparedInGenerator', 'Musik erweitern wurde im Generator vorbereitet.')
+        : t('library.messages.uploadExtendPrepared', 'Upload And Extend wurde vorbereitet. Prüfe bei lokalen Importen, ob eine extern erreichbare Audio-URL vorhanden ist.')
     });
   }
 
   async function saveAssetLyricsToArchive(asset) {
     const text = pickPrompt(asset) || pickLyrics(asset);
-    if (!text) return notify('Kein Songtext vorhanden.', 'error');
+    if (!text) return notify(t('library.messages.noLyricsAvailable', 'Kein Songtext vorhanden.'), 'error');
     await api.library.createLyric({ title: pickTitle(asset), content: text, tags: pickStyle(asset) });
-    notify('Songtext gespeichert.', 'success');
+    notify(t('library.messages.lyricsSaved', 'Songtext gespeichert.'), 'success');
     await onReload?.();
   }
 
@@ -3274,7 +3294,7 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
     event?.stopPropagation?.();
     const asset = resolveEditorAsset(assetOrId);
     if (!asset?.id) {
-      notify('Der Songtext-Editor konnte nicht geöffnet werden, weil die Audio-ID fehlt.', 'error');
+      notify(t('library.messages.lyricsEditorMissingAudioId', 'Der Songtext-Editor konnte nicht geöffnet werden, weil die Audio-ID fehlt.'), 'error');
       return;
     }
     setOpenAudioMenuId(null);
@@ -3296,21 +3316,21 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
     if (!asset?.id) return;
     const cleanText = String(lyricsEditorDraft || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n').trim();
     if (!cleanText) {
-      notify('Der Songtext darf nicht leer sein.', 'error');
+      notify(t('library.messages.lyricsEmpty', 'Der Songtext darf nicht leer sein.'), 'error');
       return;
     }
     setLyricsEditorBusy(true);
     try {
       const updated = await api.archive.updateLyrics(asset.id, { lyrics: cleanText, prompt: cleanText });
-      notify('Prompt/Lyrics wurden gespeichert. Neue SRT-Erzeugungen nutzen diesen Text als Source of Truth.', 'success');
+      notify(t('library.messages.lyricsSavedSourceOfTruth', 'Prompt/Lyrics wurden gespeichert. Neue SRT-Erzeugungen nutzen diesen Text als Source of Truth.'), 'success');
       if (regenerateSrt) {
         const srt = await api.archive.generateSrt(asset.id, { force: true, lyrics_override: cleanText });
         if (srt?.queued || srt?.task_local_id) {
-          notify(`Prompt/Lyrics gespeichert und SRT-Erzeugung gestartet: Task #${srt.task_local_id || '—'}.`, 'success');
+          notify(t('library.messages.lyricsSavedSrtStarted', 'Prompt/Lyrics gespeichert und SRT-Erzeugung gestartet: Task #{{task}}.', { task: srt.task_local_id || '—' }), 'success');
         } else {
           setSrtByAsset((current) => ({ ...current, [asset.id]: srt }));
           notifySrtUpdated(asset.id, srt);
-          notify('Prompt/Lyrics gespeichert und SRT wurde neu erzeugt.', 'success');
+          notify(t('library.messages.lyricsSavedSrtCreated', 'Prompt/Lyrics gespeichert und SRT wurde neu erzeugt.'), 'success');
         }
       }
       setLyricsEditorAssetSnapshot(updated || asset);
@@ -3320,7 +3340,7 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
       setLyricsEditorAssetSnapshot(null);
       setLyricsEditorDraft('');
     } catch (err) {
-      notify(err?.message || 'Prompt/Lyrics konnten nicht gespeichert werden.', 'error');
+      notify(err?.message || t('library.messages.lyricsSaveFailed', 'Prompt/Lyrics konnten nicht gespeichert werden.'), 'error');
     } finally {
       setLyricsEditorBusy(false);
     }
@@ -3353,12 +3373,12 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
       if (String(aiCoverForm.note || '').trim()) formData.append('note', String(aiCoverForm.note || '').trim());
       if (aiCoverForm.referenceFile) formData.append('reference_image', aiCoverForm.referenceFile, aiCoverForm.referenceFile.name || 'reference-image');
       const result = await api.archive.generateAiCover(aiCoverAsset.id, formData);
-      notify?.(`KI-Cover gestartet: ${result.task_id || result.id || 'Task erstellt'}`, 'success');
+      notify?.(t('library.messages.aiCoverStarted', 'KI-Cover gestartet: {{task}}', { task: result.task_id || result.id || t('library.messages.taskCreated', 'Task erstellt') }), 'success');
       setAiCoverAsset(null);
       setAiCoverForm({ model: 'pro', note: '', referenceFile: null });
       await onReload?.({ forceContentRefresh: true });
     } catch (err) {
-      notify?.(err?.message || 'KI-Cover konnte nicht gestartet werden.', 'error');
+      notify?.(err?.message || t('library.messages.aiCoverFailed', 'KI-Cover konnte nicht gestartet werden.'), 'error');
     } finally {
       setAiCoverBusy(false);
     }
@@ -3378,7 +3398,7 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
 
   async function submitCoverReplace() {
     if (!coverReplaceAsset?.id) return;
-    if (!coverReplaceFile) return notify?.('Bitte eine Cover-Datei auswählen.', 'error');
+    if (!coverReplaceFile) return notify?.(t('library.messages.selectCoverFile', 'Bitte eine Cover-Datei auswählen.'), 'error');
     try {
       setCoverReplaceBusy(true);
       const formData = new FormData();
@@ -3395,12 +3415,12 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
           return next;
         });
       }
-      notify?.('Cover wurde ersetzt.', 'success');
+      notify?.(t('library.messages.coverReplaced', 'Cover wurde ersetzt.'), 'success');
       setCoverReplaceAsset(null);
       setCoverReplaceFile(null);
       await onReload?.({ forceContentRefresh: true });
     } catch (err) {
-      notify?.(err?.message || 'Cover konnte nicht ersetzt werden.', 'error');
+      notify?.(err?.message || t('library.messages.coverReplaceFailed', 'Cover konnte nicht ersetzt werden.'), 'error');
     } finally {
       setCoverReplaceBusy(false);
     }
@@ -3410,7 +3430,7 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
     if (!asset?.id) return;
     const coverUrl = pickCover(asset);
     if (isFallbackCoverUrl(coverUrl)) {
-      notify?.('Für diesen Track ist kein Coverbild vorhanden.', 'error');
+      notify?.(t('library.messages.noCoverForTrack', 'Für diesen Track ist kein Coverbild vorhanden.'), 'error');
       return;
     }
     setPictureViewerAsset(asset);
@@ -3432,7 +3452,7 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
     if (!asset?.id) return;
     const coverUrl = pickCover(asset);
     if (isFallbackCoverUrl(coverUrl)) {
-      notify?.('Für diesen Track ist kein Coverbild vorhanden.', 'error');
+      notify?.(t('library.messages.noCoverForTrack', 'Für diesen Track ist kein Coverbild vorhanden.'), 'error');
       return;
     }
     const filename = coverDownloadFilename(asset, coverUrl);
@@ -3453,10 +3473,10 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
       const objectUrl = URL.createObjectURL(blob);
       triggerDownload(objectUrl);
       window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1500);
-      notify?.('Coverbild wurde heruntergeladen.', 'success');
+      notify?.(t('library.messages.coverDownloaded', 'Coverbild wurde heruntergeladen.'), 'success');
     } catch (err) {
       triggerDownload(coverUrl);
-      notify?.('Coverbild wurde über die Bild-URL geöffnet. Falls der Browser den Download blockiert, dort speichern.', 'warning');
+      notify?.(t('library.messages.coverDownloadFallback', 'Coverbild wurde über die Bild-URL geöffnet. Falls der Browser den Download blockiert, dort speichern.'), 'warning');
     }
   }
 
@@ -3464,10 +3484,10 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
     try {
       setContentCacheBusy(true);
       const result = await api.archive.cacheMissingContent();
-      notify?.(result?.message || 'Library-Inhalte wurden geprüft.', result?.failed ? 'warning' : 'success');
+      notify?.(result?.message || t('library.messages.libraryContentChecked', 'Library-Inhalte wurden geprüft.'), result?.failed ? 'warning' : 'success');
       await onReload?.({ forceContentRefresh: true });
     } catch (err) {
-      notify?.(err?.message || 'Library-Inhalte konnten nicht geprüft werden.', 'error');
+      notify?.(err?.message || t('library.messages.libraryContentCheckFailed', 'Library-Inhalte konnten nicht geprüft werden.'), 'error');
     } finally {
       setContentCacheBusy(false);
     }
@@ -3548,7 +3568,7 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
         : { top: `${openAudioMenuPosition.top}px` }),
     } : undefined;
     const allowSunoFollowups = canUseSunoApiFollowups(asset);
-    const importHint = localOnlyHint(asset);
+    const importHint = localOnlyHint(asset, t);
     const extendInfo = extendInfoForAsset(asset);
     const menuNode = open ? (
       <div
@@ -3570,52 +3590,52 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
       >
         <div className="audio-action-menu-header">
           <strong>{pickTitle(asset)}</strong>
-          <small>{operationLabel(asset.operation_type || asset.task_type || asset.operation_label)} · {formatDuration(asset.duration_seconds)}</small>
+          <small>{operationLabel(asset.operation_type || asset.task_type || asset.operation_label, t)} · {formatDuration(asset.duration_seconds)}</small>
         </div>
-        <button role="menuitem" type="button" className={isAssetFavorite(asset) ? 'favorite-action is-favorite' : 'favorite-action'} onClick={() => { closeAudioMenu(); toggleAssetFavorite(asset); }} disabled={favoriteSavingIds.has(asset.id)}><ThumbsUp size={15} fill={isAssetFavorite(asset) ? 'currentColor' : 'none'} /> {isAssetFavorite(asset) ? 'Favorit entfernen' : 'Favorit'}</button>
-        <button role="menuitem" type="button" onClick={() => { closeAudioMenu(); playAsset(asset, playQueue, playIndex, project || activeProject); }} disabled={!isPlayable(asset)}>{isPlayingAsset(asset) ? <Pause size={15} /> : <Play size={15} />} {isPlayingAsset(asset) ? 'Pause' : 'Abspielen'}</button>
+        <button role="menuitem" type="button" className={isAssetFavorite(asset) ? 'favorite-action is-favorite' : 'favorite-action'} onClick={() => { closeAudioMenu(); toggleAssetFavorite(asset); }} disabled={favoriteSavingIds.has(asset.id)}><ThumbsUp size={15} fill={isAssetFavorite(asset) ? 'currentColor' : 'none'} /> {isAssetFavorite(asset) ? t('library.actions.removeFavorite', 'Favorit entfernen') : t('library.favoriteOne', 'Favorit')}</button>
+        <button role="menuitem" type="button" onClick={() => { closeAudioMenu(); playAsset(asset, playQueue, playIndex, project || activeProject); }} disabled={!isPlayable(asset)}>{isPlayingAsset(asset) ? <Pause size={15} /> : <Play size={15} />} {isPlayingAsset(asset) ? t('player.pause', 'Pause') : t('player.play', 'Abspielen')}</button>
         {extendInfo.isExtended && (
           <button
             role="menuitem"
             type="button"
             onClick={(event) => { closeAudioMenu(); openExtendOriginal(asset, event); }}
             disabled={!extendInfo.originalAsset || !extendInfo.originalProject}
-            title={extendInfo.originalAsset ? `Original öffnen: ${pickTitle(extendInfo.originalAsset)}` : (extendInfo.sourceAudioId ? `Original Audio-ID nicht lokal gefunden: ${extendInfo.sourceAudioId}` : 'Original nicht lokal gefunden')}
+            title={extendInfo.originalAsset ? t('library.actions.openOriginalTitle', 'Original öffnen: {{title}}', { title: pickTitle(extendInfo.originalAsset) }) : (extendInfo.sourceAudioId ? t('library.actions.originalAudioIdMissing', 'Original Audio-ID nicht lokal gefunden: {{audioId}}', { audioId: extendInfo.sourceAudioId }) : t('library.actions.originalMissing', 'Original nicht lokal gefunden'))}
           >
-            <ArrowLeft size={15} /> {extendInfo.originalAsset ? 'Original öffnen' : 'Original nicht lokal gefunden'}
+            <ArrowLeft size={15} /> {extendInfo.originalAsset ? t('library.actions.openOriginal', 'Original öffnen') : t('library.actions.originalMissing', 'Original nicht lokal gefunden')}
           </button>
         )}
         {importHint && <div className="audio-action-menu-note">{importHint}</div>}
-        {allowSunoFollowups && canRunSunoApiAction(asset, 'Extend') && <button role="menuitem" type="button" onClick={() => { closeAudioMenu(); openAudioOperationModal(asset, 'Extend'); }}><ArrowRight size={15} /> Extend konfigurieren</button>}
-        {allowSunoFollowups && canRunSunoApiAction(asset, 'Extend') && <button role="menuitem" type="button" onClick={() => { closeAudioMenu(); prepareAssetExtendInMusic(asset); }}><ArrowRight size={15} /> Im Musik-Generator öffnen</button>}
-        <button role="menuitem" type="button" onClick={() => { closeAudioMenu(); reuseAssetPrompt(asset); }} disabled={!hasReusableText}><SparklesIconFallback /> Wiederverwenden</button>
-        {canRunSunoApiAction(asset, 'Cover Song') && <button role="menuitem" type="button" onClick={() => { closeAudioMenu(); runAction(asset, 'Cover Song'); }}><MusicActionIcon /> Cover Song generieren</button>}
-        <button role="menuitem" type="button" onClick={() => { closeAudioMenu(); openAiCoverModal(asset); }}><MusicActionIcon /> KI-Coverbild generieren</button>
-        <button role="menuitem" type="button" onClick={() => { closeAudioMenu(); openCoverReplaceModal(asset); }}><Edit3 size={15} /> Upload-Cover ersetzen</button>
-        <button role="menuitem" type="button" onClick={() => { closeAudioMenu(); openPictureViewer(asset); }} disabled={isFallbackCoverUrl(pickCover(asset))}><Maximize2 size={15} /> Cover groß anzeigen</button>
-        <button role="menuitem" type="button" onClick={() => { closeAudioMenu(); downloadCoverImage(asset); }} disabled={isFallbackCoverUrl(pickCover(asset))}><Download size={15} /> Cover herunterladen</button>
-        {canRunSunoApiAction(asset, 'Add Vocals') && <button role="menuitem" type="button" onClick={() => { closeAudioMenu(); runAction(asset, 'Add Vocals'); }}><MusicActionIcon /> Add Vocals</button>}
-        {canRunSunoApiAction(asset, 'Add Instrumental') && <button role="menuitem" type="button" onClick={() => { closeAudioMenu(); runAction(asset, 'Add Instrumental'); }}><MusicActionIcon /> Add Instrumental</button>}
-        <button role="menuitem" type="button" onClick={() => { closeAudioMenu(); generateSrt(asset); }} disabled={srtBusy}><FileText size={15} /> {srtBusy ? 'SRT läuft…' : 'SRT erzeugen'}</button>
-        <button role="menuitem" type="button" onClick={() => { closeAudioMenu(); generateAssetStems(asset); }} disabled={stemBusy || !isAudioLocal(asset)}><Headphones size={15} /> {stemBusy ? 'Stems laufen…' : stems.available ? 'Stems neu erzeugen' : 'Stems erzeugen'}</button>
-        {stems.available && <button role="menuitem" type="button" onClick={() => { closeAudioMenu(); openStemPreview(asset); }}><Headphones size={15} /> Stems abspielen</button>}
-        <button role="menuitem" type="button" onClick={() => { closeAudioMenu(); generateLibraryAiTags(asset, Boolean(readLibraryAiTags(asset))); }}><Tag size={15} /> {readLibraryAiTags(asset) ? 'KI-Tags neu erzeugen' : 'KI-Tags erzeugen'}</button>
-        <button role="menuitem" type="button" onClick={() => { closeAudioMenu(); generateAudioAiAnalysis(asset, Boolean(audioAnalysis)); }} disabled={audioAnalysisBusy || !isAudioLocal(asset)}><FileText size={15} /> {audioAnalysisBusy ? 'Audioanalyse läuft…' : audioAnalysis ? 'Audioanalyse neu erstellen' : 'Audioanalyse starten'}</button>
-        {audioAnalysis && <button role="menuitem" type="button" onClick={() => { closeAudioMenu(); openAudioAiAnalysisReport(asset); }} disabled={audioAnalysisBusy}><FileText size={15} /> Audioanalyse-Report öffnen</button>}
-        <button role="menuitem" type="button" onClick={() => { closeAudioMenu(); convertAssetToWav(asset, { download: true }); }} disabled={wavBusy || !canConvertAssetToWav(asset)}><Download size={15} /> {wavBusy ? 'Konvertiere…' : 'Convert to WAV'}</button>
-        {wav.available && <a role="menuitem" className="button" href={api.archive.wavDownloadUrl(asset.id)} onClick={closeAudioMenu}><Download size={15} /> WAV herunterladen</a>}
-        <button role="menuitem" type="button" onClick={() => { closeAudioMenu(); setTimestampAsset(asset); }}><Clock3 size={15} /> Timestamped Lyrics</button>
-        <button role="menuitem" type="button" onClick={() => { closeAudioMenu(); openWorkflowWizard(asset); }}><FileText size={15} /> Audio-Wizard</button>
-        <button role="menuitem" type="button" onClick={() => { closeAudioMenu(); onOpenDaw?.(asset); }}><Scissors size={15} /> Mini-DAW</button>
-        <button role="menuitem" type="button" onClick={() => { closeAudioMenu(); setPlaylistAsset(asset); }}><Plus size={15} /> Playlist</button>
-        <button role="menuitem" type="button" onClick={(event) => openLyricsEditor(asset, event)}><Edit3 size={15} /> Songtext bearbeiten</button>
-        <button role="menuitem" type="button" onClick={() => { closeAudioMenu(); saveAssetLyricsToArchive(asset); }} disabled={!hasLyricsText}><FileText size={15} /> Songtext speichern</button>
-        <button role="menuitem" type="button" onClick={() => { closeAudioMenu(); copyAssetInfo(asset); }}><Copy size={15} /> Trackdaten kopieren</button>
-        <button role="menuitem" type="button" onClick={() => { closeAudioMenu(); renameAsset(asset); }}><Edit3 size={15} /> Titel ändern</button>
-        <a role="menuitem" className="button" href={api.archive.assetBundleUrl(asset.id)} onClick={closeAudioMenu}><Download size={15} /> Audio-Paket ZIP</a>
-        <a role="menuitem" className="button" href={api.archive.downloadUrl(asset.id)} onClick={closeAudioMenu}><Download size={15} /> Audio herunterladen</a>
-        <button role="menuitem" type="button" onClick={() => { closeAudioMenu(); setActionAsset(asset); }}><MoreHorizontal size={15} /> Weitere Aktionen</button>
-        <button role="menuitem" type="button" className="danger" onClick={() => { closeAudioMenu(); deleteAsset(asset); }}><Trash2 size={15} /> In Papierkorb</button>
+        {allowSunoFollowups && canRunSunoApiAction(asset, 'Extend') && <button role="menuitem" type="button" onClick={() => { closeAudioMenu(); openAudioOperationModal(asset, 'Extend'); }}><ArrowRight size={15} /> {t('library.actions.configureExtend', 'Extend konfigurieren')}</button>}
+        {allowSunoFollowups && canRunSunoApiAction(asset, 'Extend') && <button role="menuitem" type="button" onClick={() => { closeAudioMenu(); prepareAssetExtendInMusic(asset); }}><ArrowRight size={15} /> {t('library.actions.openInMusicGenerator', 'Im Musik-Generator öffnen')}</button>}
+        <button role="menuitem" type="button" onClick={() => { closeAudioMenu(); reuseAssetPrompt(asset); }} disabled={!hasReusableText}><SparklesIconFallback /> {t('library.actions.reuse', 'Wiederverwenden')}</button>
+        {canRunSunoApiAction(asset, 'Cover Song') && <button role="menuitem" type="button" onClick={() => { closeAudioMenu(); runAction(asset, 'Cover Song'); }}><MusicActionIcon /> {t('library.actions.generateCoverSong', 'Cover Song generieren')}</button>}
+        <button role="menuitem" type="button" onClick={() => { closeAudioMenu(); openAiCoverModal(asset); }}><MusicActionIcon /> {t('library.actions.generateAiCover', 'KI-Coverbild generieren')}</button>
+        <button role="menuitem" type="button" onClick={() => { closeAudioMenu(); openCoverReplaceModal(asset); }}><Edit3 size={15} /> {t('library.actions.replaceUploadCover', 'Upload-Cover ersetzen')}</button>
+        <button role="menuitem" type="button" onClick={() => { closeAudioMenu(); openPictureViewer(asset); }} disabled={isFallbackCoverUrl(pickCover(asset))}><Maximize2 size={15} /> {t('library.actions.viewCoverLarge', 'Cover groß anzeigen')}</button>
+        <button role="menuitem" type="button" onClick={() => { closeAudioMenu(); downloadCoverImage(asset); }} disabled={isFallbackCoverUrl(pickCover(asset))}><Download size={15} /> {t('library.actions.downloadCover', 'Cover herunterladen')}</button>
+        {canRunSunoApiAction(asset, 'Add Vocals') && <button role="menuitem" type="button" onClick={() => { closeAudioMenu(); runAction(asset, 'Add Vocals'); }}><MusicActionIcon /> {t('library.actions.addVocals', 'Add Vocals')}</button>}
+        {canRunSunoApiAction(asset, 'Add Instrumental') && <button role="menuitem" type="button" onClick={() => { closeAudioMenu(); runAction(asset, 'Add Instrumental'); }}><MusicActionIcon /> {t('library.actions.addInstrumental', 'Add Instrumental')}</button>}
+        <button role="menuitem" type="button" onClick={() => { closeAudioMenu(); generateSrt(asset); }} disabled={srtBusy}><FileText size={15} /> {srtBusy ? t('library.bulk.srtRunning', 'SRT läuft…') : t('library.bulk.createSrt', 'SRT erzeugen')}</button>
+        <button role="menuitem" type="button" onClick={() => { closeAudioMenu(); generateAssetStems(asset); }} disabled={stemBusy || !isAudioLocal(asset)}><Headphones size={15} /> {stemBusy ? t('library.bulk.stemsRunning', 'Stems laufen…') : stems.available ? t('library.actions.regenerateStems', 'Stems neu erzeugen') : t('library.bulk.createStems', 'Stems erzeugen')}</button>
+        {stems.available && <button role="menuitem" type="button" onClick={() => { closeAudioMenu(); openStemPreview(asset); }}><Headphones size={15} /> {t('library.actions.playStems', 'Stems abspielen')}</button>}
+        <button role="menuitem" type="button" onClick={() => { closeAudioMenu(); generateLibraryAiTags(asset, Boolean(readLibraryAiTags(asset))); }}><Tag size={15} /> {readLibraryAiTags(asset) ? t('library.actions.regenerateAiTags', 'KI-Tags neu erzeugen') : t('library.actions.generateAiTags', 'KI-Tags erzeugen')}</button>
+        <button role="menuitem" type="button" onClick={() => { closeAudioMenu(); generateAudioAiAnalysis(asset, Boolean(audioAnalysis)); }} disabled={audioAnalysisBusy || !isAudioLocal(asset)}><FileText size={15} /> {audioAnalysisBusy ? t('library.actions.audioAnalysisRunning', 'Audioanalyse läuft…') : audioAnalysis ? t('library.actions.regenerateAudioAnalysis', 'Audioanalyse neu erstellen') : t('library.actions.startAudioAnalysis', 'Audioanalyse starten')}</button>
+        {audioAnalysis && <button role="menuitem" type="button" onClick={() => { closeAudioMenu(); openAudioAiAnalysisReport(asset); }} disabled={audioAnalysisBusy}><FileText size={15} /> {t('library.actions.openAudioAnalysisReport', 'Audioanalyse-Report öffnen')}</button>}
+        <button role="menuitem" type="button" onClick={() => { closeAudioMenu(); convertAssetToWav(asset, { download: true }); }} disabled={wavBusy || !canConvertAssetToWav(asset)}><Download size={15} /> {wavBusy ? t('library.actions.converting', 'Konvertiere…') : t('library.actions.convertToWav', 'Convert to WAV')}</button>
+        {wav.available && <a role="menuitem" className="button" href={api.archive.wavDownloadUrl(asset.id)} onClick={closeAudioMenu}><Download size={15} /> {t('library.actions.downloadWav', 'WAV herunterladen')}</a>}
+        <button role="menuitem" type="button" onClick={() => { closeAudioMenu(); setTimestampAsset(asset); }}><Clock3 size={15} /> {t('library.timestamped.title', 'Timestamped Lyrics')}</button>
+        <button role="menuitem" type="button" onClick={() => { closeAudioMenu(); openWorkflowWizard(asset); }}><FileText size={15} /> {t('library.workflow.audioWizard', 'Audio-Wizard')}</button>
+        <button role="menuitem" type="button" onClick={() => { closeAudioMenu(); onOpenDaw?.(asset); }}><Scissors size={15} /> {t('nav.daw', 'Mini-DAW')}</button>
+        <button role="menuitem" type="button" onClick={() => { closeAudioMenu(); setPlaylistAsset(asset); }}><Plus size={15} /> {t('nav.playlists', 'Playlists')}</button>
+        <button role="menuitem" type="button" onClick={(event) => openLyricsEditor(asset, event)}><Edit3 size={15} /> {t('library.actions.editLyrics', 'Songtext bearbeiten')}</button>
+        <button role="menuitem" type="button" onClick={() => { closeAudioMenu(); saveAssetLyricsToArchive(asset); }} disabled={!hasLyricsText}><FileText size={15} /> {t('library.actions.saveLyrics', 'Songtext speichern')}</button>
+        <button role="menuitem" type="button" onClick={() => { closeAudioMenu(); copyAssetInfo(asset); }}><Copy size={15} /> {t('library.actions.copyTrackData', 'Trackdaten kopieren')}</button>
+        <button role="menuitem" type="button" onClick={() => { closeAudioMenu(); renameAsset(asset); }}><Edit3 size={15} /> {t('library.actions.renameTitle', 'Titel ändern')}</button>
+        <a role="menuitem" className="button" href={api.archive.assetBundleUrl(asset.id)} onClick={closeAudioMenu}><Download size={15} /> {t('library.actions.audioPackageZip', 'Audio-Paket ZIP')}</a>
+        <a role="menuitem" className="button" href={api.archive.downloadUrl(asset.id)} onClick={closeAudioMenu}><Download size={15} /> {t('library.actions.downloadAudio', 'Audio herunterladen')}</a>
+        <button role="menuitem" type="button" onClick={() => { closeAudioMenu(); setActionAsset(asset); }}><MoreHorizontal size={15} /> {t('library.actions.moreActions', 'Weitere Aktionen')}</button>
+        <button role="menuitem" type="button" className="danger" onClick={() => { closeAudioMenu(); deleteAsset(asset); }}><Trash2 size={15} /> {t('library.actions.moveToTrash', 'In Papierkorb')}</button>
       </div>
     ) : null;
     return (
@@ -3625,7 +3645,7 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
           className={`audio-action-trigger ${compact ? 'compact' : ''}`}
           aria-haspopup="menu"
           aria-expanded={open}
-          title={`${pickTitle(asset)} Aktionen`}
+          title={t('library.actions.assetActionsTitle', '{{title}} Aktionen', { title: pickTitle(asset) })}
           onClick={(event) => toggleAudioMenu(event, asset)}
         >
           <MoreHorizontal size={compact ? 16 : 18} />
@@ -3652,21 +3672,21 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
       <div className="meta-card wide prompt-lyrics-card">
         <div className="row between align-start prompt-lyrics-head">
           <div>
-            <h4>Prompt / Lyrics</h4>
-            <small className="muted">Source of Truth für Wiederverwenden und neue SRT-Erzeugungen</small>
+            <h4>{t('library.promptLyrics.title', 'Prompt / Lyrics')}</h4>
+            <small className="muted">{t('library.promptLyrics.sourceOfTruth', 'Source of Truth für Wiederverwenden und neue SRT-Erzeugungen')}</small>
           </div>
           <div className="button-row compact prompt-lyrics-actions">
-            <button type="button" onClick={async (event) => { event.stopPropagation(); await copyToClipboard(text); notify('Text kopiert.', 'success'); }} disabled={!text}><Copy size={14} /> Kopieren</button>
-            <button type="button" className="primary" onClick={(event) => openLyricsEditor(asset, event)}><Edit3 size={14} /> Bearbeiten</button>
+            <button type="button" onClick={async (event) => { event.stopPropagation(); await copyToClipboard(text); notify(t('library.messages.textCopied', 'Text kopiert.'), 'success'); }} disabled={!text}><Copy size={14} /> {t('common.copy', 'Kopieren')}</button>
+            <button type="button" className="primary" onClick={(event) => openLyricsEditor(asset, event)}><Edit3 size={14} /> {t('stylesPage.edit', 'Bearbeiten')}</button>
           </div>
         </div>
         {manualOverride?.enabled && (
-          <p className="status cached prompt-lyrics-override-note">Manuell korrigiert · {formatDate(manualOverride.updated_at)}</p>
+          <p className="status cached prompt-lyrics-override-note">{t('library.promptLyrics.manuallyCorrected', 'Manuell korrigiert')} · {formatDate(manualOverride.updated_at)}</p>
         )}
         <pre className="keyboard-scroll-region" onWheel={(event) => event.stopPropagation()} onTouchMove={(event) => event.stopPropagation()}>{text || '—'}</pre>
         <div className="button-row wrap">
-          <button type="button" onClick={(event) => { event.stopPropagation(); saveAssetLyricsToArchive(asset); }} disabled={!text}>Unter Songtexte speichern</button>
-          <button type="button" onClick={(event) => openLyricsEditor(asset, event)}><Edit3 size={14} /> Für SRT korrigieren</button>
+          <button type="button" onClick={(event) => { event.stopPropagation(); saveAssetLyricsToArchive(asset); }} disabled={!text}>{t('library.promptLyrics.saveUnderLyrics', 'Unter Songtexte speichern')}</button>
+          <button type="button" onClick={(event) => openLyricsEditor(asset, event)}><Edit3 size={14} /> {t('library.promptLyrics.correctForSrt', 'Für SRT korrigieren')}</button>
         </div>
       </div>
     );
@@ -3679,28 +3699,28 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
     const isCoverSong = typeName === 'Cover Song';
     const title = asset ? pickTitle(asset) : '';
     return (
-      <Modal open={Boolean(asset && typeName)} title={asset ? `${typeName} konfigurieren: ${title}` : `${typeName || 'Aktion'} konfigurieren`} onClose={closeAudioOperationModal} wide>
+      <Modal open={Boolean(asset && typeName)} title={asset ? t('library.audioOperation.configureForTitle', '{{type}} konfigurieren: {{title}}', { type: typeName, title }) : t('library.audioOperation.configure', '{{type}} konfigurieren', { type: typeName || t('library.actionModal.title', 'Aktion') })} onClose={closeAudioOperationModal} wide>
         {asset && (
           <div className="stack audio-operation-modal">
             <div className="meta-card wide">
               <strong>{title}</strong>
-              <p className="muted">songs.id: {songDatabaseId(asset) ?? '—'} · audio_assets.id: {asset.id || '—'} · Dauer: {formatDuration(asset.duration_seconds)} · Audio-ID: {asset.audio_id || '—'}</p>
-              {isCoverSong && <p className="warning-text">Cover Song benötigt eine wiederverwendbare Audio-URL. Bei rein lokal importierten Audios muss zuerst eine extern erreichbare Quelle vorhanden sein.</p>}
+              <p className="muted">songs.id: {songDatabaseId(asset) ?? '—'} · audio_assets.id: {asset.id || '—'} · {t('library.audioOperation.duration', 'Dauer')}: {formatDuration(asset.duration_seconds)} · Audio-ID: {asset.audio_id || '—'}</p>
+              {isCoverSong && <p className="warning-text">{t('library.audioOperation.coverSongUrlWarning', 'Cover Song benötigt eine wiederverwendbare Audio-URL. Bei rein lokal importierten Audios muss zuerst eine extern erreichbare Quelle vorhanden sein.')}</p>}
             </div>
             <div className="form-grid two">
-              <label>Titel
+              <label>{t('common.title', 'Titel')}
                 <input value={audioOperationForm.title} onChange={(event) => setAudioOperationForm((state) => ({ ...state, title: event.target.value }))} disabled={audioOperationBusy} />
               </label>
-              <label>Modell
+              <label>{t('music.fields.model', 'Modell')}
                 <select value={audioOperationForm.model} onChange={(event) => setAudioOperationForm((state) => ({ ...state, model: event.target.value }))} disabled={audioOperationBusy}>
                   {sunoModelOptions.map((model) => <option key={model} value={model}>{model}</option>)}
                 </select>
               </label>
               {isExtend && (
-                <label>Extend ab Sekunde
+                <label>{t('library.audioOperation.extendFromSecond', 'Extend ab Sekunde')}
                   <div className="button-row nowrap">
                     <input type="number" min="1" step="0.1" value={audioOperationForm.continueAt} onChange={(event) => setAudioOperationForm((state) => ({ ...state, continueAt: event.target.value }))} disabled={audioOperationBusy || continueAtAnalysisBusy} />
-                    <button type="button" onClick={analyzeAudioOperationContinueAt} disabled={audioOperationBusy || continueAtAnalysisBusy}>{continueAtAnalysisBusy ? 'Analysiere…' : 'Automatisch ermitteln'}</button>
+                    <button type="button" onClick={analyzeAudioOperationContinueAt} disabled={audioOperationBusy || continueAtAnalysisBusy}>{continueAtAnalysisBusy ? t('library.audioOperation.analyzing', 'Analysiere…') : t('library.audioOperation.detectAutomatically', 'Automatisch ermitteln')}</button>
                   </div>
                 </label>
               )}
@@ -3712,17 +3732,17 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
               )}
             </div>
             <label>Style / Tags
-              <textarea rows={3} value={audioOperationForm.style} onChange={(event) => setAudioOperationForm((state) => ({ ...state, style: event.target.value }))} disabled={audioOperationBusy} placeholder="Style, Genre, Stimmung, Instrumentierung" />
+              <textarea rows={3} value={audioOperationForm.style} onChange={(event) => setAudioOperationForm((state) => ({ ...state, style: event.target.value }))} disabled={audioOperationBusy} placeholder={t('library.audioOperation.stylePlaceholder', 'Style, Genre, Stimmung, Instrumentierung')} />
             </label>
-            <label>{isExtend ? 'Erweiterter Songtext / Prompt ab dieser Stelle' : 'Songtext / Prompt für Cover Song'}
-              <textarea className="lyrics-canvas" rows={12} value={audioOperationForm.prompt} onChange={(event) => setAudioOperationForm((state) => ({ ...state, prompt: event.target.value }))} disabled={audioOperationBusy} placeholder={isExtend ? 'Hier den Teil eintragen, der ab der Extend-Position fortgesetzt werden soll.' : 'Hier Songtext oder Prompt für den Cover Song eintragen.'} />
+            <label>{isExtend ? t('library.audioOperation.extendPromptLabel', 'Erweiterter Songtext / Prompt ab dieser Stelle') : t('library.audioOperation.coverPromptLabel', 'Songtext / Prompt für Cover Song')}
+              <textarea className="lyrics-canvas" rows={12} value={audioOperationForm.prompt} onChange={(event) => setAudioOperationForm((state) => ({ ...state, prompt: event.target.value }))} disabled={audioOperationBusy} placeholder={isExtend ? t('library.audioOperation.extendPromptPlaceholder', 'Hier den Teil eintragen, der ab der Extend-Position fortgesetzt werden soll.') : t('library.audioOperation.coverPromptPlaceholder', 'Hier Songtext oder Prompt für den Cover Song eintragen.')} />
             </label>
-            <label>Negative Tags optional
-              <input value={audioOperationForm.negative_tags} onChange={(event) => setAudioOperationForm((state) => ({ ...state, negative_tags: event.target.value }))} disabled={audioOperationBusy} placeholder="z. B. offbeat, low quality" />
+            <label>{t('music.fields.negativeTagsOptional', 'Negative Tags optional')}
+              <input value={audioOperationForm.negative_tags} onChange={(event) => setAudioOperationForm((state) => ({ ...state, negative_tags: event.target.value }))} disabled={audioOperationBusy} placeholder={t('library.audioOperation.negativePlaceholder', 'z. B. offbeat, low quality')} />
             </label>
             <div className="button-row wrap right">
-              <button type="button" onClick={closeAudioOperationModal} disabled={audioOperationBusy}>Abbrechen</button>
-              <button className="primary" type="button" onClick={submitAudioOperation} disabled={audioOperationBusy}>{audioOperationBusy ? 'Starte…' : `${typeName} starten`}</button>
+              <button type="button" onClick={closeAudioOperationModal} disabled={audioOperationBusy}>{t('common.cancel', 'Abbrechen')}</button>
+              <button className="primary" type="button" onClick={submitAudioOperation} disabled={audioOperationBusy}>{audioOperationBusy ? t('library.audioOperation.starting', 'Starte…') : t('music.actions.startOperation', '{{operation}} starten', { operation: typeName })}</button>
             </div>
           </div>
         )}
@@ -3741,29 +3761,29 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
     const asset = aiCoverAsset;
     const referenceName = aiCoverForm.referenceFile?.name || '';
     return (
-      <Modal open={Boolean(asset)} title={asset ? `KI-Coverbild generieren: ${pickTitle(asset)}` : 'KI-Coverbild generieren'} onClose={closeAiCoverModal} wide>
+      <Modal open={Boolean(asset)} title={asset ? t('library.cover.aiTitleForAsset', 'KI-Coverbild generieren: {{title}}', { title: pickTitle(asset) }) : t('library.actions.generateAiCover', 'KI-Coverbild generieren')} onClose={closeAiCoverModal} wide>
         {asset && (
           <div className="stack ai-cover-modal">
-            <p className="muted">Erstellt ein professionelleres Titel-Cover aus Titel, Prompt/Lyrics und Style/Tags dieses Songs. Optional kannst du Zusatzanweisungen wie <code>--note</code> und ein Referenzbild wie <code>--ref</code> mitgeben.</p>
-            <label>Modell
+            <p className="muted">{t('library.cover.aiText', 'Erstellt ein professionelleres Titel-Cover aus Titel, Prompt/Lyrics und Style/Tags dieses Songs. Optional kannst du Zusatzanweisungen wie --note und ein Referenzbild wie --ref mitgeben.')}</p>
+            <label>{t('music.fields.model', 'Modell')}
               <select value={aiCoverForm.model} onChange={(event) => setAiCoverForm((state) => ({ ...state, model: event.target.value }))}>
-                <option value="pro">pro · bester Allrounder</option>
-                <option value="max">max · höchste Detailtreue</option>
-                <option value="flex">flex · Typografie stärker</option>
-                <option value="klein">klein · schneller/günstiger</option>
-                <option value="schnell">schnell · Testmodell</option>
+                <option value="pro">{t('library.cover.modelPro', 'pro · bester Allrounder')}</option>
+                <option value="max">{t('library.cover.modelMax', 'max · höchste Detailtreue')}</option>
+                <option value="flex">{t('library.cover.modelFlex', 'flex · Typografie stärker')}</option>
+                <option value="klein">{t('library.cover.modelSmall', 'klein · schneller/günstiger')}</option>
+                <option value="schnell">{t('library.cover.modelFast', 'schnell · Testmodell')}</option>
               </select>
             </label>
-            <label>Zusatzanweisungen optional
-              <textarea rows={4} placeholder="z. B. winterstimmung, schnee" value={aiCoverForm.note} onKeyDown={(event) => event.stopPropagation()} onKeyUp={(event) => event.stopPropagation()} onChange={(event) => setAiCoverForm((state) => ({ ...state, note: event.target.value }))} />
+            <label>{t('library.cover.extraInstructionsOptional', 'Zusatzanweisungen optional')}
+              <textarea rows={4} placeholder={t('library.cover.extraPlaceholder', 'z. B. winterstimmung, schnee')} value={aiCoverForm.note} onKeyDown={(event) => event.stopPropagation()} onKeyUp={(event) => event.stopPropagation()} onChange={(event) => setAiCoverForm((state) => ({ ...state, note: event.target.value }))} />
             </label>
-            <label>Referenzbild optional
+            <label>{t('library.cover.referenceOptional', 'Referenzbild optional')}
               <input type="file" accept="image/*,.jpg,.jpeg,.png,.webp,.gif,.avif" onClick={(event) => event.stopPropagation()} onChange={handleAiCoverReferenceFileChange} />
             </label>
-            {referenceName && <p className="muted">Referenz übernommen: {referenceName}</p>}
+            {referenceName && <p className="muted">{t('library.cover.referenceApplied', 'Referenz übernommen: {{name}}', { name: referenceName })}</p>}
             <div className="button-row wrap">
-              <button type="button" onClick={closeAiCoverModal} disabled={aiCoverBusy}>Abbrechen</button>
-              <button className="primary" type="button" onClick={submitAiCover} disabled={aiCoverBusy}>{aiCoverBusy ? 'Erstellt…' : 'Cover generieren'}</button>
+              <button type="button" onClick={closeAiCoverModal} disabled={aiCoverBusy}>{t('common.cancel', 'Abbrechen')}</button>
+              <button className="primary" type="button" onClick={submitAiCover} disabled={aiCoverBusy}>{aiCoverBusy ? t('library.cover.creating', 'Erstellt…') : t('library.cover.generateCover', 'Cover generieren')}</button>
             </div>
           </div>
         )}
@@ -3777,18 +3797,18 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
     const previewCover = coverReplacePreviewUrl || currentCover || '/static/favicon.ico';
     const fileName = coverReplaceFile?.name || '';
     return (
-      <Modal open={Boolean(asset)} title={asset ? `Upload-Cover ersetzen: ${pickTitle(asset)}` : 'Upload-Cover ersetzen'} onClose={closeCoverReplaceModal} wide>
+      <Modal open={Boolean(asset)} title={asset ? t('library.cover.replaceTitleForAsset', 'Upload-Cover ersetzen: {{title}}', { title: pickTitle(asset) }) : t('library.actions.replaceUploadCover', 'Upload-Cover ersetzen')} onClose={closeCoverReplaceModal} wide>
         {asset && (
           <div className="stack cover-replace-modal">
             <div className="cover-replace-preview">
-              <img src={previewCover} alt="Cover Vorschau" onError={handleCoverImageError} />
+              <img src={previewCover} alt={t('library.cover.previewAlt', 'Cover Vorschau')} onError={handleCoverImageError} />
               <div>
                 <strong>{pickTitle(asset)}</strong>
-                <p className="muted">Das hochgeladene Bild ersetzt das Cover dieses Tracks und wird lokal unter dem Cover-Speicher abgelegt.</p>
-                {fileName && <small className="status cached">Neue Datei: {fileName}</small>}
+                <p className="muted">{t('library.cover.replaceText', 'Das hochgeladene Bild ersetzt das Cover dieses Tracks und wird lokal unter dem Cover-Speicher abgelegt.')}</p>
+                {fileName && <small className="status cached">{t('library.cover.newFile', 'Neue Datei: {{name}}', { name: fileName })}</small>}
               </div>
             </div>
-            <label>Cover-Datei
+            <label>{t('library.cover.coverFile', 'Cover-Datei')}
               <input
                 key={asset.id}
                 type="file"
@@ -3798,8 +3818,8 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
               />
             </label>
             <div className="button-row wrap right">
-              <button type="button" onClick={closeCoverReplaceModal} disabled={coverReplaceBusy}>Abbrechen</button>
-              <button className="primary" type="button" onClick={submitCoverReplace} disabled={coverReplaceBusy || !coverReplaceFile}>{coverReplaceBusy ? 'Speichere…' : 'Upload-Cover speichern'}</button>
+              <button type="button" onClick={closeCoverReplaceModal} disabled={coverReplaceBusy}>{t('common.cancel', 'Abbrechen')}</button>
+              <button className="primary" type="button" onClick={submitCoverReplace} disabled={coverReplaceBusy || !coverReplaceFile}>{coverReplaceBusy ? t('library.cover.saving', 'Speichere…') : t('library.cover.saveUploadCover', 'Upload-Cover speichern')}</button>
             </div>
           </div>
         )}
@@ -3814,7 +3834,7 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
     return (
       <Modal
         open={Boolean(asset)}
-        title={asset ? `Cover anzeigen: ${pickTitle(asset)}` : 'Cover anzeigen'}
+        title={asset ? t('library.cover.viewTitleForAsset', 'Cover anzeigen: {{title}}', { title: pickTitle(asset) }) : t('library.cover.viewTitle', 'Cover anzeigen')}
         onClose={closePictureViewer}
         wide
         cardClassName={`picture-viewer-modal ${pictureViewerMaximized ? 'is-maximized' : ''}`}
@@ -3823,13 +3843,13 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
         {asset && (
           <div className="stack picture-viewer-shell">
             <div className="picture-viewer-toolbar">
-              <button type="button" onClick={() => changePictureViewerZoom(-0.25)} disabled={pictureViewerZoom <= 0.25}><ZoomOut size={15} /> Kleiner</button>
+              <button type="button" onClick={() => changePictureViewerZoom(-0.25)} disabled={pictureViewerZoom <= 0.25}><ZoomOut size={15} /> {t('library.cover.smaller', 'Kleiner')}</button>
               <span className="status cached">{zoomLabel}</span>
-              <button type="button" onClick={() => changePictureViewerZoom(0.25)} disabled={pictureViewerZoom >= 4}><ZoomIn size={15} /> Größer</button>
+              <button type="button" onClick={() => changePictureViewerZoom(0.25)} disabled={pictureViewerZoom >= 4}><ZoomIn size={15} /> {t('library.cover.larger', 'Größer')}</button>
               <button type="button" onClick={() => setPictureViewerZoom(1)}>100%</button>
-              <button type="button" onClick={() => setPictureViewerMaximized((value) => !value)}>{pictureViewerMaximized ? <Minimize2 size={15} /> : <Maximize2 size={15} />} {pictureViewerMaximized ? 'Normal' : 'Maximieren'}</button>
-              <button type="button" onClick={() => downloadCoverImage(asset)}><Download size={15} /> Herunterladen</button>
-              <a className="button" href={coverUrl} target="_blank" rel="noopener noreferrer"><ExternalLink size={15} /> Bild öffnen</a>
+              <button type="button" onClick={() => setPictureViewerMaximized((value) => !value)}>{pictureViewerMaximized ? <Minimize2 size={15} /> : <Maximize2 size={15} />} {pictureViewerMaximized ? t('library.cover.normal', 'Normal') : t('library.cover.maximize', 'Maximieren')}</button>
+              <button type="button" onClick={() => downloadCoverImage(asset)}><Download size={15} /> {t('library.actions.downloadCover', 'Herunterladen')}</button>
+              <a className="button" href={coverUrl} target="_blank" rel="noopener noreferrer"><ExternalLink size={15} /> {t('library.cover.openImage', 'Bild öffnen')}</a>
             </div>
             <div className="picture-viewer-stage keyboard-scroll-region" onWheel={(event) => event.stopPropagation()} onTouchMove={(event) => event.stopPropagation()}>
               <img
@@ -3850,20 +3870,19 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
     const charCount = String(lyricsEditorDraft || '').length;
     const lineCount = String(lyricsEditorDraft || '').split(/\n/).length;
     return (
-      <Modal open={Boolean(asset)} title={asset ? `Prompt/Lyrics bearbeiten: ${pickTitle(asset)}` : 'Prompt/Lyrics bearbeiten'} onClose={closeLyricsEditor} wide>
+      <Modal open={Boolean(asset)} title={asset ? t('library.promptLyrics.editTitleForAsset', 'Prompt/Lyrics bearbeiten: {{title}}', { title: pickTitle(asset) }) : t('library.promptLyrics.editTitle', 'Prompt/Lyrics bearbeiten')} onClose={closeLyricsEditor} wide>
         {asset && (
           <div className="stack lyrics-edit-modal">
             <div className="lyrics-edit-context">
               <p className="muted">
-                Korrigiere hier den gespeicherten Songtext, wenn Suno Teile wie Wiederholungen in Klammern ausgelassen hat.
-                Der gespeicherte Text wird danach in <strong>Song</strong> und <strong>AudioAsset-Metadaten</strong> aktualisiert.
+                {t('library.promptLyrics.editorHint', 'Korrigiere hier den gespeicherten Songtext, wenn Suno Teile wie Wiederholungen in Klammern ausgelassen hat. Der gespeicherte Text wird danach in Song und AudioAsset-Metadaten aktualisiert.')}
               </p>
               <p className="warning-text">
-                Bereits vorhandene SRT-Dateien werden nur geändert, wenn du „Speichern & SRT neu erzeugen“ nutzt.
+                {t('library.promptLyrics.srtRegenerateHint', 'Bereits vorhandene SRT-Dateien werden nur geändert, wenn du „Speichern & SRT neu erzeugen“ nutzt.')}
               </p>
             </div>
             <label className="wide lyrics-edit-label">
-              <span>Canvas</span>
+              <span>{t('library.promptLyrics.canvas', 'Canvas')}</span>
               <textarea
                 className="lyrics-canvas lyrics-edit-canvas"
                 value={lyricsEditorDraft}
@@ -3874,15 +3893,15 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
               />
             </label>
             <div className="lyrics-edit-footer">
-              <span className="muted">{lineCount} Zeilen · {charCount} Zeichen</span>
+              <span className="muted">{t('library.promptLyrics.editorCounts', '{{lines}} Zeilen · {{chars}} Zeichen', { lines: lineCount, chars: charCount })}</span>
               <div className="button-row wrap right">
-                <button type="button" onClick={async () => { await copyToClipboard(lyricsEditorDraft); notify('Canvas kopiert.', 'success'); }} disabled={!lyricsEditorDraft || lyricsEditorBusy}>Kopieren</button>
-                <button type="button" onClick={closeLyricsEditor} disabled={lyricsEditorBusy}>Abbrechen</button>
+                <button type="button" onClick={async () => { await copyToClipboard(lyricsEditorDraft); notify(t('library.messages.canvasCopied', 'Canvas kopiert.'), 'success'); }} disabled={!lyricsEditorDraft || lyricsEditorBusy}>{t('common.copy', 'Kopieren')}</button>
+                <button type="button" onClick={closeLyricsEditor} disabled={lyricsEditorBusy}>{t('common.cancel', 'Abbrechen')}</button>
                 <button type="button" className="primary" onClick={() => saveLyricsEditor({ regenerateSrt: false })} disabled={lyricsEditorBusy || !String(lyricsEditorDraft || '').trim()}>
-                  {lyricsEditorBusy ? 'Speichere…' : 'Speichern'}
+                  {lyricsEditorBusy ? t('common.saving', 'Speichere…') : t('common.save', 'Speichern')}
                 </button>
                 <button type="button" className="primary strong" onClick={() => saveLyricsEditor({ regenerateSrt: true })} disabled={lyricsEditorBusy || !String(lyricsEditorDraft || '').trim()}>
-                  {lyricsEditorBusy ? 'Arbeite…' : 'Speichern & SRT neu erzeugen'}
+                  {lyricsEditorBusy ? t('library.promptLyrics.working', 'Arbeite…') : t('library.promptLyrics.saveAndRegenerateSrt', 'Speichern & SRT neu erzeugen')}
                 </button>
               </div>
             </div>
@@ -3894,21 +3913,21 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
 
   async function copyAssetInfo(asset) {
     const text = [
-      `Titel: ${pickTitle(asset)}`,
+      `${t('common.title', 'Titel')}: ${pickTitle(asset)}`,
       `songs.id: ${songDatabaseId(asset) ?? '—'}`,
       `audio_assets.id: ${asset.id || '—'}`,
       `Audio-ID: ${asset.audio_id || '—'}`,
       `Task-ID: ${asset.suno_task_id || asset.task_id || '—'}`,
-      `Stimme: ${voiceLabelForAsset(asset) || '—'}`,
+      `${t('library.detail.voice', 'Stimme')}: ${voiceLabelForAsset(asset) || '—'}`,
       `URL: ${asset.public_url || asset.source_url || '—'}`,
-      `Modell: ${pickModel(asset) || '—'}`,
+      `${t('library.meta.model', 'Modell')}: ${pickModel(asset) || '—'}`,
       `Style: ${pickStyle(asset) || '—'}`,
-      `Optionen:
+      `${t('library.generationOptions.title', 'Optionen')}:
 ${generationOptionsText(asset)}`,
       `Prompt/Lyrics: ${pickPrompt(asset) || pickLyrics(asset) || '—'}`
     ].join('\n');
     await copyToClipboard(text);
-    notify('Trackdaten kopiert.', 'success');
+    notify(t('library.messages.trackDataCopied', 'Trackdaten kopiert.'), 'success');
   }
 
   function toggleSelected(assetId) {
@@ -3944,7 +3963,7 @@ ${generationOptionsText(asset)}`,
   async function deleteSelected(project) {
     if (!selectedIds.size) return;
     const ids = [...selectedIds];
-    if (!confirm(`${ids.length} ausgewählte Audiodateien in den Papierkorb verschieben?`)) return;
+    if (!confirm(t('library.messages.deleteSelectedConfirm', '{{count}} ausgewählte Audiodateien in den Papierkorb verschieben?', { count: ids.length }))) return;
     const payload = { items: ids.map((id) => ({ type: 'audio', id })), delete_files: false };
     const result = api.library.bulkDeleteContent
       ? await api.library.bulkDeleteContent(payload)
@@ -3952,25 +3971,25 @@ ${generationOptionsText(asset)}`,
     const deletedIds = Array.isArray(result?.deleted) && result.deleted.length ? result.deleted.map((item) => item.id) : ids;
     stopPlaybackForDeletedAssets(deletedIds);
     hideDeletedAssetsLocally(deletedIds);
-    notify(`${deletedIds.length} ausgewählte Audio${deletedIds.length === 1 ? '' : 's'} wurden in den Papierkorb verschoben.`, 'success');
+    notify(t('library.messages.selectedMovedToTrash', '{{count}} ausgewählte Audio(s) wurden in den Papierkorb verschoben.', { count: deletedIds.length }), 'success');
     setSelectedIds(new Set());
     await reloadAfterLibraryMutation();
   }
 
   async function generateSelectedSrt() {
     const rows = selectedAssets.filter((asset) => asset?.id);
-    if (!rows.length) return notify('Keine ausgewählten Varianten für SRT-Erzeugung gefunden.', 'error');
-    if (!confirm(`SRT für ${rows.length} ausgewählte Variante${rows.length === 1 ? '' : 'n'} erzeugen?\n\nDer Sammellauf wird im Hintergrund gestartet und ist im Status-Frontend als aktiver Task sichtbar.`)) return;
+    if (!rows.length) return notify(t('library.messages.noSelectedSrtRows', 'Keine ausgewählten Varianten für SRT-Erzeugung gefunden.'), 'error');
+    if (!confirm(t('library.messages.bulkSrtConfirm', 'SRT für {{count}} ausgewählte Variante(n) erzeugen?\n\nDer Sammellauf wird im Hintergrund gestartet und ist im Status-Frontend als aktiver Task sichtbar.', { count: rows.length }))) return;
     const ids = rows.map((asset) => asset.id);
     setBulkActionBusy('srt');
     setSrtLoadingIds((current) => new Set([...current, ...ids]));
     try {
       const result = await api.archive.bulkGenerateSrt(ids, { force: true });
-      notify(`SRT-Sammellauf gestartet: Task #${result?.task_local_id || '—'} · ${rows.length} Variante${rows.length === 1 ? '' : 'n'}.`, 'success');
+      notify(t('library.messages.bulkSrtStarted', 'SRT-Sammellauf gestartet: Task #{{task}} · {{count}} Variante(n).', { task: result?.task_local_id || '—', count: rows.length }), 'success');
       await onReload?.();
       window.setTimeout(() => onReload?.(), 1200);
     } catch (err) {
-      notify(err?.message || 'SRT-Sammellauf konnte nicht gestartet werden.', 'error');
+      notify(err?.message || t('library.messages.bulkSrtFailed', 'SRT-Sammellauf konnte nicht gestartet werden.'), 'error');
     } finally {
       setBulkActionBusy('');
       setSrtLoadingIds((current) => {
@@ -3985,18 +4004,18 @@ ${generationOptionsText(asset)}`,
     const allRows = selectedAssets.filter((asset) => asset?.id);
     const rows = allRows.filter(isAudioLocal);
     const skipped = allRows.length - rows.length;
-    if (!rows.length) return notify('Keine lokal gespeicherten Audios in der Auswahl für Stem-Erzeugung gefunden.', 'error');
-    if (!confirm(`Stems für ${rows.length} lokale ausgewählte Variante${rows.length === 1 ? '' : 'n'} erzeugen?${skipped ? `\n\n${skipped} nicht lokale Variante${skipped === 1 ? '' : 'n'} werden übersprungen.` : ''}\n\nDer Sammellauf wird im Hintergrund gestartet und ist im Status-Frontend als aktiver Task sichtbar.`)) return;
+    if (!rows.length) return notify(t('library.messages.noSelectedLocalStems', 'Keine lokal gespeicherten Audios in der Auswahl für Stem-Erzeugung gefunden.'), 'error');
+    if (!confirm(t('library.messages.bulkStemsConfirm', 'Stems für {{count}} lokale ausgewählte Variante(n) erzeugen?{{skipped}}\n\nDer Sammellauf wird im Hintergrund gestartet und ist im Status-Frontend als aktiver Task sichtbar.', { count: rows.length, skipped: skipped ? t('library.messages.bulkStemsSkipped', '\n\n{{count}} nicht lokale Variante(n) werden übersprungen.', { count: skipped }) : '' }))) return;
     const ids = rows.map((asset) => asset.id);
     setBulkActionBusy('stems');
     setStemLoadingIds((current) => new Set([...current, ...ids]));
     try {
       const result = await api.archive.bulkGenerateStems(ids);
-      notify(`Stem-Sammellauf gestartet: Task #${result?.task_local_id || '—'} · ${rows.length} Variante${rows.length === 1 ? '' : 'n'}${skipped ? ` · ${skipped} übersprungen` : ''}.`, 'success');
+      notify(t('library.messages.bulkStemsStarted', 'Stem-Sammellauf gestartet: Task #{{task}} · {{count}} Variante(n){{skipped}}.', { task: result?.task_local_id || '—', count: rows.length, skipped: skipped ? t('library.messages.bulkSkippedSuffix', ' · {{count}} übersprungen', { count: skipped }) : '' }), 'success');
       await onReload?.();
       window.setTimeout(() => onReload?.(), 1200);
     } catch (err) {
-      notify(err?.message || 'Stem-Sammellauf konnte nicht gestartet werden.', 'error');
+      notify(err?.message || t('library.messages.bulkStemsFailed', 'Stem-Sammellauf konnte nicht gestartet werden.'), 'error');
     } finally {
       setBulkActionBusy('');
       setStemLoadingIds((current) => {
@@ -4009,17 +4028,17 @@ ${generationOptionsText(asset)}`,
 
   async function generateSelectedAiTags() {
     const rows = selectedAssets.filter((asset) => asset?.id);
-    if (!rows.length) return notify('Keine ausgewählten Varianten für KI-Tags gefunden.', 'error');
-    if (!confirm(`KI-Tags für ${rows.length} ausgewählte Variante${rows.length === 1 ? '' : 'n'} erzeugen?\n\nDer Sammellauf wird im Hintergrund gestartet und ist im Status-Frontend sichtbar.`)) return;
+    if (!rows.length) return notify(t('library.messages.noSelectedAiTags', 'Keine ausgewählten Varianten für KI-Tags gefunden.'), 'error');
+    if (!confirm(t('library.messages.bulkAiTagsConfirm', 'KI-Tags für {{count}} ausgewählte Variante(n) erzeugen?\n\nDer Sammellauf wird im Hintergrund gestartet und ist im Status-Frontend sichtbar.', { count: rows.length }))) return;
     const ids = rows.map((asset) => asset.id);
     setBulkActionBusy('ai-tags');
     try {
       const result = await api.archive.bulkGenerateAiTags(ids, { force: false });
-      notify(`KI-Tagging gestartet: Task #${result?.task_local_id || '—'} · ${rows.length} Variante${rows.length === 1 ? '' : 'n'}.`, 'success');
+      notify(t('library.messages.bulkAiTagsStarted', 'KI-Tagging gestartet: Task #{{task}} · {{count}} Variante(n).', { task: result?.task_local_id || '—', count: rows.length }), 'success');
       await onReload?.();
       window.setTimeout(() => onReload?.(), 1200);
     } catch (err) {
-      notify(err?.message || 'KI-Tagging konnte nicht gestartet werden.', 'error');
+      notify(err?.message || t('library.messages.bulkAiTagsFailed', 'KI-Tagging konnte nicht gestartet werden.'), 'error');
     } finally {
       setBulkActionBusy('');
     }
@@ -4029,8 +4048,8 @@ ${generationOptionsText(asset)}`,
     const allRows = selectedAssets.filter((asset) => asset?.id);
     const rows = allRows.filter(canConvertAssetToWav);
     const skipped = allRows.length - rows.length;
-    if (!rows.length) return notify('Keine konvertierbaren Audios in der Auswahl gefunden.', 'error');
-    if (!confirm(`WAV für ${rows.length} ausgewählte Variante${rows.length === 1 ? '' : 'n'} erzeugen?${skipped ? `\n\n${skipped} Variante${skipped === 1 ? '' : 'n'} ohne lokale Datei oder Audio-URL werden übersprungen.` : ''}\n\nDie Originaldateien bleiben unverändert.`)) return;
+    if (!rows.length) return notify(t('library.messages.noConvertibleSelected', 'Keine konvertierbaren Audios in der Auswahl gefunden.'), 'error');
+    if (!confirm(t('library.messages.bulkWavConfirm', 'WAV für {{count}} ausgewählte Variante(n) erzeugen?{{skipped}}\n\nDie Originaldateien bleiben unverändert.', { count: rows.length, skipped: skipped ? t('library.messages.bulkWavSkipped', '\n\n{{count}} Variante(n) ohne lokale Datei oder Audio-URL werden übersprungen.', { count: skipped }) : '' }))) return;
     const ids = rows.map((asset) => asset.id);
     setBulkActionBusy('wav');
     setWavLoadingIds((current) => new Set([...current, ...ids]));
@@ -4038,10 +4057,10 @@ ${generationOptionsText(asset)}`,
       for (const asset of rows) {
         await api.archive.convertToWav(asset.id, { force: false });
       }
-      notify(`WAV-Konvertierung abgeschlossen: ${rows.length} Variante${rows.length === 1 ? '' : 'n'}${skipped ? ` · ${skipped} übersprungen` : ''}.`, 'success');
+      notify(t('library.messages.bulkWavDone', 'WAV-Konvertierung abgeschlossen: {{count}} Variante(n){{skipped}}.', { count: rows.length, skipped: skipped ? t('library.messages.bulkSkippedSuffix', ' · {{count}} übersprungen', { count: skipped }) : '' }), 'success');
       await onReload?.();
     } catch (err) {
-      notify(err?.message || 'WAV-Konvertierung der Auswahl fehlgeschlagen.', 'error');
+      notify(err?.message || t('library.messages.bulkWavFailed', 'WAV-Konvertierung der Auswahl fehlgeschlagen.'), 'error');
     } finally {
       setBulkActionBusy('');
       setWavLoadingIds((current) => {
@@ -4059,15 +4078,15 @@ ${generationOptionsText(asset)}`,
     const audioFile = formData.get('audio');
     const title = String(formData.get('title') || '').trim();
     if (!audioFile || typeof audioFile === 'string' || !audioFile.size) {
-      return notify('Bitte eine Audiodatei auswählen.', 'error');
+      return notify(t('library.messages.selectAudioFile', 'Bitte eine Audiodatei auswählen.'), 'error');
     }
     if (!title) {
-      return notify('Bitte einen Titel für den Import angeben.', 'error');
+      return notify(t('library.messages.importTitleRequired', 'Bitte einen Titel für den Import angeben.'), 'error');
     }
-    setManualImportBusy(true);
+      setManualImportBusy(true);
     try {
       const result = await api.archive.importManualAudio(formData);
-      notify(result?.message || 'Audio wurde importiert.', 'success');
+      notify(result?.message || t('library.messages.audioImported', 'Audio wurde importiert.'), 'success');
       setManualImportOpen(false);
       form.reset();
       await onReload?.();
@@ -4079,7 +4098,7 @@ ${generationOptionsText(asset)}`,
         window.setTimeout(() => document.querySelector(`[data-react-asset-row="${CSS.escape(String(result.audio_asset_id || ''))}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 250);
       }
     } catch (err) {
-      notify(err?.message || 'Audio-Import fehlgeschlagen.', 'error');
+      notify(err?.message || t('library.messages.audioImportFailed', 'Audio-Import fehlgeschlagen.'), 'error');
     } finally {
       setManualImportBusy(false);
     }
@@ -4087,46 +4106,46 @@ ${generationOptionsText(asset)}`,
 
   function ManualAudioImportModal() {
     return (
-      <Modal open={manualImportOpen} title="Audio manuell erfassen" onClose={() => !manualImportBusy && setManualImportOpen(false)} wide>
+      <Modal open={manualImportOpen} title={t('library.manualImport.title', 'Audio manuell erfassen')} onClose={() => !manualImportBusy && setManualImportOpen(false)} wide>
         <form className="form-grid manual-audio-import-form" onSubmit={handleManualAudioImport}>
-          <label className="wide">Audiodatei
+          <label className="wide">{t('library.manualImport.audioFile', 'Audiodatei')}
             <input name="audio" type="file" accept="audio/*,.mp3,.wav,.m4a,.aac,.ogg,.flac" required />
           </label>
-          <label>Titel
-            <input name="title" placeholder="z. B. Kalte Hände" required />
+          <label>{t('common.title', 'Titel')}
+            <input name="title" placeholder={t('library.manualImport.titlePlaceholder', 'z. B. Kalte Hände')} required />
           </label>
-          <label>Projektname optional
-            <input name="project_title" placeholder="leer = Titel" />
+          <label>{t('library.manualImport.projectNameOptional', 'Projektname optional')}
+            <input name="project_title" placeholder={t('library.manualImport.projectPlaceholder', 'leer = Titel')} />
           </label>
-          <label>Sprache
+          <label>{t('library.manualImport.language', 'Sprache')}
             <select name="language" defaultValue="de">
-              <option value="de">Deutsch</option>
-              <option value="en">Englisch</option>
+              <option value="de">{t('language.label', 'Deutsch')}</option>
+              <option value="en">English</option>
               <option value="auto">Auto</option>
             </select>
           </label>
-          <label>Cover optional
+          <label>{t('library.manualImport.coverOptional', 'Cover optional')}
             <input name="cover" type="file" accept="image/*,.jpg,.jpeg,.png,.webp,.gif,.avif" />
           </label>
           <label className="wide">Songtext / Lyrics
-            <textarea name="lyrics" rows={10} placeholder="Songtext einfügen. Dieser Text wird später für SRT als Source of Truth verwendet." />
+            <textarea name="lyrics" rows={10} placeholder={t('library.manualImport.lyricsPlaceholder', 'Songtext einfügen. Dieser Text wird später für SRT als Source of Truth verwendet.')} />
           </label>
           <label className="wide">Style
-            <textarea name="style" rows={4} placeholder="z. B. German emotional boom bap, male rap vocals, dark piano..." />
+            <textarea name="style" rows={4} placeholder={t('library.manualImport.stylePlaceholder', 'z. B. German emotional boom bap, male rap vocals, dark piano...')} />
           </label>
-          <label className="wide">Prompt / Beschreibung optional
-            <textarea name="prompt" rows={4} placeholder="Optionaler Prompt. Falls leer, wird der Songtext auch als Prompt gespeichert." />
+          <label className="wide">{t('library.manualImport.promptOptional', 'Prompt / Beschreibung optional')}
+            <textarea name="prompt" rows={4} placeholder={t('library.manualImport.promptPlaceholder', 'Optionaler Prompt. Falls leer, wird der Songtext auch als Prompt gespeichert.')} />
           </label>
-          <label className="wide">Notizen optional
-            <textarea name="notes" rows={3} placeholder="Interne Notizen zum Import." />
+          <label className="wide">{t('library.manualImport.notesOptional', 'Notizen optional')}
+            <textarea name="notes" rows={3} placeholder={t('library.manualImport.notesPlaceholder', 'Interne Notizen zum Import.')} />
           </label>
           <div className="wide manual-import-hint">
-            <strong>Import als vollwertiger Library-Song</strong>
-            <p className="muted">Die Datei wird unter dem Audio-Storage gespeichert und als normales AudioAsset mit Song, Projekt, Lyrics, Style und Metadaten angelegt. Danach funktionieren Player, SRT-Erzeugung, Editor, ZIP-Export und Einzelinhalte wie bei Suno-generierten Songs.</p>
+            <strong>{t('library.manualImport.fullSongTitle', 'Import als vollwertiger Library-Song')}</strong>
+            <p className="muted">{t('library.manualImport.fullSongText', 'Die Datei wird unter dem Audio-Storage gespeichert und als normales AudioAsset mit Song, Projekt, Lyrics, Style und Metadaten angelegt. Danach funktionieren Player, SRT-Erzeugung, Editor, ZIP-Export und Einzelinhalte wie bei Suno-generierten Songs.')}</p>
           </div>
           <div className="wide button-row wrap right">
-            <button type="button" onClick={() => setManualImportOpen(false)} disabled={manualImportBusy}>Abbrechen</button>
-            <button className="primary" type="submit" disabled={manualImportBusy}>{manualImportBusy ? 'Importiere…' : 'Audio importieren'}</button>
+            <button type="button" onClick={() => setManualImportOpen(false)} disabled={manualImportBusy}>{t('common.cancel', 'Abbrechen')}</button>
+            <button className="primary" type="submit" disabled={manualImportBusy}>{manualImportBusy ? t('library.manualImport.importing', 'Importiere…') : t('library.actions.importAudio', 'Audio importieren')}</button>
           </div>
         </form>
       </Modal>
@@ -4138,41 +4157,41 @@ ${generationOptionsText(asset)}`,
       <div className={`library-pagination-bar ${embedded ? 'embedded-pagination' : 'panel slim-panel'}`}>
         <div className="library-pagination-left">
           <div className="button-row wrap view-mode-switcher">
-            <button type="button" className={libraryViewMode === 'list' ? 'active' : ''} onClick={() => setLibraryViewMode('list')}>Listenansicht</button>
-            <button type="button" className={libraryViewMode === 'flat-list' ? 'active' : ''} onClick={() => setLibraryViewMode('flat-list')}>Titelliste</button>
-            <button type="button" className={libraryViewMode === 'gallery' ? 'active' : ''} onClick={() => setLibraryViewMode('gallery')}>Cover-Ansicht</button>
+            <button type="button" className={libraryViewMode === 'list' ? 'active' : ''} onClick={() => setLibraryViewMode('list')}>{t('library.views.list', 'Listenansicht')}</button>
+            <button type="button" className={libraryViewMode === 'flat-list' ? 'active' : ''} onClick={() => setLibraryViewMode('flat-list')}>{t('library.views.flatList', 'Titelliste')}</button>
+            <button type="button" className={libraryViewMode === 'gallery' ? 'active' : ''} onClick={() => setLibraryViewMode('gallery')}>{t('library.views.gallery', 'Cover-Ansicht')}</button>
           </div>
-          <div className="library-count-pill library-count-summary" title={`${libraryStats.groups} Songgruppen · ${libraryStats.variants} Varianten · ${libraryStats.playable} abspielbar`}>
-            <span><strong>{libraryStats.groups}</strong><small>Songgruppen</small></span>
-            <span><strong>{libraryStats.variants}</strong><small>Varianten</small></span>
-            <span><strong>{libraryStats.playable}</strong><small>abspielbar</small></span>
-            {localFilter === 'favorites' && <span><strong>{libraryStats.favorites}</strong><small>Favoriten</small></span>}
+          <div className="library-count-pill library-count-summary" title={t('library.statsTitle', '{{groups}} Songgruppen · {{variants}} Varianten · {{playable}} abspielbar', { groups: libraryStats.groups, variants: libraryStats.variants, playable: libraryStats.playable })}>
+            <span><strong>{libraryStats.groups}</strong><small>{t('library.stats.groups', 'Songgruppen')}</small></span>
+            <span><strong>{libraryStats.variants}</strong><small>{t('library.stats.variants', 'Varianten')}</small></span>
+            <span><strong>{libraryStats.playable}</strong><small>{t('library.stats.playable', 'abspielbar')}</small></span>
+            {localFilter === 'favorites' && <span><strong>{libraryStats.favorites}</strong><small>{t('library.favorites', 'Favoriten')}</small></span>}
           </div>
         </div>
         <div className="pagination-controls elegant-controls">
           {libraryViewMode === 'gallery' && (
-            <div className="button-row compact gallery-view-toggles" aria-label="Coveransicht Modus">
-              <button type="button" className={libraryGalleryMode === 'simple' ? 'active' : ''} onClick={() => setLibraryGalleryMode('simple')}>Einfach</button>
-              <button type="button" className={libraryGalleryMode === 'advanced' ? 'active' : ''} onClick={() => setLibraryGalleryMode('advanced')}>Erweitert</button>
+            <div className="button-row compact gallery-view-toggles" aria-label={t('library.galleryModeAria', 'Coveransicht Modus')}>
+              <button type="button" className={libraryGalleryMode === 'simple' ? 'active' : ''} onClick={() => setLibraryGalleryMode('simple')}>{t('library.modes.simple', 'Einfach')}</button>
+              <button type="button" className={libraryGalleryMode === 'advanced' ? 'active' : ''} onClick={() => setLibraryGalleryMode('advanced')}>{t('library.modes.advanced', 'Erweitert')}</button>
             </div>
           )}
           {libraryViewMode === 'flat-list' && (
-            <div className="button-row compact gallery-view-toggles" aria-label="Titelliste Modus">
-              <button type="button" className={libraryFlatListMode === 'simple' ? 'active' : ''} onClick={() => setLibraryFlatListMode('simple')}>Einfach</button>
-              <button type="button" className={libraryFlatListMode === 'advanced' ? 'active' : ''} onClick={() => setLibraryFlatListMode('advanced')}>Erweitert</button>
+            <div className="button-row compact gallery-view-toggles" aria-label={t('library.flatListModeAria', 'Titelliste Modus')}>
+              <button type="button" className={libraryFlatListMode === 'simple' ? 'active' : ''} onClick={() => setLibraryFlatListMode('simple')}>{t('library.modes.simple', 'Einfach')}</button>
+              <button type="button" className={libraryFlatListMode === 'advanced' ? 'active' : ''} onClick={() => setLibraryFlatListMode('advanced')}>{t('library.modes.advanced', 'Erweitert')}</button>
             </div>
           )}
           {libraryViewMode === 'flat-list' && (
-            <div className="asset-flat-size-controls" aria-label="Titelliste Spaltengröße">
-              <button type="button" onClick={() => setLibraryFlatListScale((value) => Math.max(0, value - 1))} disabled={libraryFlatListScale <= 0} title="Titelliste kompakter anzeigen">−</button>
+            <div className="asset-flat-size-controls" aria-label={t('library.flatListSizeAria', 'Titelliste Spaltengröße')}>
+              <button type="button" onClick={() => setLibraryFlatListScale((value) => Math.max(0, value - 1))} disabled={libraryFlatListScale <= 0} title={t('library.flatListCompact', 'Titelliste kompakter anzeigen')}>−</button>
               <span>{flatListScaleLabel}</span>
-              <button type="button" onClick={() => setLibraryFlatListScale((value) => Math.min(2, value + 1))} disabled={libraryFlatListScale >= 2} title="Titelliste breiter anzeigen">+</button>
+              <button type="button" onClick={() => setLibraryFlatListScale((value) => Math.min(2, value + 1))} disabled={libraryFlatListScale >= 2} title={t('library.flatListWide', 'Titelliste breiter anzeigen')}>+</button>
             </div>
           )}
           {libraryViewMode === 'gallery' && libraryGalleryMode === 'simple' && (
-            <label className="gallery-density-select elegant-select" title="Kacheln pro Reihe">
+            <label className="gallery-density-select elegant-select" title={t('library.tilesPerRow', 'Kacheln pro Reihe')}>
               <span>Grid</span>
-              <select value={libraryGalleryColumns} onChange={(event) => setLibraryGalleryColumns(event.target.value)} aria-label="Kacheln pro Reihe">
+              <select value={libraryGalleryColumns} onChange={(event) => setLibraryGalleryColumns(event.target.value)} aria-label={t('library.tilesPerRow', 'Kacheln pro Reihe')}>
                 <option value="3">3</option>
                 <option value="5">5</option>
                 <option value="8">8</option>
@@ -4180,20 +4199,20 @@ ${generationOptionsText(asset)}`,
               </select>
             </label>
           )}
-          <label className="page-size-select elegant-select" title="Anzahl anzeigen">
-            <span>Anzahl</span>
-            <select value={libraryPageSize} onChange={(event) => setLibraryPageSize(event.target.value)} aria-label="Anzahl anzeigen">
+          <label className="page-size-select elegant-select" title={t('library.pageSize', 'Anzahl anzeigen')}>
+            <span>{t('library.count', 'Anzahl')}</span>
+            <select value={libraryPageSize} onChange={(event) => setLibraryPageSize(event.target.value)} aria-label={t('library.pageSize', 'Anzahl anzeigen')}>
               <option value="25">25</option>
               <option value="50">50</option>
               <option value="100">100</option>
-              <option value="all">alle</option>
+              <option value="all">{t('library.allLower', 'alle')}</option>
             </select>
           </label>
           {libraryPageSize !== 'all' && (
             <div className="library-page-nav">
-              <button type="button" disabled={safeLibraryPage <= 1} onClick={() => setLibraryPage((value) => Math.max(1, value - 1))} aria-label="Vorherige Seite">←</button>
-              <span>Seite {safeLibraryPage} / {libraryTotalPages}</span>
-              <button type="button" disabled={safeLibraryPage >= libraryTotalPages} onClick={() => setLibraryPage((value) => Math.min(libraryTotalPages, value + 1))} aria-label="Nächste Seite">→</button>
+              <button type="button" disabled={safeLibraryPage <= 1} onClick={() => setLibraryPage((value) => Math.max(1, value - 1))} aria-label={t('library.previousPage', 'Vorherige Seite')}>←</button>
+              <span>{t('library.pageStatus', 'Seite {{page}} / {{total}}', { page: safeLibraryPage, total: libraryTotalPages })}</span>
+              <button type="button" disabled={safeLibraryPage >= libraryTotalPages} onClick={() => setLibraryPage((value) => Math.min(libraryTotalPages, value + 1))} aria-label={t('library.nextPage', 'Nächste Seite')}>→</button>
             </div>
           )}
         </div>
@@ -4257,10 +4276,10 @@ ${generationOptionsText(asset)}`,
     return (
       <article key={`asset-${asset.id}`} className={`library-gallery-tile ${active ? 'is-playing-row' : ''} ${selectedIds.has(asset.id) ? 'is-selected' : ''}`} title={`${pickTitle(asset)} · ${label}`}>
         <div className="gallery-single-cover-wrap">
-          <label className="gallery-select-checkbox" title={`${pickTitle(asset)} auswählen`} onPointerDown={(event) => event.stopPropagation()} onClick={(event) => event.stopPropagation()}>
-            <input type="checkbox" checked={selectedIds.has(asset.id)} onChange={() => toggleSelected(asset.id)} aria-label={`${pickTitle(asset)} auswählen`} />
+          <label className="gallery-select-checkbox" title={t('library.selectAsset', '{{title}} auswählen', { title: pickTitle(asset) })} onPointerDown={(event) => event.stopPropagation()} onClick={(event) => event.stopPropagation()}>
+            <input type="checkbox" checked={selectedIds.has(asset.id)} onChange={() => toggleSelected(asset.id)} aria-label={t('library.selectAsset', '{{title}} auswählen', { title: pickTitle(asset) })} />
           </label>
-          <button className="gallery-single-cover" type="button" onClick={() => playAsset(asset, projectQueue, queueIndex)} title={isPlayingAsset(asset) ? 'Pause' : 'Abspielen'}>
+          <button className="gallery-single-cover" type="button" onClick={() => playAsset(asset, projectQueue, queueIndex)} title={isPlayingAsset(asset) ? t('player.pause', 'Pause') : t('player.play', 'Abspielen')}>
             <img src={pickCover(asset)} alt={pickTitle(asset)} onError={handleCoverImageError} />
             <span className="cover-play">{isPlayingAsset(asset) ? <Pause size={18} /> : <Play size={18} fill="currentColor" />}</span>
           </button>
@@ -4269,8 +4288,8 @@ ${generationOptionsText(asset)}`,
             type="button"
             onPointerDown={(event) => event.stopPropagation()}
             onClick={(event) => { event.preventDefault(); event.stopPropagation(); openGalleryAssetDetails(project, asset); }}
-            title="Songdetails öffnen"
-          >Details</button>
+            title={t('library.openSongDetails', 'Songdetails öffnen')}
+          >{t('library.details', 'Details')}</button>
           <div className="gallery-audio-menu-anchor">
             <AudioActionMenu asset={asset} compact label="" playQueue={projectQueue} playIndex={queueIndex} project={project} />
           </div>
@@ -4280,7 +4299,7 @@ ${generationOptionsText(asset)}`,
           <small>{label} · {formatDuration(asset.duration_seconds)}</small>
         </div>
         <div className="gallery-tile-actions">
-          <button type="button" onClick={() => playAsset(asset, projectQueue, queueIndex)}>{isPlayingAsset(asset) ? 'Pause' : 'Play'}</button>
+          <button type="button" onClick={() => playAsset(asset, projectQueue, queueIndex)}>{isPlayingAsset(asset) ? t('player.pause', 'Pause') : t('player.play', 'Play')}</button>
           <button type="button" onClick={() => openWorkflowWizard(asset)}>Wizard</button>
           <AudioActionMenu asset={asset} compact label="" dropUp playQueue={projectQueue} playIndex={queueIndex} project={project} />
         </div>
@@ -4297,39 +4316,39 @@ ${generationOptionsText(asset)}`,
     const advanced = libraryFlatListMode === 'advanced';
     return (
       <article className={`asset-flat-row is-${libraryFlatListMode} ${active ? 'is-playing-row' : ''} ${selectedIds.has(asset.id) ? 'is-selected' : ''}`} key={`flat-asset-${asset.id}`} data-react-asset-row={asset.id}>
-        <label className="asset-flat-select" title={`${pickTitle(asset)} auswählen`} onPointerDown={(event) => event.stopPropagation()} onClick={(event) => event.stopPropagation()}>
-          <input type="checkbox" checked={selectedIds.has(asset.id)} onChange={() => toggleSelected(asset.id)} aria-label={`${pickTitle(asset)} auswählen`} />
+        <label className="asset-flat-select" title={t('library.selectAsset', '{{title}} auswählen', { title: pickTitle(asset) })} onPointerDown={(event) => event.stopPropagation()} onClick={(event) => event.stopPropagation()}>
+          <input type="checkbox" checked={selectedIds.has(asset.id)} onChange={() => toggleSelected(asset.id)} aria-label={t('library.selectAsset', '{{title}} auswählen', { title: pickTitle(asset) })} />
         </label>
-        <button className={`asset-flat-cover ${active ? 'is-active-cover' : ''}`} type="button" onClick={() => playAsset(asset, projectQueue, queueIndex, project)} disabled={!isPlayable(asset)} title={isPlayingAsset(asset) ? 'Pause' : 'Abspielen'}>
+        <button className={`asset-flat-cover ${active ? 'is-active-cover' : ''}`} type="button" onClick={() => playAsset(asset, projectQueue, queueIndex, project)} disabled={!isPlayable(asset)} title={isPlayingAsset(asset) ? t('player.pause', 'Pause') : t('player.play', 'Abspielen')}>
           <img src={pickCover(asset)} alt={pickTitle(asset)} onError={handleCoverImageError} />
           <span className="cover-play">{isPlayingAsset(asset) ? <Pause size={16} /> : <Play size={16} fill="currentColor" />}</span>
         </button>
         <div className="asset-flat-main">
-          <button className="asset-flat-title" type="button" onClick={(event) => openGalleryAssetDetails(project, asset, event)} title="Songdetails öffnen">
+          <button className="asset-flat-title" type="button" onClick={(event) => openGalleryAssetDetails(project, asset, event)} title={t('library.openSongDetails', 'Songdetails öffnen')}>
             <strong>{pickTitle(asset)}</strong>
-            <span>{advanced ? `${project?.title || 'Ohne Songgruppe'} · ${label} · ${operationLabel(asset.operation_type || asset.task_type || asset.operation_label)}` : `${label} · ${formatDuration(asset.duration_seconds)} · ${audioStatusLabel(asset)}`}</span>
+            <span>{advanced ? `${project?.title || t('library.noSongGroup', 'Ohne Songgruppe')} · ${label} · ${operationLabel(asset.operation_type || asset.task_type || asset.operation_label, t)}` : `${label} · ${formatDuration(asset.duration_seconds)} · ${audioStatusLabel(asset, t)}`}</span>
           </button>
           {advanced && active && (
             <div className="library-inline-waveform asset-flat-waveform">
-              <span>{playbackState?.isPlaying ? 'Läuft' : 'Bereit'} · {formatDuration(playbackState?.currentTime || 0)} / {formatDuration(playbackState?.duration || asset.duration_seconds)}</span>
+              <span>{playbackState?.isPlaying ? t('library.playback.running', 'Läuft') : t('library.playback.ready', 'Bereit')} · {formatDuration(playbackState?.currentTime || 0)} / {formatDuration(playbackState?.duration || asset.duration_seconds)}</span>
               <Waveform asset={asset} compact currentTime={playbackState?.currentTime || 0} durationSeconds={playbackState?.duration || asset.duration_seconds} interactive={false} />
             </div>
           )}
           {advanced && <div className="asset-flat-meta">
             <span>{formatDuration(asset.duration_seconds)}</span>
-            <span>{audioStatusLabel(asset)}</span>
+            <span>{audioStatusLabel(asset, t)}</span>
             <span>audio_assets.id {asset.id}</span>
             {asset.audio_id && <span>Audio-ID {shortId(asset.audio_id, 12)}</span>}
           </div>}
         </div>
         {advanced && <div className="asset-flat-badges">
-          {isAssetFavorite(asset) && <span className="status favorite"><ThumbsUp size={14} fill="currentColor" /> Favorit</span>}
-          {isCoverCached(asset) && <span className="status cached">Cover lokal</span>}
+          {isAssetFavorite(asset) && <span className="status favorite"><ThumbsUp size={14} fill="currentColor" /> {t('library.favorites', 'Favorit')}</span>}
+          {isCoverCached(asset) && <span className="status cached">{t('library.localFilter.coverLocal', 'Cover lokal')}</span>}
           {badges.map((badge) => <span key={badge.key} className={`status ${badge.className || 'cached'}`}>{badge.label}</span>)}
         </div>}
         <div className="asset-flat-actions">
           <button type="button" onClick={() => playAsset(asset, projectQueue, queueIndex, project)} disabled={!isPlayable(asset)}>{isPlayingAsset(asset) ? <Pause size={15} /> : <Play size={15} fill="currentColor" />}</button>
-          <button type="button" className={isAssetFavorite(asset) ? 'favorite-action is-favorite' : 'favorite-action'} onClick={() => toggleAssetFavorite(asset)} disabled={favoriteSavingIds.has(asset.id)} title={isAssetFavorite(asset) ? 'Favorit entfernen' : 'Als Favorit speichern'}>
+          <button type="button" className={isAssetFavorite(asset) ? 'favorite-action is-favorite' : 'favorite-action'} onClick={() => toggleAssetFavorite(asset)} disabled={favoriteSavingIds.has(asset.id)} title={isAssetFavorite(asset) ? t('library.actions.removeFavorite', 'Favorit entfernen') : t('library.actions.saveFavorite', 'Als Favorit speichern')}>
             <ThumbsUp size={15} fill={isAssetFavorite(asset) ? 'currentColor' : 'none'} />
           </button>
           <AudioActionMenu asset={asset} compact label="" dropUp playQueue={projectQueue} playIndex={queueIndex} project={project} />
@@ -4355,18 +4374,18 @@ ${generationOptionsText(asset)}`,
     const projectSelected = isProjectSelectionComplete(project);
     return (
       <article key={`project-${project.id}`} className={`library-gallery-card ${projectActive ? 'is-playing-row' : ''} ${projectSelected ? 'is-selected' : ''}`}>
-        <label className="gallery-select-checkbox project-select-checkbox" title={`Alle Varianten von ${project.title} auswählen`} onPointerDown={(event) => event.stopPropagation()} onClick={(event) => event.stopPropagation()}>
-          <input type="checkbox" checked={projectSelected} onChange={() => toggleProjectSelected(project)} aria-label={`Alle Varianten von ${project.title} auswählen`} />
+        <label className="gallery-select-checkbox project-select-checkbox" title={t('library.selectAllProjectVariants', 'Alle Varianten von {{title}} auswählen', { title: project.title })} onPointerDown={(event) => event.stopPropagation()} onClick={(event) => event.stopPropagation()}>
+          <input type="checkbox" checked={projectSelected} onChange={() => toggleProjectSelected(project)} aria-label={t('library.selectAllProjectVariants', 'Alle Varianten von {{title}} auswählen', { title: project.title })} />
         </label>
-        <button className="gallery-cover-collage single-cover" type="button" onClick={(event) => openProjectDetails(project, event)} title="Details öffnen">
+        <button className="gallery-cover-collage single-cover" type="button" onClick={(event) => openProjectDetails(project, event)} title={t('library.openDetails', 'Details öffnen')}>
           <img src={displayCover || '/static/favicon.ico'} alt={`${project.title} Cover`} />
           <span className="cover-play">{projectPlaying ? <Pause size={18} /> : <Play size={18} fill="currentColor" />}</span>
         </button>
         <button className="gallery-card-title" type="button" onClick={(event) => openProjectDetails(project, event)}>
           <strong>{project.title}</strong>
-          <small>{project.assets.length} Varianten · {formatDuration(project.duration)}</small>
+          <small>{t('library.variantsWithDuration', '{{count}} Varianten · {{duration}}', { count: project.assets.length, duration: formatDuration(project.duration) })}</small>
         </button>
-        <p className="muted">{summarizeStyle(pickStyle(bestAsset), 90)}</p>
+        <p className="muted">{summarizeStyle(pickStyle(bestAsset), 90, t)}</p>
         <div className="project-gallery-asset-actions">
           {project.assets.map((asset, index) => (
             <div className="gallery-asset-menu-pill" key={`gallery-action-${project.id}-${asset.id}`}>
@@ -4377,8 +4396,8 @@ ${generationOptionsText(asset)}`,
           ))}
         </div>
         <div className="button-row wrap compact">
-          <button type="button" onClick={() => playProject(project)}>{projectPlaying ? 'Pause' : 'Play'}</button>
-          <button type="button" onClick={(event) => openProjectDetails(project, event)}>Details</button>
+          <button type="button" onClick={() => playProject(project)}>{projectPlaying ? t('player.pause', 'Pause') : t('player.play', 'Play')}</button>
+          <button type="button" onClick={(event) => openProjectDetails(project, event)}>{t('library.details', 'Details')}</button>
           {bestAsset && <button type="button" onClick={() => openWorkflowWizard(bestAsset)}>Wizard</button>}
         </div>
       </article>
@@ -4390,8 +4409,8 @@ ${generationOptionsText(asset)}`,
       return (
         <div className="library-gallery-view simple-gallery-view stack">
           <section className="library-gallery-section">
-            <h3>Alle Songs & Varianten</h3>
-            <p className="muted">Kompakte Coverübersicht über alle Varianten. Klick auf das Cover startet die Wiedergabe, Details öffnet die Songdetails.</p>
+            <h3>{t('library.gallery.allSongsVariants', 'Alle Songs & Varianten')}</h3>
+            <p className="muted">{t('library.gallery.simpleText', 'Kompakte Coverübersicht über alle Varianten. Klick auf das Cover startet die Wiedergabe, Details öffnet die Songdetails.')}</p>
             <div className="library-gallery-grid simple-cover-grid" style={galleryGridStyle}>
               {pagedGalleryAssets.map((item) => AssetGalleryTile({ item }))}
             </div>
@@ -4403,7 +4422,7 @@ ${generationOptionsText(asset)}`,
     const groupedByDay = pagedProjects.reduce((groups, project) => {
       const rawDate = project.created_at || project.sort_at || '';
       const parsedDate = parseBackendDate(rawDate);
-      const label = parsedDate ? new Intl.DateTimeFormat('de-DE', { timeZone: 'Europe/Berlin', day: '2-digit', month: '2-digit' }).format(parsedDate) : 'Ohne Datum';
+      const label = parsedDate ? new Intl.DateTimeFormat('de-DE', { timeZone: 'Europe/Berlin', day: '2-digit', month: '2-digit' }).format(parsedDate) : t('library.noDate', 'Ohne Datum');
       groups[label] = groups[label] || [];
       groups[label].push(project);
       return groups;
@@ -4411,7 +4430,7 @@ ${generationOptionsText(asset)}`,
     const byYear = pagedProjects.reduce((groups, project) => {
       const rawDate = project.created_at || project.sort_at || '';
       const parsedDate = parseBackendDate(rawDate);
-      const year = parsedDate ? new Intl.DateTimeFormat('de-DE', { timeZone: 'Europe/Berlin', year: 'numeric' }).format(parsedDate) : 'Ohne Jahr';
+      const year = parsedDate ? new Intl.DateTimeFormat('de-DE', { timeZone: 'Europe/Berlin', year: 'numeric' }).format(parsedDate) : t('library.noYear', 'Ohne Jahr');
       groups[year] = groups[year] || [];
       groups[year].push(project);
       return groups;
@@ -4419,14 +4438,14 @@ ${generationOptionsText(asset)}`,
     return (
       <div className="library-gallery-view stack">
         <section className="library-gallery-section">
-          <h3>Creative Matches</h3>
-          <p className="muted">Aktuelle Treffer aus deiner Library, passend zu Suche und Filter.</p>
+          <h3>{t('library.gallery.creativeMatches', 'Creative Matches')}</h3>
+          <p className="muted">{t('library.gallery.matchesText', 'Aktuelle Treffer aus deiner Library, passend zu Suche und Filter.')}</p>
           <div className="library-gallery-grid" style={galleryGridStyle}>
             {recent.map((project) => ProjectGalleryCard({ project }))}
           </div>
         </section>
         <section className="library-gallery-section">
-          <h3>Uploads, gruppiert nach Tag</h3>
+          <h3>{t('library.gallery.uploadsByDay', 'Uploads, gruppiert nach Tag')}</h3>
           <div className="library-gallery-grid grouped-gallery-grid" style={galleryGridStyle}>
             {Object.entries(groupedByDay).map(([label, rows]) => (
               <button className="library-group-card" type="button" key={label} onClick={(event) => rows[0] && openProjectDetails(rows[0], event)}>
@@ -4434,13 +4453,13 @@ ${generationOptionsText(asset)}`,
                   <img src={galleryDisplayCoverForGroup(rows)} alt="Cover" onError={handleCoverImageError} />
                 </div>
                 <strong>{label}</strong>
-                <small>{rows.reduce((sum, project) => sum + project.assets.length, 0)} Tracks</small>
+                <small>{t('library.tracks', '{{count}} Tracks', { count: rows.reduce((sum, project) => sum + project.assets.length, 0) })}</small>
               </button>
             ))}
           </div>
         </section>
         <section className="library-gallery-section">
-          <h3>Library, gruppiert nach Jahr</h3>
+          <h3>{t('library.gallery.byYear', 'Library, gruppiert nach Jahr')}</h3>
           <div className="library-gallery-grid grouped-gallery-grid" style={galleryGridStyle}>
             {Object.entries(byYear).sort(([a], [b]) => String(b).localeCompare(String(a))).map(([label, rows]) => (
               <button className="library-group-card" type="button" key={label} onClick={(event) => rows[0] && openProjectDetails(rows[0], event)}>
@@ -4448,7 +4467,7 @@ ${generationOptionsText(asset)}`,
                   <img src={galleryDisplayCoverForGroup(rows)} alt="Cover" onError={handleCoverImageError} />
                 </div>
                 <strong>{label}</strong>
-                <small>{rows.length} Songs</small>
+                <small>{t('library.songs', '{{count}} Songs', { count: rows.length })}</small>
               </button>
             ))}
           </div>
@@ -4464,16 +4483,16 @@ ${generationOptionsText(asset)}`,
     const wavCount = selectedAssets.filter(canConvertAssetToWav).length;
     const isBusy = Boolean(bulkActionBusy);
     return (
-      <div className="selected-bulk-actions" aria-label="Aktionen für ausgewählte Library-Inhalte">
-        <span className="selected-bulk-count"><strong>{selectedAssets.length}</strong> ausgewählt</span>
-        <button type="button" className="danger" onClick={() => deleteSelected()} disabled={isBusy}><Trash2 size={15} /> Löschen</button>
-        <button type="button" onClick={() => setSelectedPlaylistOpen(true)} disabled={isBusy}><ListMusic size={15} /> In Playlist</button>
-        <button type="button" onClick={generateSelectedSrt} disabled={isBusy}><FileText size={15} /> {bulkActionBusy === 'srt' ? 'SRT läuft…' : 'SRT erzeugen'}</button>
-        <button type="button" onClick={generateSelectedStems} disabled={isBusy || !localCount}><Scissors size={15} /> {bulkActionBusy === 'stems' ? 'Stems laufen…' : 'Stems erzeugen'}</button>
-        <button type="button" onClick={convertSelectedToWav} disabled={isBusy || !wavCount}><Download size={15} /> {bulkActionBusy === 'wav' ? 'WAV läuft…' : 'WAV erzeugen'}</button>
-        <button type="button" onClick={generateSelectedAiTags} disabled={isBusy}><Tag size={15} /> {bulkActionBusy === 'ai-tags' ? 'Tags laufen…' : 'KI-Tags'}</button>
-        {ids.length > 0 && <a className="button" href={api.archive.bulkAssetBundleUrl(ids)}><Download size={15} /> Auswahl ZIP</a>}
-        <button type="button" onClick={() => setSelectedIds(new Set())} disabled={isBusy}>Auswahl aufheben</button>
+      <div className="selected-bulk-actions" aria-label={t('library.bulk.aria', 'Aktionen für ausgewählte Library-Inhalte')}>
+        <span className="selected-bulk-count"><strong>{selectedAssets.length}</strong> {t('library.bulk.selected', 'ausgewählt')}</span>
+        <button type="button" className="danger" onClick={() => deleteSelected()} disabled={isBusy}><Trash2 size={15} /> {t('common.delete', 'Löschen')}</button>
+        <button type="button" onClick={() => setSelectedPlaylistOpen(true)} disabled={isBusy}><ListMusic size={15} /> {t('library.actions.toPlaylist', 'In Playlist')}</button>
+        <button type="button" onClick={generateSelectedSrt} disabled={isBusy}><FileText size={15} /> {bulkActionBusy === 'srt' ? t('library.bulk.srtRunning', 'SRT läuft…') : t('library.bulk.createSrt', 'SRT erzeugen')}</button>
+        <button type="button" onClick={generateSelectedStems} disabled={isBusy || !localCount}><Scissors size={15} /> {bulkActionBusy === 'stems' ? t('library.bulk.stemsRunning', 'Stems laufen…') : t('library.bulk.createStems', 'Stems erzeugen')}</button>
+        <button type="button" onClick={convertSelectedToWav} disabled={isBusy || !wavCount}><Download size={15} /> {bulkActionBusy === 'wav' ? t('library.bulk.wavRunning', 'WAV läuft…') : t('library.bulk.createWav', 'WAV erzeugen')}</button>
+        <button type="button" onClick={generateSelectedAiTags} disabled={isBusy}><Tag size={15} /> {bulkActionBusy === 'ai-tags' ? t('library.bulk.tagsRunning', 'Tags laufen…') : t('library.aiTags.title', 'KI-Tags')}</button>
+        {ids.length > 0 && <a className="button" href={api.archive.bulkAssetBundleUrl(ids)}><Download size={15} /> {t('library.bulk.selectionZip', 'Auswahl ZIP')}</a>}
+        <button type="button" onClick={() => setSelectedIds(new Set())} disabled={isBusy}>{t('library.bulk.clearSelection', 'Auswahl aufheben')}</button>
       </div>
     );
   }
@@ -4495,58 +4514,58 @@ ${generationOptionsText(asset)}`,
     return (
       <section className={`page stack library-detail-page ${playbackState?.isPlaying ? 'is-playback-stable' : ''}`}>
         <div className="detail-navigation-bar">
-          <button className="ghost compact" type="button" onClick={closeProjectDetails}><ArrowLeft size={16} /> Zurück zur Library</button>
+          <button className="ghost compact" type="button" onClick={closeProjectDetails}><ArrowLeft size={16} /> {t('library.detail.backToLibrary', 'Zurück zur Library')}</button>
           <div className="detail-navigation-actions">
-            <button className="ghost compact" type="button" disabled={!previousProject} onClick={(event) => previousProject && openProjectDetails(previousProject, event)}>← Vorheriger Song</button>
-            <button className="ghost compact" type="button" disabled={!nextProject} onClick={(event) => nextProject && openProjectDetails(nextProject, event)}>Nächster Song →</button>
+            <button className="ghost compact" type="button" disabled={!previousProject} onClick={(event) => previousProject && openProjectDetails(previousProject, event)}>← {t('library.detail.previousSong', 'Vorheriger Song')}</button>
+            <button className="ghost compact" type="button" disabled={!nextProject} onClick={(event) => nextProject && openProjectDetails(nextProject, event)}>{t('library.detail.nextSong', 'Nächster Song')} →</button>
           </div>
         </div>
         <div className="detail-hero library-hero">
-          <button className={`hero-cover-button ${isCurrentProject(activeProject) ? 'is-active-cover' : ''}`} type="button" onClick={() => playProject(activeProject)} title={isPlayingProject(activeProject) ? 'Pause' : 'Beste Version abspielen'}>
+          <button className={`hero-cover-button ${isCurrentProject(activeProject) ? 'is-active-cover' : ''}`} type="button" onClick={() => playProject(activeProject)} title={isPlayingProject(activeProject) ? t('player.pause', 'Pause') : t('library.detail.playBestVersion', 'Beste Version abspielen')}>
             <img src={activeProject.cover || '/static/favicon.ico'} alt="Cover" onError={handleCoverImageError} />
             <span>{isPlayingProject(activeProject) ? <Pause size={18} /> : <Play size={18} fill="currentColor" />}</span>
           </button>
           <div>
-            <p className="eyebrow">Projekt / Song</p>
+            <p className="eyebrow">{t('library.detail.projectSong', 'Projekt / Song')}</p>
             <h1>{activeProject.title}</h1>
-            <p className="muted">{activeProject.assets.length} Varianten · {activeProject.operations.length} Vorgänge · erstellt {formatDate(activeProject.created_at)} · aktualisiert {formatDate(activeProject.updated_at)}</p>
-            <p className="muted">{summarizeStyle(pickStyle(activeProject.assets.find((asset) => pickStyle(asset))), 220)}</p>
-            {activeProject.assets.some((asset) => voiceLabelForAsset(asset)) && <p className="muted voice-detail-line">Stimme: <strong>{voiceLabelForAsset(activeProject.assets.find((asset) => voiceLabelForAsset(asset)))}</strong></p>}
+            <p className="muted">{t('library.detail.projectMeta', '{{variants}} Varianten · {{operations}} Vorgänge · erstellt {{created}} · aktualisiert {{updated}}', { variants: activeProject.assets.length, operations: activeProject.operations.length, created: formatDate(activeProject.created_at), updated: formatDate(activeProject.updated_at) })}</p>
+            <p className="muted">{summarizeStyle(pickStyle(activeProject.assets.find((asset) => pickStyle(asset))), 220, t)}</p>
+            {activeProject.assets.some((asset) => voiceLabelForAsset(asset)) && <p className="muted voice-detail-line">{t('library.detail.voice', 'Stimme')}: <strong>{voiceLabelForAsset(activeProject.assets.find((asset) => voiceLabelForAsset(asset)))}</strong></p>}
             <div className="button-row wrap">
-              <button className="primary" type="button" onClick={() => playProject(activeProject)}><Headphones size={16} /> {isPlayingProject(activeProject) ? 'Pause' : 'Beste Version abspielen'}</button>
-              <button type="button" onClick={() => openPictureViewer(projectCoverAsset)} disabled={!projectCoverAsset}><Maximize2 size={16} /> Cover groß anzeigen</button>
-              <button type="button" onClick={() => downloadCoverImage(projectCoverAsset)} disabled={!projectCoverAsset}><Download size={16} /> Cover herunterladen</button>
-              <button type="button" onClick={() => { const best = activeProject.assets.find((item) => isAssetFavorite(item)) || activeProject.playable?.[0] || activeProject.assets[0]; if (best) toggleAssetFavorite(best, !isAssetFavorite(best)); }} disabled={!activeProject.assets.length || Boolean(favoriteSavingIds.size)}><ThumbsUp size={16} fill={activeProject.assets.some((item) => isAssetFavorite(item)) ? 'currentColor' : 'none'} /> {activeProject.assets.some((item) => isAssetFavorite(item)) ? 'Favorit entfernen' : 'Als Favorit speichern'}</button>
-              <button type="button" onClick={() => setManualImportOpen(true)}><Plus size={16} /> Audio importieren</button>
+              <button className="primary" type="button" onClick={() => playProject(activeProject)}><Headphones size={16} /> {isPlayingProject(activeProject) ? t('player.pause', 'Pause') : t('library.detail.playBestVersion', 'Beste Version abspielen')}</button>
+              <button type="button" onClick={() => openPictureViewer(projectCoverAsset)} disabled={!projectCoverAsset}><Maximize2 size={16} /> {t('library.actions.viewCoverLarge', 'Cover groß anzeigen')}</button>
+              <button type="button" onClick={() => downloadCoverImage(projectCoverAsset)} disabled={!projectCoverAsset}><Download size={16} /> {t('library.actions.downloadCover', 'Cover herunterladen')}</button>
+              <button type="button" onClick={() => { const best = activeProject.assets.find((item) => isAssetFavorite(item)) || activeProject.playable?.[0] || activeProject.assets[0]; if (best) toggleAssetFavorite(best, !isAssetFavorite(best)); }} disabled={!activeProject.assets.length || Boolean(favoriteSavingIds.size)}><ThumbsUp size={16} fill={activeProject.assets.some((item) => isAssetFavorite(item)) ? 'currentColor' : 'none'} /> {activeProject.assets.some((item) => isAssetFavorite(item)) ? t('library.actions.removeFavorite', 'Favorit entfernen') : t('library.actions.saveFavorite', 'Als Favorit speichern')}</button>
+              <button type="button" onClick={() => setManualImportOpen(true)}><Plus size={16} /> {t('library.actions.importAudio', 'Audio importieren')}</button>
               <button type="button" onClick={() => exportProjectJson(activeProject)}>Projekt JSON</button>
               <button type="button" onClick={() => exportProjectText(activeProject)}>TXT Export</button>
-              <button type="button" onClick={() => saveProjectLyrics(activeProject)}>Songtext speichern</button>
-              <button type="button" onClick={() => reuseProjectPrompt(activeProject)}>Reuse Prompt</button>
-              <button type="button" onClick={() => generateProjectSrt(activeProject)} disabled={Boolean(bulkActionBusy)}><FileText size={16} /> {bulkActionBusy === 'srt' ? 'SRT läuft…' : 'Alle SRT erzeugen'}</button>
-              <button type="button" onClick={() => generateProjectStems(activeProject)} disabled={Boolean(bulkActionBusy)}><Headphones size={16} /> {bulkActionBusy === 'stems' ? 'Stems laufen…' : 'Alle Stems erzeugen'}</button>
-              <a className="button primary" href={api.archive.bulkAssetBundleUrl(activeProject.assets.map((asset) => asset.id))}><Download size={16} /> Alle als ZIP</a>
-              <button type="button" onClick={() => setSelectedIds(new Set(activeProject.assets.map((asset) => asset.id)))}>Alle auswählen</button>
-              <button type="button" onClick={() => setSelectedIds(new Set())}>Auswahl aufheben</button>
-              <button type="button" onClick={() => openAllVariants(activeProject)}>Alle Varianten öffnen</button>
-              <button type="button" onClick={() => collapseAllVariants(activeProject)}>Alle Varianten zuklappen</button>
-              <button className="danger" type="button" onClick={() => deleteSelected(activeProject)} disabled={!selectedIds.size}><Trash2 size={16} /> Auswahl löschen</button>
+              <button type="button" onClick={() => saveProjectLyrics(activeProject)}>{t('library.actions.saveLyrics', 'Songtext speichern')}</button>
+              <button type="button" onClick={() => reuseProjectPrompt(activeProject)}>{t('library.actions.reuse', 'Reuse Prompt')}</button>
+              <button type="button" onClick={() => generateProjectSrt(activeProject)} disabled={Boolean(bulkActionBusy)}><FileText size={16} /> {bulkActionBusy === 'srt' ? t('library.bulk.srtRunning', 'SRT läuft…') : t('library.detail.createAllSrt', 'Alle SRT erzeugen')}</button>
+              <button type="button" onClick={() => generateProjectStems(activeProject)} disabled={Boolean(bulkActionBusy)}><Headphones size={16} /> {bulkActionBusy === 'stems' ? t('library.bulk.stemsRunning', 'Stems laufen…') : t('library.detail.createAllStems', 'Alle Stems erzeugen')}</button>
+              <a className="button primary" href={api.archive.bulkAssetBundleUrl(activeProject.assets.map((asset) => asset.id))}><Download size={16} /> {t('library.detail.allAsZip', 'Alle als ZIP')}</a>
+              <button type="button" onClick={() => setSelectedIds(new Set(activeProject.assets.map((asset) => asset.id)))}>{t('library.detail.selectAll', 'Alle auswählen')}</button>
+              <button type="button" onClick={() => setSelectedIds(new Set())}>{t('library.bulk.clearSelection', 'Auswahl aufheben')}</button>
+              <button type="button" onClick={() => openAllVariants(activeProject)}>{t('library.detail.openAllVariants', 'Alle Varianten öffnen')}</button>
+              <button type="button" onClick={() => collapseAllVariants(activeProject)}>{t('library.detail.collapseAllVariants', 'Alle Varianten zuklappen')}</button>
+              <button className="danger" type="button" onClick={() => deleteSelected(activeProject)} disabled={!selectedIds.size}><Trash2 size={16} /> {t('library.detail.deleteSelection', 'Auswahl löschen')}</button>
             </div>
           </div>
         </div>
 
         <section className="panel project-dossier-panel">
           <div>
-            <p className="eyebrow">Projektakte</p>
-            <h2>Sicherung & Versionen</h2>
-            <p className="muted">Alle Varianten, lokalen Dateien und Produktionsdaten dieses Songs auf einen Blick.</p>
+            <p className="eyebrow">{t('library.detail.dossier', 'Projektakte')}</p>
+            <h2>{t('library.detail.backupVersions', 'Sicherung & Versionen')}</h2>
+            <p className="muted">{t('library.detail.dossierText', 'Alle Varianten, lokalen Dateien und Produktionsdaten dieses Songs auf einen Blick.')}</p>
           </div>
           <div className="live-status-grid dossier-grid">
-            <span><strong>{dossierStats.audioLocal}/{activeProject.assets.length}</strong><small>Audio lokal</small></span>
-            <span><strong>{dossierStats.coverLocal}/{activeProject.assets.length}</strong><small>Cover lokal</small></span>
+            <span><strong>{dossierStats.audioLocal}/{activeProject.assets.length}</strong><small>{t('library.localFilter.audioLocal', 'Audio lokal')}</small></span>
+            <span><strong>{dossierStats.coverLocal}/{activeProject.assets.length}</strong><small>{t('library.localFilter.coverLocal', 'Cover lokal')}</small></span>
             <span><strong>{dossierStats.prompts}</strong><small>Prompts/Lyrics</small></span>
             <span><strong>{dossierStats.payloads}</strong><small>Payloads</small></span>
-            <span><strong>{dossierStats.favorite}</strong><small>Favoriten</small></span>
-            <span><strong>{dossierStats.final ? 'Ja' : 'Nein'}</strong><small>Final markiert</small></span>
+            <span><strong>{dossierStats.favorite}</strong><small>{t('library.favorites', 'Favoriten')}</small></span>
+            <span><strong>{dossierStats.final ? t('common.yes', 'Ja') : t('common.no', 'Nein')}</strong><small>{t('library.detail.finalMarked', 'Final markiert')}</small></span>
           </div>
         </section>
 
@@ -4556,11 +4575,11 @@ ${generationOptionsText(asset)}`,
             <article className="operation-section" key={`${activeProject.id}-variants`}>
               <header className="operation-header">
                 <div>
-                  <p className="eyebrow">Varianten</p>
-                  <h2>{activeProject.title} · {activeProject.assets.length} Variante{activeProject.assets.length === 1 ? '' : 'n'}</h2>
-                  <p className="muted">{activeProject.operations.length} Vorgänge · erstellt {formatDate(activeProject.created_at)} · zuletzt aktualisiert {formatDate(activeProject.updated_at)}</p>
+                  <p className="eyebrow">{t('library.stats.variants', 'Varianten')}</p>
+                  <h2>{activeProject.title} · {t('library.detail.variantCount', '{{count}} Variante(n)', { count: activeProject.assets.length })}</h2>
+                  <p className="muted">{t('library.detail.operationsCreatedUpdated', '{{operations}} Vorgänge · erstellt {{created}} · zuletzt aktualisiert {{updated}}', { operations: activeProject.operations.length, created: formatDate(activeProject.created_at), updated: formatDate(activeProject.updated_at) })}</p>
                 </div>
-                <button type="button" onClick={() => onPlay(projectQueue, 0)} disabled={!projectQueue.length}>Alle Varianten abspielen</button>
+                <button type="button" onClick={() => onPlay(projectQueue, 0)} disabled={!projectQueue.length}>{t('library.detail.playAllVariants', 'Alle Varianten abspielen')}</button>
               </header>
               <div className="variant-grid compact-variants">
                 {activeProject.assets.map((asset, index) => {
@@ -4570,7 +4589,7 @@ ${generationOptionsText(asset)}`,
                   return (
                     <article className={`variant-card horizontal variant-accordion-card ${variantOpen ? 'is-open' : 'is-collapsed'} ${isCurrentAsset(asset) ? 'is-playing-row' : ''}`} key={asset.id} data-react-asset-row={asset.id}>
                       <label className="select-box"><input type="checkbox" checked={selectedIds.has(asset.id)} onChange={() => toggleSelected(asset.id)} /></label>
-                      <button className={`variant-cover-button ${isCurrentAsset(asset) ? 'is-active-cover' : ''}`} type="button" onClick={() => playAsset(playbackAsset, projectQueue, index, activeProject)} disabled={!isPlayable(asset)} title={isPlayingAsset(asset) ? 'Pause' : 'Abspielen'}>
+                      <button className={`variant-cover-button ${isCurrentAsset(asset) ? 'is-active-cover' : ''}`} type="button" onClick={() => playAsset(playbackAsset, projectQueue, index, activeProject)} disabled={!isPlayable(asset)} title={isPlayingAsset(asset) ? t('player.pause', 'Pause') : t('player.play', 'Abspielen')}>
                         <img src={pickCover(asset)} alt="Cover" onError={handleCoverImageError} />
                         <span>{isPlayingAsset(asset) ? <Pause size={18} /> : <Play size={18} fill="currentColor" />}</span>
                       </button>
@@ -4579,51 +4598,51 @@ ${generationOptionsText(asset)}`,
                           <span className="variant-accordion-title">
                             <span className="variant-accordion-icon">{variantOpen ? <ChevronDown size={17} /> : <ChevronRight size={17} />}</span>
                             <span>
-                              <p className="eyebrow">{variantEyebrow(asset, activeProject)}</p>
+                              <p className="eyebrow">{variantEyebrow(asset, activeProject, t)}</p>
                               <h3>{variantTitle(asset, activeProject)}</h3>
                             </span>
                           </span>
                           <span className="variant-accordion-badges">
-                            <span className={`status ${audioStatusClass(asset)}`}>{audioStatusLabel(asset)}</span>
-                            {isCoverCached(asset) && <span className="status cached">Cover lokal</span>}
-                            {isAssetFavorite(asset) && <span className="status favorite"><ThumbsUp size={13} fill="currentColor" /> Favorit</span>}
+                            <span className={`status ${audioStatusClass(asset)}`}>{audioStatusLabel(asset, t)}</span>
+                            {isCoverCached(asset) && <span className="status cached">{t('library.localFilter.coverLocal', 'Cover lokal')}</span>}
+                            {isAssetFavorite(asset) && <span className="status favorite"><ThumbsUp size={13} fill="currentColor" /> {t('library.favoriteOne', 'Favorit')}</span>}
                             {assetContentBadges(asset, srtByAsset).map((badge) => <span key={badge.key} className={`status ${badge.className || 'cached'}`}>{badge.label}</span>)}
                             <span className="muted compact-only">{formatDuration(asset.duration_seconds)}</span>
                           </span>
                         </button>
                         {variantOpen && (
                           <>
-                        <p className="muted">{formatDuration(asset.duration_seconds)} · songs.id {songDatabaseId(asset) ?? '—'} · audio_assets.id {asset.id} · Audio-ID {shortId(asset.audio_id, 14)} · Task {shortId(asset.suno_task_id, 14)}{voiceLabelForAsset(asset) ? ` · Stimme ${voiceLabelForAsset(asset)}` : ''}</p>
-                          {isCurrentAsset(asset) && <div className="library-inline-waveform"><span>{playbackState?.isPlaying ? 'Läuft' : 'Bereit'} · {formatDuration(playbackState?.currentTime || 0)} / {formatDuration(playbackState?.duration || asset.duration_seconds)}</span><Waveform asset={asset} compact currentTime={playbackState?.currentTime || 0} durationSeconds={playbackState?.duration || asset.duration_seconds} interactive={false} /></div>}
+                        <p className="muted">{formatDuration(asset.duration_seconds)} · songs.id {songDatabaseId(asset) ?? '—'} · audio_assets.id {asset.id} · Audio-ID {shortId(asset.audio_id, 14)} · Task {shortId(asset.suno_task_id, 14)}{voiceLabelForAsset(asset) ? ` · ${t('library.detail.voice', 'Stimme')} ${voiceLabelForAsset(asset)}` : ''}</p>
+                          {isCurrentAsset(asset) && <div className="library-inline-waveform"><span>{playbackState?.isPlaying ? t('library.playback.running', 'Läuft') : t('library.playback.ready', 'Bereit')} · {formatDuration(playbackState?.currentTime || 0)} / {formatDuration(playbackState?.duration || asset.duration_seconds)}</span><Waveform asset={asset} compact currentTime={playbackState?.currentTime || 0} durationSeconds={playbackState?.duration || asset.duration_seconds} interactive={false} /></div>}
                           <div className="button-row wrap">
-                            <button type="button" onClick={() => playAsset(playbackAsset, projectQueue, index, activeProject)}>{isPlayingAsset(asset) ? 'Pause' : 'Abspielen'}</button>
-                            <button type="button" className={isAssetFavorite(asset) ? 'favorite-action is-favorite' : 'favorite-action'} onClick={() => toggleAssetFavorite(asset)} disabled={favoriteSavingIds.has(asset.id)}><ThumbsUp size={15} fill={isAssetFavorite(asset) ? 'currentColor' : 'none'} /> {isAssetFavorite(asset) ? 'Favorit' : 'Favorit'}</button>
-                            <button type="button" className="stable-detail-action-button" onClick={() => setActionAsset(playbackAsset)}><MoreHorizontal size={15} /> Aktionen</button>
-                            <button type="button" onClick={() => openPictureViewer(asset)} disabled={isFallbackCoverUrl(pickCover(asset))}><Maximize2 size={15} /> Cover groß</button>
-                            <button type="button" onClick={() => downloadCoverImage(asset)} disabled={isFallbackCoverUrl(pickCover(asset))}><Download size={15} /> Cover</button>
-                            <button type="button" onClick={() => convertAssetToWav(asset, { download: true })} disabled={wavLoadingIds.has(asset.id) || !canConvertAssetToWav(asset)}><Download size={15} /> {wavLoadingIds.has(asset.id) ? 'Konvertiere…' : 'Convert to WAV'}</button>
+                            <button type="button" onClick={() => playAsset(playbackAsset, projectQueue, index, activeProject)}>{isPlayingAsset(asset) ? t('player.pause', 'Pause') : t('player.play', 'Abspielen')}</button>
+                            <button type="button" className={isAssetFavorite(asset) ? 'favorite-action is-favorite' : 'favorite-action'} onClick={() => toggleAssetFavorite(asset)} disabled={favoriteSavingIds.has(asset.id)}><ThumbsUp size={15} fill={isAssetFavorite(asset) ? 'currentColor' : 'none'} /> {t('library.favorites', 'Favoriten')}</button>
+                            <button type="button" className="stable-detail-action-button" onClick={() => setActionAsset(playbackAsset)}><MoreHorizontal size={15} /> {t('library.actionModal.title', 'Aktionen')}</button>
+                            <button type="button" onClick={() => openPictureViewer(asset)} disabled={isFallbackCoverUrl(pickCover(asset))}><Maximize2 size={15} /> {t('library.actions.viewCoverLarge', 'Cover groß anzeigen')}</button>
+                            <button type="button" onClick={() => downloadCoverImage(asset)} disabled={isFallbackCoverUrl(pickCover(asset))}><Download size={15} /> {t('library.actions.downloadCover', 'Cover')}</button>
+                            <button type="button" onClick={() => convertAssetToWav(asset, { download: true })} disabled={wavLoadingIds.has(asset.id) || !canConvertAssetToWav(asset)}><Download size={15} /> {wavLoadingIds.has(asset.id) ? t('library.actions.converting', 'Konvertiere…') : t('library.actions.convertToWav', 'Convert to WAV')}</button>
                             {readAssetWavConversion(asset).available && <a className="button" href={api.archive.wavDownloadUrl(asset.id)}><Download size={15} /> WAV</a>}
-                            <button type="button" onClick={() => renameAsset(asset)}><Edit3 size={15} /> Titel</button>
-                            <button type="button" onClick={() => copyAssetInfo(asset)}><Copy size={15} /> Kopieren</button>
-                            <button type="button" onClick={() => reuseAssetPrompt(asset)}>Reuse Prompt</button>
-                            <button type="button" onClick={() => setTimestampAsset(asset)}><Clock3 size={15} /> Timestamped Lyrics</button>
-                            <button type="button" onClick={() => openWorkflowWizard(asset)}><FileText size={15} /> Wizard</button>
-                            <button type="button" onClick={() => generateSrt(asset)} disabled={srtLoadingIds.has(asset.id)}><FileText size={15} /> {srtLoadingIds.has(asset.id) ? 'SRT läuft…' : 'SRT erzeugen'}</button>
-                            <button type="button" onClick={() => generateAssetStems(asset)} disabled={stemLoadingIds.has(asset.id) || !isAudioLocal(asset)}><Headphones size={15} /> {stemLoadingIds.has(asset.id) ? 'Stems laufen…' : 'Stems'}</button>
-                            <button type="button" onClick={() => generateLibraryAiTags(asset, Boolean(readLibraryAiTags(asset)))}><Tag size={15} /> KI-Tags</button>
-                            <button type="button" onClick={() => onOpenDaw?.(asset)}><Scissors size={15} /> Mini-DAW</button>
-                            <button type="button" onClick={() => setPlaylistAsset(asset)}><Plus size={15} /> Playlist</button>
-                            <a className="button primary" href={api.archive.assetBundleUrl(asset.id)}><Download size={15} /> Audio-Paket ZIP</a>
-                            <a className="button" href={api.archive.downloadUrl(asset.id)}><Download size={15} /> Audio</a>
+                            <button type="button" onClick={() => renameAsset(asset)}><Edit3 size={15} /> {t('common.title', 'Titel')}</button>
+                            <button type="button" onClick={() => copyAssetInfo(asset)}><Copy size={15} /> {t('common.copy', 'Kopieren')}</button>
+                            <button type="button" onClick={() => reuseAssetPrompt(asset)}>{t('library.actions.reusePrompt', 'Reuse Prompt')}</button>
+                            <button type="button" onClick={() => setTimestampAsset(asset)}><Clock3 size={15} /> {t('library.timestamped.title', 'Timestamped Lyrics')}</button>
+                            <button type="button" onClick={() => openWorkflowWizard(asset)}><FileText size={15} /> {t('library.workflow.audioWizard', 'Audio-Wizard')}</button>
+                            <button type="button" onClick={() => generateSrt(asset)} disabled={srtLoadingIds.has(asset.id)}><FileText size={15} /> {srtLoadingIds.has(asset.id) ? t('library.bulk.srtRunning', 'SRT läuft…') : t('library.bulk.createSrt', 'SRT erzeugen')}</button>
+                            <button type="button" onClick={() => generateAssetStems(asset)} disabled={stemLoadingIds.has(asset.id) || !isAudioLocal(asset)}><Headphones size={15} /> {stemLoadingIds.has(asset.id) ? t('library.bulk.stemsRunning', 'Stems laufen…') : t('library.content.stemFiles', 'Stem-Dateien')}</button>
+                            <button type="button" onClick={() => generateLibraryAiTags(asset, Boolean(readLibraryAiTags(asset)))}><Tag size={15} /> {t('library.aiTags.title', 'KI-Tags')}</button>
+                            <button type="button" onClick={() => onOpenDaw?.(asset)}><Scissors size={15} /> {t('nav.daw', 'Mini-DAW')}</button>
+                            <button type="button" onClick={() => setPlaylistAsset(asset)}><Plus size={15} /> {t('nav.playlists', 'Playlists')}</button>
+                            <a className="button primary" href={api.archive.assetBundleUrl(asset.id)}><Download size={15} /> {t('library.actions.audioPackageZip', 'Audio-Paket ZIP')}</a>
+                            <a className="button" href={api.archive.downloadUrl(asset.id)}><Download size={15} /> {t('library.actions.downloadAudio', 'Audio herunterladen')}</a>
                           </div>
                           <div className="variant-meta-grid">
-                            <div className="meta-card"><div className="row between"><h4>Datenbank</h4><button type="button" onClick={async () => { await copyToClipboard(assetDatabaseSummary(asset)); notify('Datenbank-IDs kopiert.', 'success'); }}><Copy size={14} /></button></div><p>songs.id: {songDatabaseId(asset) ?? '—'}<br />audio_assets.id: {asset.id}</p></div>
-                            <div className="meta-card"><div className="row between"><h4>Modell</h4><button type="button" onClick={async () => { await copyToClipboard(pickModel(asset)); notify('Modell kopiert.', 'success'); }}><Copy size={14} /></button></div><p>{pickModel(asset) || '—'}</p></div>
-                            <div className="meta-card"><div className="row between"><h4>Audio-ID</h4><button type="button" onClick={async () => { await copyToClipboard(asset.audio_id); notify('Audio-ID kopiert.', 'success'); }}><Copy size={14} /></button></div><p>{asset.audio_id || '—'}</p></div>
-                            <div className="meta-card"><div className="row between"><h4>Task-ID</h4><button type="button" onClick={async () => { await copyToClipboard(asset.suno_task_id || asset.task_id); notify('Task-ID kopiert.', 'success'); }}><Copy size={14} /></button></div><p>{asset.suno_task_id || asset.task_id || '—'}</p></div>
-                            <div className="meta-card"><div className="row between"><h4>Stimme</h4><button type="button" disabled={!voiceInfoForAsset(asset)?.id} onClick={async () => { await copyToClipboard(voiceInfoForAsset(asset)?.id || ''); notify('Voice-ID kopiert.', 'success'); }}><Copy size={14} /></button></div><p>{voiceLabelForAsset(asset) || '—'}</p></div>
+                            <div className="meta-card"><div className="row between"><h4>{t('library.meta.database', 'Datenbank')}</h4><button type="button" onClick={async () => { await copyToClipboard(assetDatabaseSummary(asset)); notify(t('library.messages.databaseIdsCopied', 'Datenbank-IDs kopiert.'), 'success'); }}><Copy size={14} /></button></div><p>songs.id: {songDatabaseId(asset) ?? '—'}<br />audio_assets.id: {asset.id}</p></div>
+                            <div className="meta-card"><div className="row between"><h4>{t('library.meta.model', 'Modell')}</h4><button type="button" onClick={async () => { await copyToClipboard(pickModel(asset)); notify(t('library.messages.modelCopied', 'Modell kopiert.'), 'success'); }}><Copy size={14} /></button></div><p>{pickModel(asset) || '—'}</p></div>
+                            <div className="meta-card"><div className="row between"><h4>Audio-ID</h4><button type="button" onClick={async () => { await copyToClipboard(asset.audio_id); notify(t('library.messages.audioIdCopied', 'Audio-ID kopiert.'), 'success'); }}><Copy size={14} /></button></div><p>{asset.audio_id || '—'}</p></div>
+                            <div className="meta-card"><div className="row between"><h4>Task-ID</h4><button type="button" onClick={async () => { await copyToClipboard(asset.suno_task_id || asset.task_id); notify(t('library.messages.taskIdCopied', 'Task-ID kopiert.'), 'success'); }}><Copy size={14} /></button></div><p>{asset.suno_task_id || asset.task_id || '—'}</p></div>
+                            <div className="meta-card"><div className="row between"><h4>{t('library.detail.voice', 'Stimme')}</h4><button type="button" disabled={!voiceInfoForAsset(asset)?.id} onClick={async () => { await copyToClipboard(voiceInfoForAsset(asset)?.id || ''); notify(t('library.messages.voiceIdCopied', 'Voice-ID kopiert.'), 'success'); }}><Copy size={14} /></button></div><p>{voiceLabelForAsset(asset) || '—'}</p></div>
                             <GenerationOptionsCard asset={asset} />
-                            <div className="meta-card wide"><div className="row between"><h4>Style</h4><button type="button" onClick={async () => { await copyToClipboard(pickStyle(asset)); notify('Style kopiert.', 'success'); }}><Copy size={14} /></button></div><p>{pickStyle(asset) || '—'}</p></div>
+                            <div className="meta-card wide"><div className="row between"><h4>Style</h4><button type="button" onClick={async () => { await copyToClipboard(pickStyle(asset)); notify(t('library.messages.styleCopied', 'Style kopiert.'), 'success'); }}><Copy size={14} /></button></div><p>{pickStyle(asset) || '—'}</p></div>
                             <PromptLyricsCard asset={asset} />
                             <LibraryAiTagsCard asset={asset} />
                             <AudioAiAnalysisCard asset={asset} />
@@ -4631,7 +4650,7 @@ ${generationOptionsText(asset)}`,
                             <SrtCard asset={asset} />
                             <AssetContentManager asset={asset} />
                           </div>
-                          <details className="tech-details"><summary>Technische Rohdaten</summary><pre className="keyboard-scroll-region" onWheel={(event) => event.stopPropagation()} onTouchMove={(event) => event.stopPropagation()}>{JSON.stringify(asset, null, 2)}</pre></details>
+                          <details className="tech-details"><summary>{t('library.meta.rawTechnicalData', 'Technische Rohdaten')}</summary><pre className="keyboard-scroll-region" onWheel={(event) => event.stopPropagation()} onTouchMove={(event) => event.stopPropagation()}>{JSON.stringify(asset, null, 2)}</pre></details>
                             </>
                         )}
                         {!variantOpen && (
@@ -4646,10 +4665,10 @@ ${generationOptionsText(asset)}`,
                               )}
                             </div>
                             <div className="button-row wrap">
-                              <button type="button" onClick={() => playAsset(playbackAsset, projectQueue, index, activeProject)}>{isPlayingAsset(asset) ? 'Pause' : 'Abspielen'}</button>
+                              <button type="button" onClick={() => playAsset(playbackAsset, projectQueue, index, activeProject)}>{isPlayingAsset(asset) ? t('player.pause', 'Pause') : t('player.play', 'Abspielen')}</button>
                               <button type="button" className={isAssetFavorite(asset) ? 'favorite-action is-favorite' : 'favorite-action'} onClick={() => toggleAssetFavorite(asset)} disabled={favoriteSavingIds.has(asset.id)}><ThumbsUp size={15} fill={isAssetFavorite(asset) ? 'currentColor' : 'none'} /></button>
                               <AudioActionMenu asset={playbackAsset} compact label="" dropUp />
-                              <button type="button" onClick={() => toggleVariantAccordion(asset, index)}>Details anzeigen</button>
+                              <button type="button" onClick={() => toggleVariantAccordion(asset, index)}>{t('library.detail.showDetails', 'Details anzeigen')}</button>
                               <button type="button" onClick={() => openWorkflowWizard(asset)}><FileText size={15} /> Wizard</button>
                               <a className="button primary" href={api.archive.assetBundleUrl(asset.id)}><Download size={15} /> ZIP</a>
                             </div>
@@ -4673,25 +4692,25 @@ ${generationOptionsText(asset)}`,
         <SrtEditorModal asset={srtEditorAsset} />
         <StemPreviewModal asset={stemPreviewAsset} />
         <AudioAiAnalysisReportModal />
-        <Modal open={Boolean(playlistAsset)} title="Zu Playlist hinzufügen" onClose={() => setPlaylistAsset(null)}>
+        <Modal open={Boolean(playlistAsset)} title={t('library.playlist.addTitle', 'Zu Playlist hinzufügen')} onClose={() => setPlaylistAsset(null)}>
           {playlistAsset && <div className="stack">
-            <p className="muted">Track: <strong>{pickTitle(playlistAsset)}</strong></p>
-            {!playlists.length && <p className="warning-text">Noch keine Playlist vorhanden. Bitte zuerst im Playlist-Tab eine Playlist erstellen.</p>}
+            <p className="muted">{t('library.playlist.track', 'Track')}: <strong>{pickTitle(playlistAsset)}</strong></p>
+            {!playlists.length && <p className="warning-text">{t('library.playlist.noneYet', 'Noch keine Playlist vorhanden. Bitte zuerst im Playlist-Tab eine Playlist erstellen.')}</p>}
             <div className="button-grid">
               {playlists.map((playlist) => <button key={playlist.id} type="button" onClick={() => addToPlaylist(playlistAsset, playlist.id)}>{playlist.name}</button>)}
             </div>
           </div>}
         </Modal>
-        <Modal open={Boolean(timestampAsset)} title={timestampAsset ? `Timestamped Lyrics: ${pickTitle(timestampAsset)}` : 'Timestamped Lyrics'} onClose={() => setTimestampAsset(null)}>
+        <Modal open={Boolean(timestampAsset)} title={timestampAsset ? t('library.timestamped.titleForAsset', 'Timestamped Lyrics: {{title}}', { title: pickTitle(timestampAsset) }) : 'Timestamped Lyrics'} onClose={() => setTimestampAsset(null)}>
           {timestampAsset && <div className="stack">
             <p className="muted">Audio-ID: {timestampAsset.audio_id || '—'} · Task-ID: {timestampAsset.suno_task_id || timestampAsset.task_id || '—'}</p>
-            {!readStoredTimestampedLyrics(timestampAsset) && <p className="warning-text">Noch keine synchronisierten Lyrics gespeichert. Jetzt über SunoAPI abrufen und im AudioAsset speichern.</p>}
+            {!readStoredTimestampedLyrics(timestampAsset) && <p className="warning-text">{t('library.timestamped.noneStored', 'Noch keine synchronisierten Lyrics gespeichert. Jetzt über SunoAPI abrufen und im AudioAsset speichern.')}</p>}
             <div className="button-row wrap">
-              <button type="button" className="primary" onClick={() => fetchTimestampedLyrics(timestampAsset)} disabled={timestampLoading || !timestampAsset.audio_id}>{timestampLoading ? 'Rufe ab…' : 'Abrufen & speichern'}</button>
-              <button type="button" onClick={() => copyTimestampedLyrics(timestampAsset)} disabled={!readStoredTimestampedLyrics(timestampAsset)}>In Zwischenablage</button>
-              <button type="button" onClick={() => downloadTimestampedLyrics(timestampAsset)} disabled={!readStoredTimestampedLyrics(timestampAsset)}><Download size={15} /> Herunterladen</button>
+              <button type="button" className="primary" onClick={() => fetchTimestampedLyrics(timestampAsset)} disabled={timestampLoading || !timestampAsset.audio_id}>{timestampLoading ? t('library.timestamped.fetching', 'Rufe ab…') : t('library.timestamped.fetchAndSave', 'Abrufen & speichern')}</button>
+              <button type="button" onClick={() => copyTimestampedLyrics(timestampAsset)} disabled={!readStoredTimestampedLyrics(timestampAsset)}>{t('library.timestamped.copyToClipboard', 'In Zwischenablage')}</button>
+              <button type="button" onClick={() => downloadTimestampedLyrics(timestampAsset)} disabled={!readStoredTimestampedLyrics(timestampAsset)}><Download size={15} /> {t('common.download', 'Herunterladen')}</button>
             </div>
-            <pre className="large-pre keyboard-scroll-region" onWheel={(event) => event.stopPropagation()} onTouchMove={(event) => event.stopPropagation()}>{timestampedLyricsText(timestampAsset) || 'Noch keine Daten vorhanden.'}</pre>
+            <pre className="large-pre keyboard-scroll-region" onWheel={(event) => event.stopPropagation()} onTouchMove={(event) => event.stopPropagation()}>{timestampedLyricsText(timestampAsset) || t('common.noData', 'Noch keine Daten vorhanden.')}</pre>
           </div>}
         </Modal>
         <AudioOperationModal />
@@ -4729,48 +4748,48 @@ ${generationOptionsText(asset)}`,
 
   return (
     <section className="page stack">
-      <SectionHeader eyebrow="Library" title={localFilter === 'favorites' ? 'Favoriten' : 'Library'} />
+      <SectionHeader eyebrow={t('library.eyebrow', 'Library')} title={localFilter === 'favorites' ? t('library.favorites', 'Favoriten') : t('library.title', 'Library')} />
       <div className="library-controls-panel panel slim-panel">
         <div className="library-toolbar">
-          <select value={sort} onChange={(event) => setSort(event.target.value)} aria-label="Library sortieren">
-            <option value="newest">Neueste zuerst</option>
-            <option value="oldest">Älteste zuerst</option>
-            <option value="updated">Zuletzt aktualisiert</option>
-            <option value="title">Titel A-Z</option>
-            <option value="variants">Meiste Varianten</option>
+          <select value={sort} onChange={(event) => setSort(event.target.value)} aria-label={t('library.sortAria', 'Library sortieren')}>
+            <option value="newest">{t('library.sort.newest', 'Neueste zuerst')}</option>
+            <option value="oldest">{t('library.sort.oldest', 'Älteste zuerst')}</option>
+            <option value="updated">{t('library.sort.updated', 'Zuletzt aktualisiert')}</option>
+            <option value="title">{t('library.sort.title', 'Titel A-Z')}</option>
+            <option value="variants">{t('library.sort.variants', 'Meiste Varianten')}</option>
           </select>
-          <select value={localFilter} onChange={(event) => preserveWindowScroll(() => setLocalFilter(event.target.value))} aria-label="Sicherung und Local-Status filtern">
-            <option value="all">Sicherung: alle</option>
-            <option value="audio-local">Audio lokal</option>
-            <option value="cover-local">Cover lokal</option>
-            <option value="missing-backup">Backup fehlt</option>
-            <option value="favorites">Favoriten</option>
+          <select value={localFilter} onChange={(event) => preserveWindowScroll(() => setLocalFilter(event.target.value))} aria-label={t('library.localFilterAria', 'Sicherung und Local-Status filtern')}>
+            <option value="all">{t('library.localFilter.all', 'Sicherung: alle')}</option>
+            <option value="audio-local">{t('library.localFilter.audioLocal', 'Audio lokal')}</option>
+            <option value="cover-local">{t('library.localFilter.coverLocal', 'Cover lokal')}</option>
+            <option value="missing-backup">{t('library.localFilter.missingBackup', 'Backup fehlt')}</option>
+            <option value="favorites">{t('library.favorites', 'Favoriten')}</option>
           </select>
           <div className="filter-chips library-command-chips">
-            {primaryTypeFilters.map(([key, label]) => (
+            {localizedPrimaryTypeFilters.map(([key, label]) => (
               <button key={key} type="button" className={type === key ? 'active' : ''} onClick={() => setType(key)}><Filter size={14} /> {label}</button>
             ))}
-            <details className={`library-more-filter chip-select ${secondaryTypeFilters.some(([key]) => key === type) ? 'active' : ''}`}>
-              <summary><Filter size={14} /> Weitere <ChevronDown size={14} /></summary>
+            <details className={`library-more-filter chip-select ${localizedSecondaryTypeFilters.some(([key]) => key === type) ? 'active' : ''}`}>
+              <summary><Filter size={14} /> {t('library.moreFilters', 'Weitere')} <ChevronDown size={14} /></summary>
               <div className="library-more-filter-menu">
-                {secondaryTypeFilters.map(([key, label]) => (
+                {localizedSecondaryTypeFilters.map(([key, label]) => (
                   <button key={key} type="button" className={type === key ? 'active' : ''} onClick={(event) => { setType(key); event.currentTarget.closest('details')?.removeAttribute('open'); }}>{label}</button>
                 ))}
               </div>
             </details>
-            <button type="button" className={localFilter === 'favorites' ? 'active' : ''} onClick={() => preserveWindowScroll(() => setLocalFilter(localFilter === 'favorites' ? 'all' : 'favorites'))}><ThumbsUp size={14} /> Favoriten</button>
+            <button type="button" className={localFilter === 'favorites' ? 'active' : ''} onClick={() => preserveWindowScroll(() => setLocalFilter(localFilter === 'favorites' ? 'all' : 'favorites'))}><ThumbsUp size={14} /> {t('library.favorites', 'Favoriten')}</button>
             <span className="library-chip-spacer" aria-hidden="true" />
-            <button type="button" onClick={() => setManualImportOpen(true)}><Plus size={15} /> Audio importieren</button>
-            <button type="button" onClick={cacheMissingLibraryContent} disabled={contentCacheBusy}>{contentCacheBusy ? 'Prüfe…' : 'Inhalte prüfen'}</button>
-            <button type="button" onClick={onReload}>Aktualisieren</button>
+            <button type="button" onClick={() => setManualImportOpen(true)}><Plus size={15} /> {t('library.actions.importAudio', 'Audio importieren')}</button>
+            <button type="button" onClick={cacheMissingLibraryContent} disabled={contentCacheBusy}>{contentCacheBusy ? t('library.actions.checking', 'Prüfe…') : t('library.actions.checkContent', 'Inhalte prüfen')}</button>
+            <button type="button" onClick={onReload}>{t('common.refresh', 'Aktualisieren')}</button>
           </div>
         </div>
         {SelectedBulkActions()}
         {LibraryPaginationControls({ embedded: true })}
       </div>
-      {localFilter === 'favorites' && <div className="panel slim-panel favorites-list-hint"><ThumbsUp size={18} fill="currentColor" /><div><strong>Favoritenliste</strong><small>{filteredProjects.length} Songgruppe{filteredProjects.length === 1 ? '' : 'n'} mit markierten Lieblingsvarianten. Klicke erneut auf den Daumen, um einen Song zu entfernen.</small></div></div>}
-      {loadError && <div className="panel slim-panel warning-panel"><strong>Library konnte nicht geladen werden.</strong><small>{loadError}</small><button type="button" onClick={onReload}>Erneut laden</button></div>}
-      {!loadError && !libraryPaginationTotal && <EmptyState title="Keine Songs gefunden" text="Passe Suche oder Filter an, oder generiere einen neuen Song." />}
+      {localFilter === 'favorites' && <div className="panel slim-panel favorites-list-hint"><ThumbsUp size={18} fill="currentColor" /><div><strong>{t('library.favoritesList', 'Favoritenliste')}</strong><small>{t('library.favoritesHint', '{{count}} Songgruppe(n) mit markierten Lieblingsvarianten. Klicke erneut auf den Daumen, um einen Song zu entfernen.', { count: filteredProjects.length })}</small></div></div>}
+      {loadError && <div className="panel slim-panel warning-panel"><strong>{t('library.loadFailed', 'Library konnte nicht geladen werden.')}</strong><small>{loadError}</small><button type="button" onClick={onReload}>{t('common.retry', 'Erneut laden')}</button></div>}
+      {!loadError && !libraryPaginationTotal && <EmptyState title={t('library.emptyTitle', 'Keine Songs gefunden')} text={t('library.emptyText', 'Passe Suche oder Filter an, oder generiere einen neuen Song.')} />}
       {libraryViewMode === 'gallery' ? LibraryGalleryView() : libraryViewMode === 'flat-list' ? LibraryFlatListView() : (
       <div className="project-list library-project-list">
         {pagedProjects.map((project) => {
@@ -4779,36 +4798,36 @@ ${generationOptionsText(asset)}`,
           const projectPlaying = isPlayingProject(project);
           return (
             <article className={`project-row suno-row ${projectActive ? 'is-playing-row' : ''}`} key={project.id}>
-              <button className={`cover-button ${projectActive ? 'is-active-cover' : ''}`} type="button" onClick={() => playProject(project)} title={projectPlaying ? 'Pause' : 'Direkt abspielen'}>
+              <button className={`cover-button ${projectActive ? 'is-active-cover' : ''}`} type="button" onClick={() => playProject(project)} title={projectPlaying ? t('player.pause', 'Pause') : t('library.playDirectly', 'Direkt abspielen')}>
                 <img src={project.cover || '/static/favicon.ico'} alt="Cover" onError={handleCoverImageError} />
                 <span className="cover-play">{projectPlaying ? <Pause size={18} /> : <Play size={18} fill="currentColor" />}</span>
               </button>
               <div className="project-row-main">
-                <button className="title-button" type="button" onClick={(event) => openProjectDetails(project, event)} title="Detailseite öffnen">
+                <button className="title-button" type="button" onClick={(event) => openProjectDetails(project, event)} title={t('library.openDetailPage', 'Detailseite öffnen')}>
                   <strong>{project.title}</strong>
-                  <span>{project.assets.length} Varianten · {project.operations.length} Vorgänge · {project.playable.length} abspielbar</span>
-                  <small>{summarizeStyle(pickStyle(project.assets.find((asset) => pickStyle(asset))), 160)}</small>
+                  <span>{t('library.projectStatsLine', '{{variants}} Varianten · {{operations}} Vorgänge · {{playable}} abspielbar', { variants: project.assets.length, operations: project.operations.length, playable: project.playable.length })}</span>
+                  <small>{summarizeStyle(pickStyle(project.assets.find((asset) => pickStyle(asset))), 160, t)}</small>
                 </button>
                 {projectActive && currentProjectAsset && (
                   <div className="library-inline-waveform project-waveform">
-                    <span>{projectPlaying ? 'Jetzt läuft' : 'Bereit'} · {formatDuration(playbackState?.currentTime || 0)} / {formatDuration(playbackState?.duration || currentProjectAsset.duration_seconds)}</span>
+                    <span>{projectPlaying ? t('library.playback.nowPlaying', 'Jetzt läuft') : t('library.playback.ready', 'Bereit')} · {formatDuration(playbackState?.currentTime || 0)} / {formatDuration(playbackState?.duration || currentProjectAsset.duration_seconds)}</span>
                     <Waveform asset={currentProjectAsset} compact currentTime={playbackState?.currentTime || 0} durationSeconds={playbackState?.duration || currentProjectAsset.duration_seconds} interactive={false} />
                   </div>
                 )}
-                <div className="project-audio-actions-strip" aria-label="Audio-Schnellaktionen">
+                <div className="project-audio-actions-strip" aria-label={t('library.audioQuickActions', 'Audio-Schnellaktionen')}>
                   {project.assets.map((asset, index) => (
 	                    <div className={`project-audio-action-pill ${isCurrentAsset(asset) ? 'is-current' : ''} ${selectedIds.has(asset.id) ? 'is-selected' : ''}`} key={`project-action-${project.id}-${asset.id}`}>
-	                      <label className="project-audio-select-mini" title={`${variantTitle(asset, project)} auswählen`}>
-	                        <input type="checkbox" checked={selectedIds.has(asset.id)} onChange={() => toggleSelected(asset.id)} aria-label={`${variantTitle(asset, project)} auswählen`} />
+	                      <label className="project-audio-select-mini" title={t('library.selectAsset', '{{title}} auswählen', { title: variantTitle(asset, project) })}>
+	                        <input type="checkbox" checked={selectedIds.has(asset.id)} onChange={() => toggleSelected(asset.id)} aria-label={t('library.selectAsset', '{{title}} auswählen', { title: variantTitle(asset, project) })} />
 	                      </label>
-	                      <button type="button" className="project-audio-play-mini" onClick={() => playAsset(asset)} title={`${variantTitle(asset, project)} abspielen`}>
+	                      <button type="button" className="project-audio-play-mini" onClick={() => playAsset(asset)} title={t('library.playAsset', '{{title}} abspielen', { title: variantTitle(asset, project) })}>
                         {isPlayingAsset(asset) ? <Pause size={13} /> : <Play size={13} fill="currentColor" />}
                       </button>
                       <button type="button" className="project-audio-title-mini" onClick={(event) => openProjectDetails(project, event)} title={variantTitle(asset, project)}>
                         <strong>{index + 1}/{project.assets.length || 1}</strong>
                         <span>{variantTitle(asset, project)}</span>
                       </button>
-                      <button type="button" className={isAssetFavorite(asset) ? 'project-audio-favorite-mini is-favorite' : 'project-audio-favorite-mini'} onClick={(event) => { event.stopPropagation(); toggleAssetFavorite(asset); }} disabled={favoriteSavingIds.has(asset.id)} title={isAssetFavorite(asset) ? 'Favorit entfernen' : 'Als Favorit speichern'}>
+                      <button type="button" className={isAssetFavorite(asset) ? 'project-audio-favorite-mini is-favorite' : 'project-audio-favorite-mini'} onClick={(event) => { event.stopPropagation(); toggleAssetFavorite(asset); }} disabled={favoriteSavingIds.has(asset.id)} title={isAssetFavorite(asset) ? t('library.actions.removeFavorite', 'Favorit entfernen') : t('library.actions.saveFavorite', 'Als Favorit speichern')}>
                         <ThumbsUp size={13} fill={isAssetFavorite(asset) ? 'currentColor' : 'none'} />
                       </button>
                       <AudioActionMenu asset={asset} compact label="" dropUp />
@@ -4818,14 +4837,14 @@ ${generationOptionsText(asset)}`,
               </div>
               <div className="project-actions">
                 <span className="status cached"><ListMusic size={14} /> {formatDuration(project.duration)}</span>
-                {project.assets.some((asset) => isAssetFavorite(asset)) && <span className="status favorite"><ThumbsUp size={14} fill="currentColor" /> {project.assets.filter((asset) => isAssetFavorite(asset)).length === project.assets.length ? 'Favorit' : `${project.assets.filter((asset) => isAssetFavorite(asset)).length}/${project.assets.length} Favoriten`}</span>}
-                {project.assets.some(isAudioLocal) && <span className="status cached">{projectAudioLocalLabel(project)}</span>}
+                {project.assets.some((asset) => isAssetFavorite(asset)) && <span className="status favorite"><ThumbsUp size={14} fill="currentColor" /> {project.assets.filter((asset) => isAssetFavorite(asset)).length === project.assets.length ? t('library.favoriteOne', 'Favorit') : t('library.favoriteCount', '{{count}}/{{total}} Favoriten', { count: project.assets.filter((asset) => isAssetFavorite(asset)).length, total: project.assets.length })}</span>}
+                {project.assets.some(isAudioLocal) && <span className="status cached">{projectAudioLocalLabel(project, t)}</span>}
                 {project.assets.some(isCoverCached) && <span className="status cached">{projectContentBadgeLabel(project, isCoverCached, 'Cover lokal')}</span>}
                 {projectContentBadgeLabel(project, (asset) => hasAssetSrt(asset, srtByAsset), 'SRT') && <span className="status cached">{projectContentBadgeLabel(project, (asset) => hasAssetSrt(asset, srtByAsset), 'SRT')}</span>}
                 {projectContentBadgeLabel(project, (asset) => hasAssetHalfSrt(asset, srtByAsset), 'HALF-SRT') && <span className="status cached">{projectContentBadgeLabel(project, (asset) => hasAssetHalfSrt(asset, srtByAsset), 'HALF-SRT')}</span>}
                 {projectContentBadgeLabel(project, (asset) => assetContentBadges(asset, srtByAsset).some((badge) => badge.key === 'stems'), 'STEMS') && <span className="status cached">{projectContentBadgeLabel(project, (asset) => assetContentBadges(asset, srtByAsset).some((badge) => badge.key === 'stems'), 'STEMS')}</span>}
                 {projectContentBadgeLabel(project, (asset) => assetContentBadges(asset, srtByAsset).some((badge) => badge.key === 'wav'), 'WAV') && <span className="status cached">{projectContentBadgeLabel(project, (asset) => assetContentBadges(asset, srtByAsset).some((badge) => badge.key === 'wav'), 'WAV')}</span>}
-                <button type="button" onClick={() => playProject(project)}><Headphones size={16} /> {projectPlaying ? 'Pause' : 'Abspielen'}</button>
+                <button type="button" onClick={() => playProject(project)}><Headphones size={16} /> {projectPlaying ? t('player.pause', 'Pause') : t('player.play', 'Abspielen')}</button>
                 <button type="button" onClick={() => onOpenDaw?.(project.playable[0] || project.assets[0])}>Mini-DAW</button>
               </div>
             </article>
@@ -4843,34 +4862,34 @@ ${generationOptionsText(asset)}`,
       <SrtEditorModal asset={srtEditorAsset} />
       <StemPreviewModal asset={stemPreviewAsset} />
       <AudioAiAnalysisReportModal />
-      <Modal open={Boolean(playlistAsset)} title="Zu Playlist hinzufügen" onClose={() => setPlaylistAsset(null)}>
+      <Modal open={Boolean(playlistAsset)} title={t('library.playlist.addTitle', 'Zu Playlist hinzufügen')} onClose={() => setPlaylistAsset(null)}>
         {playlistAsset && <div className="stack">
-          <p className="muted">Track: <strong>{pickTitle(playlistAsset)}</strong></p>
-          {!playlists.length && <p className="warning-text">Noch keine Playlist vorhanden. Bitte zuerst im Playlist-Tab eine Playlist erstellen.</p>}
+          <p className="muted">{t('library.playlist.track', 'Track')}: <strong>{pickTitle(playlistAsset)}</strong></p>
+          {!playlists.length && <p className="warning-text">{t('library.playlist.noneYet', 'Noch keine Playlist vorhanden. Bitte zuerst im Playlist-Tab eine Playlist erstellen.')}</p>}
           <div className="button-grid">
             {playlists.map((playlist) => <button key={playlist.id} type="button" onClick={() => addToPlaylist(playlistAsset, playlist.id)}>{playlist.name}</button>)}
           </div>
         </div>}
       </Modal>
-      <Modal open={selectedPlaylistOpen} title="Auswahl zu Playlist hinzufügen" onClose={() => setSelectedPlaylistOpen(false)}>
+      <Modal open={selectedPlaylistOpen} title={t('library.playlist.addSelectionTitle', 'Auswahl zu Playlist hinzufügen')} onClose={() => setSelectedPlaylistOpen(false)}>
         <div className="stack">
-          <p className="muted">{selectedAssets.length} ausgewählte Track{selectedAssets.length === 1 ? '' : 's'} werden hinzugefügt.</p>
-          {!playlists.length && <p className="warning-text">Noch keine Playlist vorhanden. Bitte zuerst im Playlist-Tab eine Playlist erstellen.</p>}
+          <p className="muted">{t('library.playlist.selectedTracksAdded', '{{count}} ausgewählte Track(s) werden hinzugefügt.', { count: selectedAssets.length })}</p>
+          {!playlists.length && <p className="warning-text">{t('library.playlist.noneYet', 'Noch keine Playlist vorhanden. Bitte zuerst im Playlist-Tab eine Playlist erstellen.')}</p>}
           <div className="button-grid">
             {playlists.map((playlist) => <button key={playlist.id} type="button" onClick={() => addSelectedToPlaylist(playlist.id)}>{playlist.name}</button>)}
           </div>
         </div>
       </Modal>
-      <Modal open={Boolean(timestampAsset)} title={timestampAsset ? `Timestamped Lyrics: ${pickTitle(timestampAsset)}` : 'Timestamped Lyrics'} onClose={() => setTimestampAsset(null)}>
+      <Modal open={Boolean(timestampAsset)} title={timestampAsset ? t('library.timestamped.titleForAsset', 'Timestamped Lyrics: {{title}}', { title: pickTitle(timestampAsset) }) : 'Timestamped Lyrics'} onClose={() => setTimestampAsset(null)}>
         {timestampAsset && <div className="stack">
           <p className="muted">Audio-ID: {timestampAsset.audio_id || '—'} · Task-ID: {timestampAsset.suno_task_id || timestampAsset.task_id || '—'}</p>
-          {!readStoredTimestampedLyrics(timestampAsset) && <p className="warning-text">Noch keine synchronisierten Lyrics gespeichert. Jetzt über SunoAPI abrufen und im AudioAsset speichern.</p>}
+          {!readStoredTimestampedLyrics(timestampAsset) && <p className="warning-text">{t('library.timestamped.noneStored', 'Noch keine synchronisierten Lyrics gespeichert. Jetzt über SunoAPI abrufen und im AudioAsset speichern.')}</p>}
           <div className="button-row wrap">
-            <button type="button" className="primary" onClick={() => fetchTimestampedLyrics(timestampAsset)} disabled={timestampLoading || !timestampAsset.audio_id}>{timestampLoading ? 'Rufe ab…' : 'Abrufen & speichern'}</button>
-            <button type="button" onClick={() => copyTimestampedLyrics(timestampAsset)} disabled={!readStoredTimestampedLyrics(timestampAsset)}>In Zwischenablage</button>
-            <button type="button" onClick={() => downloadTimestampedLyrics(timestampAsset)} disabled={!readStoredTimestampedLyrics(timestampAsset)}><Download size={15} /> Herunterladen</button>
+            <button type="button" className="primary" onClick={() => fetchTimestampedLyrics(timestampAsset)} disabled={timestampLoading || !timestampAsset.audio_id}>{timestampLoading ? t('library.timestamped.fetching', 'Rufe ab…') : t('library.timestamped.fetchAndSave', 'Abrufen & speichern')}</button>
+            <button type="button" onClick={() => copyTimestampedLyrics(timestampAsset)} disabled={!readStoredTimestampedLyrics(timestampAsset)}>{t('library.timestamped.copyToClipboard', 'In Zwischenablage')}</button>
+            <button type="button" onClick={() => downloadTimestampedLyrics(timestampAsset)} disabled={!readStoredTimestampedLyrics(timestampAsset)}><Download size={15} /> {t('common.download', 'Herunterladen')}</button>
           </div>
-          <pre className="large-pre keyboard-scroll-region" onWheel={(event) => event.stopPropagation()} onTouchMove={(event) => event.stopPropagation()}>{timestampedLyricsText(timestampAsset) || 'Noch keine Daten vorhanden.'}</pre>
+          <pre className="large-pre keyboard-scroll-region" onWheel={(event) => event.stopPropagation()} onTouchMove={(event) => event.stopPropagation()}>{timestampedLyricsText(timestampAsset) || t('common.noData', 'Noch keine Daten vorhanden.')}</pre>
         </div>}
       </Modal>
       <AudioOperationModal />
@@ -4907,37 +4926,38 @@ ${generationOptionsText(asset)}`,
 }
 
 function ActionModal({ asset, onClose, onAction, onDelete, onOpenDaw, onReuse, onPrepareExtend, onRename, onCopy, onSaveLyrics, onEditLyrics, onOpenWizard, onPlaylist, onTimestamp, onGenerateSrt, onGenerateStems, onGenerateAudioAnalysis, onGenerateAiTags, onOpenAudioAnalysisReport, onOpenAiCover, onReplaceCover, onOpenCoverViewer, onDownloadCover, onToggleFavorite, isAssetFavorite = () => false, favoriteSavingIds = new Set() }) {
+  const { t } = useI18n();
   const audioAnalysis = readAudioAiAnalysis(asset);
   const aiTags = readLibraryAiTags(asset);
   return (
-    <Modal open={Boolean(asset)} title={asset ? `Aktionen: ${pickTitle(asset)}` : 'Aktionen'} onClose={onClose}>
+    <Modal open={Boolean(asset)} title={asset ? t('library.actionModal.titleWithAsset', 'Aktionen: {{title}}', { title: pickTitle(asset) }) : t('library.actionModal.title', 'Aktionen')} onClose={onClose}>
       {asset && <div className="stack">
         <p className="muted">songs.id: {songDatabaseId(asset) ?? '—'} · audio_assets.id: {asset.id || '—'} · Audio-ID: {asset.audio_id || '—'} · Task-ID: {asset.suno_task_id || asset.task_id || '—'}</p>
-        {localOnlyHint(asset) && <p className="warning-text">{localOnlyHint(asset)}</p>}
+        {localOnlyHint(asset, t) && <p className="warning-text">{localOnlyHint(asset, t)}</p>}
         <div className="action-grid">
-          {canRunSunoApiAction(asset, 'Extend') && <button className="primary" type="button" onClick={() => onAction(asset, 'Extend')}><ArrowRight size={16} /> Extend konfigurieren</button>}
-          {canRunSunoApiAction(asset, 'Extend') && <button type="button" onClick={() => { onPrepareExtend?.(asset); onClose?.(); }}><ArrowRight size={16} /> Im Generator vorbereiten</button>}
-          <button type="button" onClick={() => { onReuse?.(asset); onClose?.(); }}><Star size={16} /> Wiederverwenden</button>
-          <button type="button" className={isAssetFavorite(asset) ? 'favorite-action is-favorite' : 'favorite-action'} onClick={() => { onToggleFavorite?.(asset); onClose?.(); }} disabled={favoriteSavingIds.has(asset.id)}><ThumbsUp size={16} fill={isAssetFavorite(asset) ? 'currentColor' : 'none'} /> {isAssetFavorite(asset) ? 'Favorit entfernen' : 'Als Favorit speichern'}</button>
-          {['Cover Song', 'Add Vocals', 'Add Instrumental', 'Persona', 'Cover-Bild'].filter((item) => canRunSunoApiAction(asset, item)).map((item) => <button key={item} type="button" onClick={() => onAction(asset, item)}>{item === 'Cover Song' ? 'Cover Song generieren' : item === 'Cover-Bild' ? 'Suno-Coverbild generieren' : item}</button>)}
-          <button type="button" onClick={() => { onOpenAiCover?.(asset); onClose?.(); }}>KI-Coverbild generieren</button>
-          <button type="button" onClick={() => { onReplaceCover?.(asset); onClose?.(); }}><Edit3 size={16} /> Upload-Cover ersetzen</button>
-          <button type="button" onClick={() => { onOpenCoverViewer?.(asset); onClose?.(); }} disabled={isFallbackCoverUrl(pickCover(asset))}><Maximize2 size={16} /> Cover groß anzeigen</button>
-          <button type="button" onClick={() => { onDownloadCover?.(asset); onClose?.(); }} disabled={isFallbackCoverUrl(pickCover(asset))}><Download size={16} /> Cover herunterladen</button>
-          <button type="button" onClick={() => { onGenerateSrt?.(asset); onClose?.(); }}><FileText size={16} /> SRT erzeugen</button>
-          <button type="button" onClick={() => { onGenerateStems?.(asset); onClose?.(); }}><Headphones size={16} /> Stems erzeugen</button>
-          <button type="button" onClick={() => { onGenerateAiTags?.(asset, Boolean(aiTags)); onClose?.(); }}><Tag size={16} /> {aiTags ? 'KI-Tags neu erzeugen' : 'KI-Tags erzeugen'}</button>
-          <button type="button" onClick={() => { onGenerateAudioAnalysis?.(asset, Boolean(audioAnalysis)); onClose?.(); }}><FileText size={16} /> {audioAnalysis ? 'Audioanalyse neu erstellen' : 'Audioanalyse starten'}</button>
-          {audioAnalysis && <button type="button" onClick={() => { onOpenAudioAnalysisReport?.(asset); onClose?.(); }}><FileText size={16} /> Audioanalyse-Report öffnen</button>}
-          <button type="button" onClick={() => { onTimestamp?.(asset); onClose?.(); }}><Clock3 size={16} /> Timestamped Lyrics</button>
-          <button type="button" onClick={() => { onOpenWizard?.(asset); onClose?.(); }}><FileText size={16} /> Audio-Wizard</button>
-          <button type="button" onClick={() => { onPlaylist?.(asset); onClose?.(); }}><Plus size={16} /> Zur Playlist</button>
-          <button type="button" onClick={(event) => { onEditLyrics?.(asset, event); onClose?.(); }}><Edit3 size={16} /> Songtext bearbeiten</button>
-          <button type="button" onClick={() => { onOpenDaw?.(asset); onClose?.(); }}><Scissors size={16} /> In Mini-DAW öffnen</button>
-          <button type="button" onClick={() => { onCopy?.(asset); onClose?.(); }}><Copy size={16} /> Trackdaten kopieren</button>
-          <button type="button" onClick={() => { onSaveLyrics?.(asset); onClose?.(); }}><FileText size={16} /> Songtext speichern</button>
-          <button type="button" onClick={() => { onRename?.(asset); onClose?.(); }}><Edit3 size={16} /> Titel ändern</button>
-          <button className="danger" type="button" onClick={() => onDelete(asset)}><Trash2 size={16} /> In Papierkorb</button>
+          {canRunSunoApiAction(asset, 'Extend') && <button className="primary" type="button" onClick={() => onAction(asset, 'Extend')}><ArrowRight size={16} /> {t('library.actions.configureExtend', 'Extend konfigurieren')}</button>}
+          {canRunSunoApiAction(asset, 'Extend') && <button type="button" onClick={() => { onPrepareExtend?.(asset); onClose?.(); }}><ArrowRight size={16} /> {t('library.actions.openInMusicGenerator', 'Im Generator vorbereiten')}</button>}
+          <button type="button" onClick={() => { onReuse?.(asset); onClose?.(); }}><Star size={16} /> {t('library.actions.reuse', 'Wiederverwenden')}</button>
+          <button type="button" className={isAssetFavorite(asset) ? 'favorite-action is-favorite' : 'favorite-action'} onClick={() => { onToggleFavorite?.(asset); onClose?.(); }} disabled={favoriteSavingIds.has(asset.id)}><ThumbsUp size={16} fill={isAssetFavorite(asset) ? 'currentColor' : 'none'} /> {isAssetFavorite(asset) ? t('library.actions.removeFavorite', 'Favorit entfernen') : t('library.actions.saveFavorite', 'Als Favorit speichern')}</button>
+          {['Cover Song', 'Add Vocals', 'Add Instrumental', 'Persona', 'Cover-Bild'].filter((item) => canRunSunoApiAction(asset, item)).map((item) => <button key={item} type="button" onClick={() => onAction(asset, item)}>{item === 'Cover Song' ? t('library.actions.generateCoverSong', 'Cover Song generieren') : item === 'Cover-Bild' ? t('library.actions.generateSunoCover', 'Suno-Coverbild generieren') : item === 'Add Vocals' ? t('library.actions.addVocals', 'Add Vocals') : item === 'Add Instrumental' ? t('library.actions.addInstrumental', 'Add Instrumental') : item}</button>)}
+          <button type="button" onClick={() => { onOpenAiCover?.(asset); onClose?.(); }}>{t('library.actions.generateAiCover', 'KI-Coverbild generieren')}</button>
+          <button type="button" onClick={() => { onReplaceCover?.(asset); onClose?.(); }}><Edit3 size={16} /> {t('library.actions.replaceUploadCover', 'Upload-Cover ersetzen')}</button>
+          <button type="button" onClick={() => { onOpenCoverViewer?.(asset); onClose?.(); }} disabled={isFallbackCoverUrl(pickCover(asset))}><Maximize2 size={16} /> {t('library.actions.viewCoverLarge', 'Cover groß anzeigen')}</button>
+          <button type="button" onClick={() => { onDownloadCover?.(asset); onClose?.(); }} disabled={isFallbackCoverUrl(pickCover(asset))}><Download size={16} /> {t('library.actions.downloadCover', 'Cover herunterladen')}</button>
+          <button type="button" onClick={() => { onGenerateSrt?.(asset); onClose?.(); }}><FileText size={16} /> {t('library.bulk.createSrt', 'SRT erzeugen')}</button>
+          <button type="button" onClick={() => { onGenerateStems?.(asset); onClose?.(); }}><Headphones size={16} /> {t('library.bulk.createStems', 'Stems erzeugen')}</button>
+          <button type="button" onClick={() => { onGenerateAiTags?.(asset, Boolean(aiTags)); onClose?.(); }}><Tag size={16} /> {aiTags ? t('library.actions.regenerateAiTags', 'KI-Tags neu erzeugen') : t('library.actions.generateAiTags', 'KI-Tags erzeugen')}</button>
+          <button type="button" onClick={() => { onGenerateAudioAnalysis?.(asset, Boolean(audioAnalysis)); onClose?.(); }}><FileText size={16} /> {audioAnalysis ? t('library.actions.regenerateAudioAnalysis', 'Audioanalyse neu erstellen') : t('library.actions.startAudioAnalysis', 'Audioanalyse starten')}</button>
+          {audioAnalysis && <button type="button" onClick={() => { onOpenAudioAnalysisReport?.(asset); onClose?.(); }}><FileText size={16} /> {t('library.actions.openAudioAnalysisReport', 'Audioanalyse-Report öffnen')}</button>}
+          <button type="button" onClick={() => { onTimestamp?.(asset); onClose?.(); }}><Clock3 size={16} /> {t('library.timestamped.title', 'Timestamped Lyrics')}</button>
+          <button type="button" onClick={() => { onOpenWizard?.(asset); onClose?.(); }}><FileText size={16} /> {t('library.workflow.audioWizard', 'Audio-Wizard')}</button>
+          <button type="button" onClick={() => { onPlaylist?.(asset); onClose?.(); }}><Plus size={16} /> {t('library.actions.toPlaylist', 'Zur Playlist')}</button>
+          <button type="button" onClick={(event) => { onEditLyrics?.(asset, event); onClose?.(); }}><Edit3 size={16} /> {t('library.actions.editLyrics', 'Songtext bearbeiten')}</button>
+          <button type="button" onClick={() => { onOpenDaw?.(asset); onClose?.(); }}><Scissors size={16} /> {t('library.actions.openInMiniDaw', 'In Mini-DAW öffnen')}</button>
+          <button type="button" onClick={() => { onCopy?.(asset); onClose?.(); }}><Copy size={16} /> {t('library.actions.copyTrackData', 'Trackdaten kopieren')}</button>
+          <button type="button" onClick={() => { onSaveLyrics?.(asset); onClose?.(); }}><FileText size={16} /> {t('library.actions.saveLyrics', 'Songtext speichern')}</button>
+          <button type="button" onClick={() => { onRename?.(asset); onClose?.(); }}><Edit3 size={16} /> {t('library.actions.renameTitle', 'Titel ändern')}</button>
+          <button className="danger" type="button" onClick={() => onDelete(asset)}><Trash2 size={16} /> {t('library.actions.moveToTrash', 'In Papierkorb')}</button>
         </div>
       </div>}
     </Modal>

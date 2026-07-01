@@ -25,6 +25,7 @@
 
     "db:upgrade": "bash scripts/upgrade_db.sh",
     "test:smoke": "bash scripts/smoke_test.sh",
+    "audit:i18n": "node scripts/audit-react-i18n.mjs",
 
     "backup": "bash scripts/backup.sh",
     "backup:local": "bash scripts/backup.sh",

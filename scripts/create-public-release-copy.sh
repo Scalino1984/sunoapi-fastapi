@@ -40,7 +40,8 @@ Optionen:
 
 Ausgeschlossen werden u. a.:
   .env, .env.*, .git, node_modules, venv/.venv, lokale DBs, Runtime-Logs,
-  Test-Caches, Storage-Inhalte, generierte Audio-/Cover-/Video-Dateien.
+  Test-Caches, Storage-Inhalte, generierte Audio-/Cover-/Video-Dateien
+  sowie persoenliche Verwaltungs-/Deploy-Skripte.
 HELP
       exit 0
       ;;
@@ -139,6 +140,13 @@ exclude_args=(
   --exclude="documentation/local_audiofiles.txt"
   --exclude="documentation/storage_snapshot.txt"
   --exclude="documentation/tree-list-storage.txt"
+  --exclude="scripts/rsync-to-vserver.sh"
+  --exclude="scripts/github-repo-manager.sh"
+  --exclude="scripts/create-public-release-copy.sh"
+  --exclude="scripts/backup-srv.sh"
+  --exclude="scripts/zip-app.sh"
+  --exclude="scripts/create-zip"
+  --exclude="scripts/create_ai_test_zip.sh"
   --exclude="PATCH_*.md"
   --exclude="RELEASE_*.md"
   --exclude="TECH_*.md"
@@ -222,9 +230,9 @@ Target:  $target_abs
 
 Excluded: real .env files, local databases, node_modules, venv/.venv,
 runtime files, pytest caches, storage content, generated audio/video/media,
-private test runtime content and git metadata.
+private test runtime content, personal repository/deployment scripts and git metadata.
 
-Note: Verify README, screenshots, license and .env.example before publishing.
+Note: Verify README, INSTALLATION.md, screenshots, license and .env.example before publishing.
 MANIFEST
 
 echo "Fertig: $target_abs"

@@ -81,6 +81,7 @@ analyses/
 documentation/local_audiofiles.txt
 documentation/storage_snapshot.txt
 documentation/tree-list-storage.txt
+documentation/code-backups/
 documentation/test-audit-logs/
 
 # OS/editor

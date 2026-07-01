@@ -2726,13 +2726,26 @@ body[data-theme="light"] .credits {
   white-space: nowrap;
 }
 
+.language-toggle-button {
+  min-width: 46px;
+  padding-inline: 12px;
+  white-space: nowrap;
+  font-weight: 900;
+  letter-spacing: 0.04em;
+}
+
 body[data-theme="light"] .theme-toggle-button {
+  background: rgba(255, 255, 255, 0.78);
+}
+
+body[data-theme="light"] .language-toggle-button {
   background: rgba(255, 255, 255, 0.78);
 }
 
 @media (max-width: 760px) {
   .theme-toggle-button span { display: none; }
   .theme-toggle-button { min-width: 44px; }
+  .language-toggle-button { min-width: 42px; padding-inline: 10px; }
 }
 
 /* --------------------------------------------------------------------------
@@ -2815,6 +2828,7 @@ body[data-theme="light"] .theme-toggle-button {
 .sidebar-mobile-button,
 .sidebar-mode-button,
 .focus-toggle-button,
+.language-toggle-button,
 .theme-toggle-button,
 .live-pill {
   min-height: 42px;

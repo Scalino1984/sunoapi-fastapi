@@ -4,9 +4,10 @@ import { api } from '../api/client.js';
 import { Waveform } from '../components/Waveform.jsx';
 import { SectionHeader } from '../components/SectionHeader.jsx';
 import { formatDuration, handleCoverImageError, pickCover, pickTitle } from '../utils.js';
+import { useI18n } from '../i18n/I18nContext.jsx';
 
-function assetLabel(asset) {
-  if (!asset) return 'Audio wählen…';
+function assetLabel(asset, t = null) {
+  if (!asset) return t?.('daw.chooseAudio', 'Audio wählen…') || 'Audio wählen…';
   const title = asset.display_title || asset.title || `Audio #${asset.id}`;
   const version = asset.version_label || asset.operation_label || asset.status || '';
   return `${title}${version ? ` · ${version}` : ''}`;
@@ -30,20 +31,21 @@ function parseTime(value) {
   return Number.isFinite(n) ? Math.max(0, n) : 0;
 }
 
-function operationText(operations) {
-  if (!operations?.length) return 'Noch keine Operationen im Plan.';
+function operationText(operations, t = null) {
+  if (!operations?.length) return t?.('daw.noOperations', 'Noch keine Operationen im Plan.') || 'Noch keine Operationen im Plan.';
   return operations.map((op) => {
     if (op.type === 'trim') return `Trim ${secondsToTime(op.start)} – ${secondsToTime(op.end)}`;
     if (op.type === 'fade_out') return `Fade-out ${op.duration}s`;
     if (op.type === 'fade_in') return `Fade-in ${op.duration}s`;
-    if (op.type === 'gain') return `Lautstärke ${op.gain_db > 0 ? '+' : ''}${op.gain_db} dB`;
-    if (op.type === 'normalize') return `Normalisieren ${op.target_lufs || -14} LUFS`;
+    if (op.type === 'gain') return `${t?.('daw.volume', 'Lautstärke') || 'Lautstärke'} ${op.gain_db > 0 ? '+' : ''}${op.gain_db} dB`;
+    if (op.type === 'normalize') return `${t?.('daw.normalize', 'Normalisieren') || 'Normalisieren'} ${op.target_lufs || -14} LUFS`;
     if (op.type === 'preset') return `Preset ${op.preset}`;
     return op.type;
   }).join(' · ');
 }
 
 export function DawPage({ assets = [], selectedAssetId = null, onSelectedHandled, onPlay, notify, onReload }) {
+  const { t } = useI18n();
   const playable = useMemo(() => (assets || []).filter((asset) => asset?.id && (asset.public_url || asset.local_path || asset.source_url)), [assets]);
   const initial = selectedAssetId || localStorage.getItem('react-daw-asset-id') || playable[0]?.id || '';
   const [assetId, setAssetId] = useState(initial);
@@ -82,7 +84,7 @@ export function DawPage({ assets = [], selectedAssetId = null, onSelectedHandled
     setLoadingProject(true);
     api.daw.project(assetId)
       .then(setProject)
-      .catch((err) => notify?.(err.message || 'DAW-Projekt konnte nicht geladen werden.', 'error'))
+      .catch((err) => notify?.(err.message || t('daw.messages.projectLoadFailed', 'DAW-Projekt konnte nicht geladen werden.'), 'error'))
       .finally(() => setLoadingProject(false));
   }, [assetId]);
 
@@ -109,15 +111,15 @@ export function DawPage({ assets = [], selectedAssetId = null, onSelectedHandled
   }
 
   async function renderPlan(plan = null) {
-    if (!assetId && !plan?.source_audio_id) return notify?.('Bitte zuerst ein Audio auswählen.', 'error');
+    if (!assetId && !plan?.source_audio_id) return notify?.(t('daw.messages.chooseAudioFirst', 'Bitte zuerst ein Audio auswählen.'), 'error');
     setRendering(true);
     try {
       const result = await api.daw.render(plan || buildPlan());
-      notify?.(`DAW-Version gespeichert: ${result.version_label || result.display_title || result.id}`, 'success');
+      notify?.(t('daw.messages.versionSaved', 'DAW-Version gespeichert: {{label}}', { label: result.version_label || result.display_title || result.id }), 'success');
       setAssetId(result.id);
       await onReload?.();
     } catch (err) {
-      notify?.(err.message || 'DAW-Render fehlgeschlagen.', 'error');
+      notify?.(err.message || t('daw.messages.renderFailed', 'DAW-Render fehlgeschlagen.'), 'error');
     } finally {
       setRendering(false);
     }
@@ -129,13 +131,13 @@ export function DawPage({ assets = [], selectedAssetId = null, onSelectedHandled
     try {
       const result = await api.daw.resolveCommand({ message: command, execute });
       setCommandResult(result);
-      notify?.(result.message || 'Audio-Befehl wurde ausgewertet.', result.rendered_asset ? 'success' : 'info');
+      notify?.(result.message || t('daw.messages.commandResolved', 'Audio-Befehl wurde ausgewertet.'), result.rendered_asset ? 'success' : 'info');
       if (result.rendered_asset) {
         setAssetId(result.rendered_asset.id);
         await onReload?.();
       }
     } catch (err) {
-      notify?.(err.message || 'Audio-Befehl konnte nicht ausgeführt werden.', 'error');
+      notify?.(err.message || t('daw.messages.commandFailed', 'Audio-Befehl konnte nicht ausgeführt werden.'), 'error');
     } finally {
       setRendering(false);
     }
@@ -146,9 +148,9 @@ export function DawPage({ assets = [], selectedAssetId = null, onSelectedHandled
     try {
       const result = await api.daw.addMarker(assetId, { label: markerLabel.trim(), time: parseTime(markerTime), type: 'marker' });
       setProject((current) => current ? { ...current, markers: result.markers || [] } : current);
-      notify?.('Marker gespeichert.', 'success');
+      notify?.(t('daw.messages.markerSaved', 'Marker gespeichert.'), 'success');
     } catch (err) {
-      notify?.(err.message || 'Marker konnte nicht gespeichert werden.', 'error');
+      notify?.(err.message || t('daw.messages.markerFailed', 'Marker konnte nicht gespeichert werden.'), 'error');
     }
   }
 
@@ -157,9 +159,9 @@ export function DawPage({ assets = [], selectedAssetId = null, onSelectedHandled
     try {
       const result = await api.daw.analyze({ source_audio_id: Number(assetId) });
       setAnalysis(result);
-      notify?.('Audioanalyse erstellt.', 'success');
+      notify?.(t('daw.messages.analysisCreated', 'Audioanalyse erstellt.'), 'success');
     } catch (err) {
-      notify?.(err.message || 'Analyse fehlgeschlagen.', 'error');
+      notify?.(err.message || t('daw.messages.analysisFailed', 'Analyse fehlgeschlagen.'), 'error');
     }
   }
 
@@ -172,24 +174,24 @@ export function DawPage({ assets = [], selectedAssetId = null, onSelectedHandled
 
   return (
     <section className="page stack daw-page">
-      <SectionHeader eyebrow="Mini-DAW" title="Audio bearbeiten">
-        <button type="button" onClick={analyze}><Sparkles size={15} /> Analysieren</button>
-        <button className="primary" type="button" onClick={() => renderPlan()} disabled={rendering || !assetId}>{rendering ? <Loader2 className="spin-icon" size={15} /> : <Save size={15} />} Als neue Version speichern</button>
+      <SectionHeader eyebrow={t('nav.daw', 'Mini-DAW')} title={t('daw.title', 'Audio bearbeiten')}>
+        <button type="button" onClick={analyze}><Sparkles size={15} /> {t('daw.analyze', 'Analysieren')}</button>
+        <button className="primary" type="button" onClick={() => renderPlan()} disabled={rendering || !assetId}>{rendering ? <Loader2 className="spin-icon" size={15} /> : <Save size={15} />} {t('daw.saveAsVersion', 'Als neue Version speichern')}</button>
       </SectionHeader>
 
       <section className="panel daw-hero-panel">
         <div className="daw-cover"><img src={pickCover(currentAsset) || '/static/favicon.ico'} alt="Cover" onError={handleCoverImageError} /></div>
         <div className="stack">
-          <label>Library-Song / Version
+          <label>{t('daw.librarySongVersion', 'Library-Song / Version')}
             <select value={assetId || ''} onChange={(event) => setAssetId(event.target.value)}>
-              {playable.map((asset) => <option key={asset.id} value={asset.id}>{assetLabel(asset)}</option>)}
+              {playable.map((asset) => <option key={asset.id} value={asset.id}>{assetLabel(asset, t)}</option>)}
             </select>
           </label>
-          <h2>{currentAsset ? pickTitle(currentAsset) : 'Kein Audio ausgewählt'}</h2>
-          <p className="muted">{currentAsset?.version_label || currentAsset?.operation_label || 'Original'} · {formatDuration(duration || currentAsset?.duration_seconds)} · Original bleibt unverändert.</p>
+          <h2>{currentAsset ? pickTitle(currentAsset) : t('daw.noAudioSelected', 'Kein Audio ausgewählt')}</h2>
+          <p className="muted">{currentAsset?.version_label || currentAsset?.operation_label || t('daw.original', 'Original')} · {formatDuration(duration || currentAsset?.duration_seconds)} · {t('daw.originalUntouched', 'Original bleibt unverändert.')}</p>
           <div className="button-row wrap">
-            <button type="button" onClick={() => currentAsset && onPlay?.([currentAsset], 0)}><Headphones size={15} /> Im Player</button>
-            {currentAsset && <a className="button" href={api.archive.downloadUrl(currentAsset.id)}><Download size={15} /> Download</a>}
+            <button type="button" onClick={() => currentAsset && onPlay?.([currentAsset], 0)}><Headphones size={15} /> {t('daw.inPlayer', 'Im Player')}</button>
+            {currentAsset && <a className="button" href={api.archive.downloadUrl(currentAsset.id)}><Download size={15} /> {t('common.download', 'Herunterladen')}</a>}
           </div>
         </div>
       </section>
@@ -204,51 +206,65 @@ export function DawPage({ assets = [], selectedAssetId = null, onSelectedHandled
 
       <section className="panel daw-tools-panel">
         <div className="daw-tool-tabs">
-          {[['schnitt', 'Schnitt'], ['laut', 'Lautstärke'], ['verbessern', 'Verbessern'], ['shorts', 'Shorts'], ['marker', 'Marker'], ['ki', 'KI-Befehl'], ['versionen', 'Versionen']].map(([key, label]) => <button key={key} className={activeTab === key ? 'active' : ''} type="button" onClick={() => setActiveTab(key)}>{label}</button>)}
+          {[
+            ['schnitt', t('daw.tabs.cut', 'Schnitt')],
+            ['laut', t('daw.tabs.volume', 'Lautstärke')],
+            ['verbessern', t('daw.tabs.enhance', 'Verbessern')],
+            ['shorts', 'Shorts'],
+            ['marker', 'Marker'],
+            ['ki', t('daw.tabs.aiCommand', 'KI-Befehl')],
+            ['versionen', t('daw.tabs.versions', 'Versionen')]
+          ].map(([key, label]) => <button key={key} className={activeTab === key ? 'active' : ''} type="button" onClick={() => setActiveTab(key)}>{label}</button>)}
         </div>
 
         {activeTab === 'schnitt' && <div className="form-grid">
-          <label>Start<input value={trimStart} onChange={(event) => setTrimStart(event.target.value)} placeholder="0:00" /></label>
-          <label>Ende<input value={trimEnd} onChange={(event) => setTrimEnd(event.target.value)} placeholder={duration ? secondsToTime(duration) : '3:15'} /></label>
-          <label>Fade-in Sekunden<input type="number" step="0.1" value={fadeIn} onChange={(event) => setFadeIn(event.target.value)} /></label>
-          <label>Fade-out Sekunden<input type="number" step="0.1" value={fadeOut} onChange={(event) => setFadeOut(event.target.value)} /></label>
-          <div className="wide muted">Plan: {operationText(buildPlan().operations)}</div>
+          <label>{t('library.srt.start', 'Start')}<input value={trimStart} onChange={(event) => setTrimStart(event.target.value)} placeholder="0:00" /></label>
+          <label>{t('daw.end', 'Ende')}<input value={trimEnd} onChange={(event) => setTrimEnd(event.target.value)} placeholder={duration ? secondsToTime(duration) : '3:15'} /></label>
+          <label>{t('daw.fadeInSeconds', 'Fade-in Sekunden')}<input type="number" step="0.1" value={fadeIn} onChange={(event) => setFadeIn(event.target.value)} /></label>
+          <label>{t('daw.fadeOutSeconds', 'Fade-out Sekunden')}<input type="number" step="0.1" value={fadeOut} onChange={(event) => setFadeOut(event.target.value)} /></label>
+          <div className="wide muted">{t('daw.plan', 'Plan')}: {operationText(buildPlan().operations, t)}</div>
         </div>}
 
         {activeTab === 'laut' && <div className="form-grid">
-          <label>Lautstärke dB<input type="number" step="0.5" value={gainDb} onChange={(event) => setGainDb(event.target.value)} /></label>
+          <label>{t('daw.volumeDb', 'Lautstärke dB')}<input type="number" step="0.5" value={gainDb} onChange={(event) => setGainDb(event.target.value)} /></label>
           <button type="button" onClick={() => setGainDb('2')}>+2 dB</button>
           <button type="button" onClick={() => setGainDb('-2')}>-2 dB</button>
           <button type="button" onClick={() => setPreset('youtube')}>YouTube -14 LUFS</button>
         </div>}
 
         {activeTab === 'verbessern' && <div className="button-grid compact-buttons">
-          {[['klarer', 'Klarer'], ['mehr_druck', 'Mehr Druck'], ['bass', 'Mehr Bass'], ['hoehen', 'Mehr Höhen'], ['youtube', 'YouTube Master']].map(([key, label]) => <button key={key} className={preset === key ? 'active' : ''} type="button" onClick={() => setPreset(key)}><Wand2 size={15} /> {label}</button>)}
+          {[
+            ['klarer', t('daw.presets.clearer', 'Klarer')],
+            ['mehr_druck', t('daw.presets.morePunch', 'Mehr Druck')],
+            ['bass', t('daw.presets.moreBass', 'Mehr Bass')],
+            ['hoehen', t('daw.presets.moreTreble', 'Mehr Höhen')],
+            ['youtube', 'YouTube Master']
+          ].map(([key, label]) => <button key={key} className={preset === key ? 'active' : ''} type="button" onClick={() => setPreset(key)}><Wand2 size={15} /> {label}</button>)}
         </div>}
 
         {activeTab === 'shorts' && <div className="form-grid">
-          <label>Short-Länge<input type="number" value={shortLength} onChange={(event) => setShortLength(event.target.value)} /></label>
-          <button type="button" onClick={() => createShort(15)}>15 Sekunden ab Playhead</button>
-          <button type="button" onClick={() => createShort(30)}>30 Sekunden ab Playhead</button>
-          <button type="button" onClick={() => createShort(60)}>60 Sekunden ab Playhead</button>
+          <label>{t('daw.shortLength', 'Short-Länge')}<input type="number" value={shortLength} onChange={(event) => setShortLength(event.target.value)} /></label>
+          <button type="button" onClick={() => createShort(15)}>{t('daw.shortFromPlayhead', '{{seconds}} Sekunden ab Playhead', { seconds: 15 })}</button>
+          <button type="button" onClick={() => createShort(30)}>{t('daw.shortFromPlayhead', '{{seconds}} Sekunden ab Playhead', { seconds: 30 })}</button>
+          <button type="button" onClick={() => createShort(60)}>{t('daw.shortFromPlayhead', '{{seconds}} Sekunden ab Playhead', { seconds: 60 })}</button>
         </div>}
 
         {activeTab === 'marker' && <div className="form-grid">
-          <label>Marker-Name<input value={markerLabel} onChange={(event) => setMarkerLabel(event.target.value)} /></label>
-          <label>Zeit<input value={markerTime} onChange={(event) => setMarkerTime(event.target.value)} /></label>
-          <button type="button" onClick={() => setMarkerTime(secondsToTime(audioRef.current?.currentTime || 0))}><Clock3 size={15} /> Playhead übernehmen</button>
-          <button type="button" className="primary" onClick={addMarker}>Marker speichern</button>
+          <label>{t('daw.markerName', 'Marker-Name')}<input value={markerLabel} onChange={(event) => setMarkerLabel(event.target.value)} /></label>
+          <label>{t('daw.time', 'Zeit')}<input value={markerTime} onChange={(event) => setMarkerTime(event.target.value)} /></label>
+          <button type="button" onClick={() => setMarkerTime(secondsToTime(audioRef.current?.currentTime || 0))}><Clock3 size={15} /> {t('daw.usePlayhead', 'Playhead übernehmen')}</button>
+          <button type="button" className="primary" onClick={addMarker}>{t('daw.saveMarker', 'Marker speichern')}</button>
         </div>}
 
         {activeTab === 'ki' && <div className="stack">
-          <p className="muted">Beispiel: „Schneide den Song Zeitlos Variante 1 bei 3:15 min und lege einen 2 Sekunden Fade-out drauf.“</p>
-          <textarea className="large" value={command} onChange={(event) => setCommand(event.target.value)} placeholder="Audio-Befehl eingeben…" />
-          <div className="button-row wrap"><button type="button" onClick={() => resolveCommand(false)}><Bot size={15} /> Plan prüfen</button><button className="primary" type="button" onClick={() => resolveCommand(true)} disabled={rendering}><Scissors size={15} /> Direkt rendern</button></div>
+          <p className="muted">{t('daw.aiExample', 'Beispiel: "Schneide den Song Zeitlos Variante 1 bei 3:15 min und lege einen 2 Sekunden Fade-out drauf."')}</p>
+          <textarea className="large" value={command} onChange={(event) => setCommand(event.target.value)} placeholder={t('daw.commandPlaceholder', 'Audio-Befehl eingeben…')} />
+          <div className="button-row wrap"><button type="button" onClick={() => resolveCommand(false)}><Bot size={15} /> {t('daw.checkPlan', 'Plan prüfen')}</button><button className="primary" type="button" onClick={() => resolveCommand(true)} disabled={rendering}><Scissors size={15} /> {t('daw.renderDirectly', 'Direkt rendern')}</button></div>
           {commandResult && <pre className="large-pre">{JSON.stringify(commandResult, null, 2)}</pre>}
         </div>}
 
         {activeTab === 'versionen' && <div className="variant-grid compact-variants">
-          {(project?.versions || []).map((asset) => <article className="variant-card" key={asset.id}><strong>{assetLabel(asset)}</strong><p className="muted">{formatDuration(asset.duration_seconds)} · {asset.status}</p><div className="button-row wrap"><button type="button" onClick={() => setAssetId(asset.id)}><SlidersHorizontal size={15} /> Laden</button><button type="button" onClick={() => onPlay?.([asset], 0)}><Play size={15} /> Play</button></div></article>)}
+          {(project?.versions || []).map((asset) => <article className="variant-card" key={asset.id}><strong>{assetLabel(asset, t)}</strong><p className="muted">{formatDuration(asset.duration_seconds)} · {asset.status}</p><div className="button-row wrap"><button type="button" onClick={() => setAssetId(asset.id)}><SlidersHorizontal size={15} /> {t('daw.load', 'Laden')}</button><button type="button" onClick={() => onPlay?.([asset], 0)}><Play size={15} /> {t('player.play', 'Play')}</button></div></article>)}
         </div>}
       </section>
     </section>

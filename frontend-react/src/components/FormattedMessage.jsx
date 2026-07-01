@@ -1,6 +1,7 @@
 import React from 'react';
+import { useI18n } from '../i18n/I18nContext.jsx';
 
-function tryParseJsonMessage(value) {
+function tryParseJsonMessage(value, t = null) {
   const raw = String(value || '').trim();
   if (!raw) return '';
 
@@ -20,7 +21,7 @@ function tryParseJsonMessage(value) {
     try {
       const parsed = JSON.parse(candidate);
       if (typeof parsed === 'string') {
-        if (parsed.trim() !== raw) return tryParseJsonMessage(parsed);
+        if (parsed.trim() !== raw) return tryParseJsonMessage(parsed, t);
         return parsed;
       }
       if (parsed && typeof parsed === 'object') {
@@ -29,9 +30,9 @@ function tryParseJsonMessage(value) {
         const canvasText = parsed.canvas_text;
         const pieces = [];
         if (typeof message === 'string' && message.trim()) pieces.push(message.trim());
-        if (typeof summary === 'string' && summary.trim()) pieces.push(`Änderung: ${summary.trim()}`);
+        if (typeof summary === 'string' && summary.trim()) pieces.push(`${t?.('formattedMessage.change', 'Änderung') || 'Änderung'}: ${summary.trim()}`);
         if (typeof canvasText === 'string' && canvasText.trim() && !message?.includes(canvasText.trim())) {
-          pieces.push(`Canvas-Inhalt wurde vorbereitet (${canvasText.trim().split(/\r?\n/).length} Zeilen).`);
+          pieces.push(t?.('formattedMessage.canvasPrepared', 'Canvas-Inhalt wurde vorbereitet ({{lines}} Zeilen).', { lines: canvasText.trim().split(/\r?\n/).length }) || `Canvas-Inhalt wurde vorbereitet (${canvasText.trim().split(/\r?\n/).length} Zeilen).`);
         }
         if (pieces.length) return pieces.join('\n\n');
       }
@@ -43,8 +44,8 @@ function tryParseJsonMessage(value) {
   return raw;
 }
 
-function normalizeMarkdownText(text) {
-  const parsed = tryParseJsonMessage(text)
+function normalizeMarkdownText(text, t = null) {
+  const parsed = tryParseJsonMessage(text, t)
     .replace(/\\n/g, '\n')
     .replace(/\r\n/g, '\n')
     .replace(/\r/g, '\n');
@@ -88,7 +89,8 @@ function renderInlineMarkdown(text, keyPrefix = 'inline') {
 }
 
 export function FormattedMessage({ text }) {
-  const normalized = normalizeMarkdownText(text);
+  const { t } = useI18n();
+  const normalized = normalizeMarkdownText(text, t);
   const lines = normalized.split('\n');
   const blocks = [];
   let paragraph = [];

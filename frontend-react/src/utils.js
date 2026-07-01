@@ -104,17 +104,23 @@ function normalizeVocalGenderValue(value) {
   return String(value).trim();
 }
 
-export function formatBoolean(value) {
-  if (value === true || String(value).toLowerCase() === 'true') return 'Ja';
-  if (value === false || String(value).toLowerCase() === 'false') return 'Nein';
+function translateFormatter(translate, key, fallback, values) {
+  return typeof translate === 'function' ? translate(key, fallback, values) : fallback;
+}
+
+export function formatBoolean(value, translate = null) {
+  const tr = (key, fallback, values) => translateFormatter(translate, key, fallback, values);
+  if (value === true || String(value).toLowerCase() === 'true') return tr('common.yes', 'Ja');
+  if (value === false || String(value).toLowerCase() === 'false') return tr('common.no', 'Nein');
   return '—';
 }
 
-export function formatVocalGender(value) {
+export function formatVocalGender(value, translate = null) {
+  const tr = (key, fallback, values) => translateFormatter(translate, key, fallback, values);
   const normalized = String(value ?? '').trim().toLowerCase();
   if (!normalized) return '—';
-  if (['m', 'male', 'man', 'masculine', 'masc'].includes(normalized)) return 'Male';
-  if (['f', 'female', 'woman', 'feminine', 'fem'].includes(normalized)) return 'Female';
+  if (['m', 'male', 'man', 'masculine', 'masc'].includes(normalized)) return tr('common.male', 'Male');
+  if (['f', 'female', 'woman', 'feminine', 'fem'].includes(normalized)) return tr('common.female', 'Female');
   return String(value);
 }
 
@@ -208,11 +214,21 @@ export function parseBackendDate(value) {
   return Number.isNaN(date.getTime()) ? null : date;
 }
 
-export function formatDate(value) {
+function currentUiLocale(locale = null) {
+  if (locale) return locale;
+  try {
+    const language = document?.documentElement?.lang || navigator?.language || 'de';
+    return String(language).toLowerCase().startsWith('en') ? 'en-US' : 'de-DE';
+  } catch {
+    return 'de-DE';
+  }
+}
+
+export function formatDate(value, locale = null) {
   if (!value) return '—';
   const date = parseBackendDate(value);
   if (!date) return String(value);
-  return new Intl.DateTimeFormat('de-DE', {
+  return new Intl.DateTimeFormat(currentUiLocale(locale), {
     timeZone: 'Europe/Berlin', day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit'
   }).format(date);
 }
@@ -237,12 +253,13 @@ export function copyToClipboard(value) {
   return navigator.clipboard.writeText(String(value)).then(() => true).catch(() => false);
 }
 
-export function operationLabel(value) {
+export function operationLabel(value, translate = null) {
+  const tr = (key, fallback, values) => translateFormatter(translate, key, fallback, values);
   const normalized = String(value || '').toLowerCase();
   const map = {
-    generate: 'Generiert',
-    generated: 'Generiert',
-    generate_music: 'Generiert',
+    generate: tr('library.typeFilters.generate', 'Generiert'),
+    generated: tr('library.typeFilters.generate', 'Generiert'),
+    generate_music: tr('library.typeFilters.generate', 'Generiert'),
     extend: 'Extended',
     extended: 'Extended',
     extend_music: 'Extended',
@@ -259,10 +276,10 @@ export function operationLabel(value) {
     generate_sounds: 'Sounds',
     lyrics: 'Lyrics',
     generate_lyrics: 'Lyrics',
-    manual: 'Manuell importiert',
-    manual_import: 'Manuell importiert',
-    'manual import': 'Manuell importiert',
-    'manuell importiert': 'Manuell importiert'
+    manual: tr('library.operation.manualImport', 'Manuell importiert'),
+    manual_import: tr('library.operation.manualImport', 'Manuell importiert'),
+    'manual import': tr('library.operation.manualImport', 'Manuell importiert'),
+    'manuell importiert': tr('library.operation.manualImport', 'Manuell importiert')
   };
   return map[normalized] || value || 'Track';
 }
@@ -521,9 +538,10 @@ export function groupAssetsByOperation(assets) {
     .sort((a, b) => sortTimestamp(a.created_at) - sortTimestamp(b.created_at));
 }
 
-export function summarizeStyle(value, max = 140) {
+export function summarizeStyle(value, max = 140, translate = null) {
+  const tr = (key, fallback, values) => translateFormatter(translate, key, fallback, values);
   const text = String(value || '').replace(/\s+/g, ' ').trim();
-  if (!text) return 'Kein Style gespeichert';
+  if (!text) return tr('library.noStyleStored', 'Kein Style gespeichert');
   return text.length > max ? `${text.slice(0, max)}…` : text;
 }
 
@@ -549,23 +567,24 @@ export function safeFilename(value, fallback = 'export') {
   return (text || fallback).slice(0, 120);
 }
 
-export function friendlyNotification(notification) {
+export function friendlyNotification(notification, translate = null) {
+  const tr = (key, fallback, values) => translateFormatter(translate, key, fallback, values);
   const title = notification?.title || '';
   const message = notification?.message || '';
   const combined = `${title} ${message}`.toLowerCase();
   if (combined.includes('prompt') && combined.includes('long')) {
-    return { title: 'Der Text ist zu lang.', message: 'Kürze den Text oder nutze den Custom-Modus.' };
+    return { title: tr('status.friendly.promptTooLongTitle', 'Der Text ist zu lang.'), message: tr('status.friendly.promptTooLongMessage', 'Kürze den Text oder nutze den Custom-Modus.') };
   }
   if (combined.includes('invalid audio') || combined.includes('audio id')) {
-    return { title: 'Dieser Song kann nicht weiterbearbeitet werden.', message: 'Es fehlt eine gültige Song-ID. Öffne die Library und wähle eine andere Variante.' };
+    return { title: tr('status.friendly.invalidAudioTitle', 'Dieser Song kann nicht weiterbearbeitet werden.'), message: tr('status.friendly.invalidAudioMessage', 'Es fehlt eine gültige Song-ID. Öffne die Library und wähle eine andere Variante.') };
   }
   if (combined.includes('credit')) {
-    return { title: 'Credits prüfen.', message: 'Deine Suno-Credits reichen eventuell nicht aus.' };
+    return { title: tr('status.friendly.creditsTitle', 'Credits prüfen.'), message: tr('status.friendly.creditsMessage', 'Deine Suno-Credits reichen eventuell nicht aus.') };
   }
   if (combined.includes('success') || combined.includes('fertig')) {
-    return { title: title || 'Dein Ergebnis ist fertig.', message: message || 'Öffnen, anhören und weiterbearbeiten.' };
+    return { title: title || tr('status.friendly.successTitle', 'Dein Ergebnis ist fertig.'), message: message || tr('status.friendly.successMessage', 'Öffnen, anhören und weiterbearbeiten.') };
   }
-  return { title: title || 'Neue Benachrichtigung', message };
+  return { title: title || tr('status.friendly.newNotification', 'Neue Benachrichtigung'), message };
 }
 
 

@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { api } from '../api/client.js';
+import { useI18n } from '../i18n/I18nContext.jsx';
 
 const SECTION_PATTERNS = [
   [/\bpre\s*[- ]?chorus\b/i, 'Pre-Chorus', 'pre_chorus'],
@@ -133,6 +134,7 @@ function fallbackPeaks(count = 96) {
 }
 
 export function Waveform({ asset, audioRef, compact = false, currentTime = 0, durationSeconds = null, interactive = true }) {
+  const { t } = useI18n();
   const [waveform, setWaveform] = useState(asset?.waveform_json || null);
   const [loading, setLoading] = useState(false);
 
@@ -218,7 +220,7 @@ export function Waveform({ asset, audioRef, compact = false, currentTime = 0, du
           return <button key={`${segment.label}-${index}-${start}-${end}`} type="button" className={`react-waveform-segment ${segmentClass(segment.type)}`} style={{ left: `${left}%`, width: `${width}%` }} onClick={() => seekTo(start)} title={segment.label || segment.type}>{segment.label}</button>;
         })}
       </div>
-      <button type="button" className="react-waveform-bars" onClick={seekByClick} aria-label="Waveform Navigation" disabled={!interactive || !audioRef?.current}>
+      <button type="button" className="react-waveform-bars" onClick={seekByClick} aria-label={t('waveform.navigation', 'Waveform Navigation')} disabled={!interactive || !audioRef?.current}>
         {peaks.map((value, index) => <span key={index} className={index <= activeIndex ? 'played' : ''} style={{ height: `${Math.max(5, value * 100)}%` }} />)}
       </button>
       {progressRatio > 0 && <span className="react-waveform-progress-line" style={{ left: `${progressRatio * 100}%` }} />}

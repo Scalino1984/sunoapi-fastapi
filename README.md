@@ -2,6 +2,8 @@
 
 Self-hosted AI music production suite for SunoAPI.org workflows, local archiving, lyrics, covers, transcription, stems, playlists and production-ready song management.
 
+Installation: see [INSTALLATION.md](INSTALLATION.md) for a copy-and-paste setup guide including WhisperX, Demucs, ffmpeg and all Python requirements.
+
 ![Suno Song Studio dashboard](documentation/images/home-dashboard.png)
 
 ## Why This Exists
@@ -218,22 +220,24 @@ pip install -r requirements.txt
 cp .env.example .env
 nano .env
 
-npm --prefix frontend-react install
+npm run install:react
 npm run build:react
 
-uvicorn app.main:app --host 0.0.0.0 --port 8000
+npm run start
 ```
 
 Open:
 
 ```text
-http://localhost:8000
+React:   http://127.0.0.1:5173
+FastAPI: http://127.0.0.1:8000
 ```
 
-For local development helpers:
+The full app is started through the root npm helper. A direct `uvicorn` start only launches FastAPI, not the React frontend.
+
+For local control:
 
 ```bash
-npm run start
 npm run stop
 npm run restart
 ```
@@ -289,4 +293,4 @@ This project is an independent self-hosted application and is not affiliated wit
 
 ## License
 
-No public license has been declared yet. Add a license before publishing the repository for public reuse.
+This project is licensed under the GNU Affero General Public License v3.0. See [LICENSE](LICENSE).

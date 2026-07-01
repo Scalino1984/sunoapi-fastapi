@@ -4,6 +4,8 @@ Local-first music production dashboard for SunoAPI workflows.
 
 SongStudio combines music generation, import, library management, lyrics, SRT generation, waveform navigation, cover handling and post-production tools in one React/FastAPI app. The main goal is simple: generated songs should not only exist as temporary external URLs, but be organized and preserved locally with their metadata, covers and production context.
 
+Installation: use `INSTALLATION.md` for the maintained copy-and-paste setup guide, including WhisperX, Demucs, ffmpeg and Python requirements.
+
 > This README is a GitHub-ready project presentation draft. Replace the screenshot placeholders with your final public screenshots before publishing.
 
 ## Screenshots
@@ -105,9 +107,11 @@ npm run start
 Open:
 
 ```text
-FastAPI: http://127.0.0.1:8000
 React:   http://127.0.0.1:5173
+FastAPI: http://127.0.0.1:8000
 ```
+
+Use the root npm commands. A direct `uvicorn` start only launches FastAPI, not the complete app with the React frontend.
 
 ## Required Configuration
 
@@ -172,11 +176,7 @@ SongStudio is an active, production-oriented personal studio tool. Some workflow
 
 ## License
 
-Add your chosen license before publishing.
-
-```text
-MIT, Apache-2.0, AGPL-3.0 or private/proprietary are possible options.
-```
+This project is licensed under the GNU Affero General Public License v3.0. See `LICENSE`.
 
 ## Disclaimer
 

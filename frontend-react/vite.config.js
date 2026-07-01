@@ -17,6 +17,6 @@ export default defineConfig(({ command }) => ({
     // Die App ist bewusst ein umfangreiches internes Studio.
     // Der aktuelle Haupt-Chunk liegt nur knapp über Vites Standardwarnung von 500 kB.
     // Diese Grenze entfernt die kosmetische Build-Warnung, ohne Bundle-Logik zu verändern.
-    chunkSizeWarningLimit: 1024
+    chunkSizeWarningLimit: 2048
   }
 }));

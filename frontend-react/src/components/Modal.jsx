@@ -1,8 +1,10 @@
 import React, { useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
+import { useI18n } from '../i18n/I18nContext.jsx';
 
 export function Modal({ open, title, children, onClose, wide = false, cardClassName = '', contentClassName = '', cardStyle = null }) {
+  const { t } = useI18n();
   useEffect(() => {
     if (!open || typeof document === 'undefined') return undefined;
     const body = document.body;
@@ -45,7 +47,7 @@ export function Modal({ open, title, children, onClose, wide = false, cardClassN
       >
         <header className="modal-header">
           <h2>{title}</h2>
-          <button type="button" onClick={onClose} aria-label="Schließen"><X size={18} /></button>
+          <button type="button" onClick={onClose} aria-label={t('common.close', 'Schließen')}><X size={18} /></button>
         </header>
         <div className={`modal-content ${contentClassName}`.trim()}>{children}</div>
       </section>
