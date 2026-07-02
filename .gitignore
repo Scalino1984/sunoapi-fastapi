@@ -82,8 +82,6 @@ analyses/
 # Local/personal deployment and repository management helpers
 scripts/rsync-to-vserver.sh
 scripts/github-repo-manager.sh
-scripts/backup-srv.sh
-scripts/publish-react.sh
 deploy/systemd/suno-react-dev-wsl.service
 
 # Local/internal markdown notes kept out of the public repository view

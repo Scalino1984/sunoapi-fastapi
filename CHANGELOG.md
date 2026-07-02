@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0.2 - 2026-07-02
+
+### Fixed
+
+- Restored server runtime scripts required by `npm run react:publish`, `npm run react:deploy`, `npm run react:status`, `npm run react:rollback`, `npm run backup:srv` and full deployment workflows.
+- Kept `react:build` as a neutral local React build command so it works outside server/root deployment environments.
+
 ## 1.0.1 - 2026-07-02
 
 ### Changed
