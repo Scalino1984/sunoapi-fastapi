@@ -23,6 +23,15 @@ The result is a private studio dashboard for AI-assisted music production, desig
 
 ## Highlights
 
+### Bilingual React Frontend
+
+The React frontend can be switched between German and English directly from the app header.
+
+- persistent language selection in the browser
+- translated navigation, pages, modals, player controls and help content
+- German-first production workflow with an English UI option for broader teams, demos and public repositories
+- localized API timeout and user-facing frontend messages where the React UI handles them
+
 ### End-to-End Music Generation
 
 ![Music generator expert form](documentation/images/music-generator-expert-form.png)
@@ -204,7 +213,7 @@ Use local backup, content checks and metadata repair so the catalog remains usab
 ## Technical Stack
 
 - Backend: FastAPI, SQLAlchemy, Pydantic, Alembic
-- Frontend: React, Vite, lucide-react
+- Frontend: React, Vite, lucide-react, local German/English i18n
 - Database: SQLite by default through `DATABASE_URL`
 - Audio metadata: Mutagen
 - External providers: SunoAPI.org, optional OpenAI/OpenRouter/Gemini/Groq/Mistral/Voxtral/Replicate depending on enabled features
