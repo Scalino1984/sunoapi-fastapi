@@ -6,7 +6,7 @@ SongStudio combines music generation, import, library management, lyrics, SRT ge
 
 Installation: use `INSTALLATION.md` for the maintained copy-and-paste setup guide, including WhisperX, Demucs, ffmpeg and Python requirements.
 
-> This README is a GitHub-ready project presentation draft. Replace the screenshot placeholders with your final public screenshots before publishing.
+This folder contains older GitHub presentation notes and screenshot guidance. The maintained public project presentation is the root [README.md](../../README.md).
 
 ## Screenshots
 
@@ -37,6 +37,7 @@ Suggested additional screenshots:
 - Follow-up operations for extend, cover song, add vocals, instrumental, mashup, stems and WAV
 - Playlists, favorites, bulk selection and bulk actions for production workflows
 - Portable backup and restore helpers for moving local data between machines
+- German/English React UI switch in the app header
 
 ## Why This Exists
 

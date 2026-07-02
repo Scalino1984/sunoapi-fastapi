@@ -217,7 +217,7 @@ Use local backup, content checks and metadata repair so the catalog remains usab
 - Database: SQLite by default through `DATABASE_URL`
 - Audio metadata: Mutagen
 - External providers: SunoAPI.org, optional OpenAI/OpenRouter/Gemini/Groq/Mistral/Voxtral/Replicate depending on enabled features
-- Deployment: self-hosted Python app with React build publishing scripts
+- Deployment: self-hosted Python app with local React build output; server-specific deployment scripts are intentionally not part of the public package
 
 ## Quick Start
 
@@ -281,8 +281,10 @@ Before publishing or deploying:
 
 - do not commit `.env`, `.env.server`, databases, `storage/`, `node_modules/`, `venv/` or `.venv/`
 - review `.env.example` and document your own required provider keys
-- use the included publishing/deploy scripts only after checking their target paths
+- keep private sync, backup and server deployment scripts outside the public repository
 - remember that real SunoAPI, transcription, cover and AI calls can create provider costs
+
+For a public release, the repository includes neutral local development scripts only. Production deployment should be adapted to your own server, process manager and web server setup.
 
 ## What Makes It Different
 

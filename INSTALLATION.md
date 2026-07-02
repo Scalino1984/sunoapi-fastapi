@@ -2,7 +2,7 @@
 
 Diese Anleitung installiert Suno Song Studio lokal auf Ubuntu/Debian/WSL. Alle Befehle sind zum Kopieren gedacht. Die App besteht aus einem FastAPI-Backend, einer React/Vite-Oberflaeche und lokalen Audio-Werkzeugen.
 
-Persoenliche Wartungs- und Deploy-Skripte gehoeren nicht zur Installation. Dazu zaehlen z. B. VServer-Sync, GitHub-Repo-Manager, Release-Kopierskripte und private Backup-Skripte.
+Persoenliche Wartungs- und Deploy-Skripte gehoeren nicht zur Installation und sind im oeffentlichen Repository absichtlich nicht enthalten. Dazu zaehlen z. B. VServer-Sync, GitHub-Repo-Manager, Release-Kopierskripte und private Backup-Skripte.
 
 ## 1. System vorbereiten
 
@@ -225,6 +225,8 @@ npm run build:react
 ```
 
 Die persoenlichen Skripte fuer VServer-Sync, GitHub-Verwaltung und private Deployments sind nicht Teil dieser Installationsanleitung. Fuer eine neutrale Installation reichen die oben genannten Befehle.
+
+Wenn du die App produktiv veroeffentlichst, erstelle eigene systemd/nginx/apache/backup/deploy-Skripte passend zu deinem Server und halte Zugangsdaten weiterhin ausschliesslich in `.env` oder einem Secret Manager.
 
 ## Fehlerbehebung
 
