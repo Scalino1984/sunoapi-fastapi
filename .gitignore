@@ -82,6 +82,8 @@ analyses/
 # Local/personal deployment and repository management helpers
 scripts/rsync-to-vserver.sh
 scripts/github-repo-manager.sh
+scripts/backup-srv.sh
+scripts/publish-react.sh
 deploy/systemd/suno-react-dev-wsl.service
 documentation/local_audiofiles.txt
 documentation/storage_snapshot.txt
