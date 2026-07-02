@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0.1 - 2026-07-02
+
+### Changed
+
+- Reduced public Markdown clutter by keeping internal notes, generated audit prompts and local workflow documents out of the repository view.
+- Added `docs/README.md` as the public documentation entry point.
+
 ## 1.0.0 - 2026-07-02
 
 Initial public release of Suno Song Studio.

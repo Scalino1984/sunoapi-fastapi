@@ -85,6 +85,11 @@ scripts/github-repo-manager.sh
 scripts/backup-srv.sh
 scripts/publish-react.sh
 deploy/systemd/suno-react-dev-wsl.service
+
+# Local/internal markdown notes kept out of the public repository view
+documentation/*.md
+docs/github/*.md
+frontend-react/README.md
 documentation/local_audiofiles.txt
 documentation/storage_snapshot.txt
 documentation/tree-list-storage.txt

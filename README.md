@@ -219,6 +219,10 @@ Use local backup, content checks and metadata repair so the catalog remains usab
 - External providers: SunoAPI.org, optional OpenAI/OpenRouter/Gemini/Groq/Mistral/Voxtral/Replicate depending on enabled features
 - Deployment: self-hosted Python app with local React build output; server-specific deployment scripts are intentionally not part of the public package
 
+## Documentation
+
+Public technical notes are collected in [docs/README.md](docs/README.md). Internal patch logs, generated audit prompts, storage manifests and personal workflow notes are intentionally kept out of the public repository view.
+
 ## Quick Start
 
 ```bash
