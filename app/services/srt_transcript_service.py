@@ -563,6 +563,27 @@ def _script_compute_word_times(lines: list[LyricLine]) -> None:
         line.wend = ends
 
 
+def _script_group_text_len(words: list[str], group: list[int]) -> int:
+    return len(" ".join(words[index] for index in group))
+
+
+def _script_rebalance_short_wrap_groups(words: list[str], groups: list[list[int]], max_chars: int) -> list[list[int]]:
+    budget = max(8, int(max_chars or 22))
+    balanced = [list(group) for group in groups if group]
+    for index in range(1, len(balanced)):
+        current = balanced[index]
+        previous = balanced[index - 1]
+        if len(current) != 1 or len(previous) <= 1:
+            continue
+        candidate = previous[-1]
+        shifted_current = [candidate, *current]
+        if _script_group_text_len(words, shifted_current) > budget:
+            continue
+        balanced[index - 1] = previous[:-1]
+        balanced[index] = shifted_current
+    return [group for group in balanced if group]
+
+
 def _script_wrap_groups(words: list[str], max_chars: int) -> list[list[int]]:
     groups: list[list[int]] = []
     current: list[int] = []
@@ -579,7 +600,7 @@ def _script_wrap_groups(words: list[str], max_chars: int) -> list[list[int]]:
         current_len += addition
     if current:
         groups.append(current)
-    return groups
+    return _script_rebalance_short_wrap_groups(words, groups, budget)
 
 
 def _script_to_portrait_srt(lines: list[LyricLine], max_chars: int = 22, min_dur: float = 0.6) -> str:
@@ -942,17 +963,42 @@ def _line_entry_for_srt_segment(
     source_lines: list[dict[str, Any]],
     cursor: int,
 ) -> tuple[dict[str, Any] | None, int]:
-    segment_tokens = " ".join(_lyrics_tokens(str(segment.get("text") or "")))
+    segment_token_list = _lyrics_tokens(str(segment.get("text") or ""))
+    segment_tokens = " ".join(segment_token_list)
     source_line = segment.get("source_line")
     try:
         index = int(source_line) - 1
     except (TypeError, ValueError):
         index = -1
 
+    def line_token_list(idx: int) -> list[str]:
+        return _lyrics_tokens(str(source_lines[idx].get("text") or ""))
+
+    def prefix_repeat(candidate_tokens: list[str]) -> bool:
+        return (
+            bool(segment_token_list)
+            and len(segment_token_list) < len(candidate_tokens)
+            and len(segment_token_list) <= 6
+            and candidate_tokens[:len(segment_token_list)] == segment_token_list
+        )
+
+    def match_score(candidate_tokens: list[str]) -> float:
+        candidate_text = " ".join(candidate_tokens)
+        if not segment_tokens or not candidate_text:
+            return 0.0
+        if prefix_repeat(candidate_tokens):
+            return 0.98
+        return _similarity_score(segment_tokens, candidate_text)
+
+    def next_cursor_for(idx: int, candidate_tokens: list[str]) -> int:
+        if prefix_repeat(candidate_tokens):
+            return max(cursor, idx)
+        return max(cursor, idx + 1)
+
     if 0 <= index < len(source_lines):
-        line_tokens = " ".join(_lyrics_tokens(str(source_lines[index].get("text") or "")))
-        if not segment_tokens or _similarity_score(segment_tokens, line_tokens) >= 0.45:
-            return source_lines[index], max(cursor, index + 1)
+        candidate_tokens = line_token_list(index)
+        if not segment_tokens or match_score(candidate_tokens) >= 0.45:
+            return source_lines[index], next_cursor_for(index, candidate_tokens)
 
     if not segment_tokens:
         if cursor < len(source_lines):
@@ -961,16 +1007,21 @@ def _line_entry_for_srt_segment(
 
     best_idx: int | None = None
     best_score = 0.0
+    best_tokens: list[str] = []
+    search_start = max(0, cursor - 2)
     search_end = min(len(source_lines), cursor + 10)
-    for idx in range(cursor, search_end):
-        line_tokens = " ".join(_lyrics_tokens(str(source_lines[idx].get("text") or "")))
-        score = _similarity_score(segment_tokens, line_tokens)
+    for idx in range(search_start, search_end):
+        candidate_tokens = line_token_list(idx)
+        score = match_score(candidate_tokens)
+        if idx < cursor and score < 0.82:
+            score *= 0.92
         if score > best_score:
             best_score = score
             best_idx = idx
+            best_tokens = candidate_tokens
 
     if best_idx is not None and best_score >= 0.55:
-        return source_lines[best_idx], best_idx + 1
+        return source_lines[best_idx], next_cursor_for(best_idx, best_tokens)
     if cursor < len(source_lines):
         return source_lines[cursor], cursor + 1
     return None, cursor

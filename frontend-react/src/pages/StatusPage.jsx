@@ -392,7 +392,7 @@ export function StatusPage({ notifications = [], tasks = [], onReload, onCheckSt
   }
 
   return (
-    <section className="page stack">
+    <section className="page stack status-page">
       <header className="page-header">
         <div><p className="eyebrow">Status</p><h1>{t('status.title', 'Benachrichtigungen & Tasks')}</h1><p className="muted">{t('status.intro', 'Fertige Tasks erneut öffnen, erledigen oder endgültig ausblenden.')}</p></div>
         <div className="header-inline-actions">

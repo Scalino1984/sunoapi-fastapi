@@ -35,7 +35,10 @@ function parseSrtText(text) {
   }).filter(Boolean).sort((a, b) => a.start - b.start);
 }
 
-function srtSegmentsFromState(state) {
+function srtSegmentsFromState(state, { preferHalf = false } = {}) {
+  if (preferHalf) {
+    return parseSrtText(state?.half_srt_text || '');
+  }
   if (Array.isArray(state?.segments) && state.segments.length) {
     return state.segments
       .map((segment) => ({ start: Number(segment.start || 0), end: Number(segment.end || 0), text: String(segment.text || '').trim() }))
@@ -47,7 +50,14 @@ function srtSegmentsFromState(state) {
 
 function findActiveSrtSegment(segments, currentTime) {
   const t = Number(currentTime || 0);
-  return (segments || []).find((segment) => t >= Number(segment.start || 0) && t < Number(segment.end || 0)) || null;
+  let active = null;
+  for (const segment of segments || []) {
+    const start = Number(segment.start || 0);
+    const end = Number(segment.end || 0);
+    if (t < start || t >= end) continue;
+    if (!active || start > Number(active.start || 0)) active = segment;
+  }
+  return active;
 }
 
 function findRecentlyEndedSrtSegment(segments, currentTime, holdSeconds = 0.45, bridgeGapSeconds = 1.8) {
@@ -136,6 +146,30 @@ function resolvePlaybackDuration(nativeDuration, asset) {
   return nativeValue > 0 ? nativeValue : 0;
 }
 
+const MOBILE_SRT_MEDIA_QUERY = '(max-width: 760px)';
+
+function useMediaQuery(query) {
+  const [matches, setMatches] = useState(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return false;
+    return window.matchMedia(query).matches;
+  });
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return undefined;
+    const mediaQuery = window.matchMedia(query);
+    const handleChange = () => setMatches(mediaQuery.matches);
+    handleChange();
+    if (typeof mediaQuery.addEventListener === 'function') {
+      mediaQuery.addEventListener('change', handleChange);
+      return () => mediaQuery.removeEventListener('change', handleChange);
+    }
+    mediaQuery.addListener(handleChange);
+    return () => mediaQuery.removeListener(handleChange);
+  }, [query]);
+
+  return matches;
+}
+
 export function MiniPlayer({ queue, currentIndex, loop, sidebarMode = 'open', mobileNavOpen = false, playerCommand = 0, onPlaybackStateChange, onLoopChange, onIndexChange, onOpenDetails, onPrepareMusic, onFavoriteChange, onClose }) {
   const { t } = useI18n();
   const audioRef = useRef(null);
@@ -160,6 +194,7 @@ export function MiniPlayer({ queue, currentIndex, loop, sidebarMode = 'open', mo
   const [favoriteOverride, setFavoriteOverride] = useState(null);
   const current = queue?.[currentIndex] || null;
   const currentAssetId = current?.id ? String(current.id) : '';
+  const preferHalfSrtDisplay = useMediaQuery(MOBILE_SRT_MEDIA_QUERY);
 
   const src = useMemo(() => stableStreamUrl(currentAssetId), [currentAssetId]);
 
@@ -510,7 +545,7 @@ export function MiniPlayer({ queue, currentIndex, loop, sidebarMode = 'open', mo
     if (action === 'stop') { closePlayer(); }
   }, [playerCommand]);
 
-  const srtSegments = useMemo(() => srtSegmentsFromState(srtState), [srtState]);
+  const srtSegments = useMemo(() => srtSegmentsFromState(srtState, { preferHalf: preferHalfSrtDisplay }), [srtState, preferHalfSrtDisplay]);
   const activeSrtSegment = findActiveSrtSegment(srtSegments, currentTime);
   const hasSrt = srtSegments.length > 0;
   const heldSrtSegment = activeSrtSegment ? null : findRecentlyEndedSrtSegment(srtSegments, currentTime);

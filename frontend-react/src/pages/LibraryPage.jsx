@@ -64,6 +64,15 @@ function translateFallback(translate, key, fallback, values) {
   return typeof translate === 'function' ? translate(key, fallback, values) : fallback;
 }
 
+function ResponsiveLabel({ full, short }) {
+  return (
+    <>
+      <span className="responsive-label-full">{full}</span>
+      <span className="responsive-label-short">{short || full}</span>
+    </>
+  );
+}
+
 
 function readStoredChoice(key, allowed, fallback) {
   try {
@@ -711,7 +720,14 @@ function srtSegmentsFromState(state) {
 
 function findActiveSrtSegment(segments, currentTime) {
   const t = Number(currentTime || 0);
-  return (segments || []).find((segment) => t >= Number(segment.start || 0) && t < Number(segment.end || 0)) || null;
+  let active = null;
+  for (const segment of segments || []) {
+    const start = Number(segment.start || 0);
+    const end = Number(segment.end || 0);
+    if (t < start || t >= end) continue;
+    if (!active || start > Number(active.start || 0)) active = segment;
+  }
+  return active;
 }
 
 function findRecentlyEndedSrtSegment(segments, currentTime, holdSeconds = 0.45, bridgeGapSeconds = 1.8) {
@@ -814,7 +830,7 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
   const [srtRawOpenIds, setSrtRawOpenIds] = useState(() => new Set());
   const [srtDraftByAsset, setSrtDraftByAsset] = useState({});
   const [variantAccordionState, setVariantAccordionState] = useState({});
-  const [playerSrtLine, setPlayerSrtLine] = useState(null);
+  const playerSrtLineRef = useRef(null);
   const [srtLiveColor, setSrtLiveColor] = useState(() => {
     try {
       return localStorage.getItem('react-srt-live-color') || 'cyan';
@@ -945,6 +961,7 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
   const pagedGalleryAssets = libraryPageSize === 'all' ? filteredGalleryAssets : filteredGalleryAssets.slice((safeLibraryPage - 1) * libraryPageSizeNumber, safeLibraryPage * libraryPageSizeNumber);
   const galleryGridStyle = { '--gallery-columns': String(libraryGalleryColumns || '5') };
   const flatListScaleLabel = ['Kompakt', 'Normal', 'Breit'][libraryFlatListScale] || 'Normal';
+  const flatListScaleShortLabel = ['Komp.', 'Normal', 'Breit'][libraryFlatListScale] || 'Normal';
 
   useEffect(() => { setLibraryPage(1); }, [query, type, sort, localFilter, libraryPageSize, libraryViewMode, libraryGalleryMode, libraryFlatListMode, libraryGalleryColumns]);
   useEffect(() => {
@@ -1115,7 +1132,7 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
     function handlePlayerSrtLine(event) {
       const detail = event?.detail || {};
       if (Date.now() < Number(detailScrollInteractionUntilRef.current || 0)) return;
-      const next = {
+      playerSrtLineRef.current = {
         assetId: detail.assetId || null,
         text: String(detail.text || '').trim(),
         start: Number(detail.start || 0),
@@ -1123,17 +1140,6 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
         hasSrt: detail.hasSrt !== false,
         isPlaying: Boolean(detail.isPlaying),
       };
-      setPlayerSrtLine((current) => {
-        if (String(current?.assetId || '') === String(next.assetId || '')
-          && current?.text === next.text
-          && Number(current?.start || 0) === next.start
-          && Number(current?.end || 0) === next.end
-          && Boolean(current?.isPlaying) === next.isPlaying
-          && Boolean(current?.hasSrt) === next.hasSrt) {
-          return current;
-        }
-        return next;
-      });
     }
     window.addEventListener('player:srt-line', handlePlayerSrtLine);
     return () => window.removeEventListener('player:srt-line', handlePlayerSrtLine);
@@ -1162,6 +1168,7 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
     const currentAssetId = String(playbackState?.currentAssetId || '');
     if (!currentAssetId || currentAssetId !== assetId) return null;
 
+    const playerSrtLine = playerSrtLineRef.current;
     const eventLine = String(playerSrtLine?.assetId || '') === assetId ? playerSrtLine : null;
     if (eventLine?.text) {
       return {
@@ -4188,9 +4195,9 @@ ${generationOptionsText(asset)}`,
       <div className={`library-pagination-bar ${embedded ? 'embedded-pagination' : 'panel slim-panel'}`}>
         <div className="library-pagination-left">
           <div className="button-row wrap view-mode-switcher">
-            <button type="button" className={libraryViewMode === 'list' ? 'active' : ''} onClick={() => setLibraryViewMode('list')}>{t('library.views.list', 'Listenansicht')}</button>
-            <button type="button" className={libraryViewMode === 'flat-list' ? 'active' : ''} onClick={() => setLibraryViewMode('flat-list')}>{t('library.views.flatList', 'Titelliste')}</button>
-            <button type="button" className={libraryViewMode === 'gallery' ? 'active' : ''} onClick={() => setLibraryViewMode('gallery')}>{t('library.views.gallery', 'Cover-Ansicht')}</button>
+            <button type="button" className={libraryViewMode === 'list' ? 'active' : ''} onClick={() => setLibraryViewMode('list')}><ResponsiveLabel full={t('library.views.list', 'Listenansicht')} short={t('library.views.listShort', 'Liste')} /></button>
+            <button type="button" className={libraryViewMode === 'flat-list' ? 'active' : ''} onClick={() => setLibraryViewMode('flat-list')}><ResponsiveLabel full={t('library.views.flatList', 'Titelliste')} short={t('library.views.flatListShort', 'Titel')} /></button>
+            <button type="button" className={libraryViewMode === 'gallery' ? 'active' : ''} onClick={() => setLibraryViewMode('gallery')}><ResponsiveLabel full={t('library.views.gallery', 'Cover-Ansicht')} short={t('library.views.galleryShort', 'Cover')} /></button>
           </div>
           <div className="library-count-pill library-count-summary" title={t('library.statsTitle', '{{groups}} Songgruppen · {{variants}} Varianten · {{playable}} abspielbar', { groups: libraryStats.groups, variants: libraryStats.variants, playable: libraryStats.playable })}>
             <span><strong>{libraryStats.groups}</strong><small>{t('library.stats.groups', 'Songgruppen')}</small></span>
@@ -4202,20 +4209,20 @@ ${generationOptionsText(asset)}`,
         <div className="pagination-controls elegant-controls">
           {libraryViewMode === 'gallery' && (
             <div className="button-row compact gallery-view-toggles" aria-label={t('library.galleryModeAria', 'Coveransicht Modus')}>
-              <button type="button" className={libraryGalleryMode === 'simple' ? 'active' : ''} onClick={() => setLibraryGalleryMode('simple')}>{t('library.modes.simple', 'Einfach')}</button>
-              <button type="button" className={libraryGalleryMode === 'advanced' ? 'active' : ''} onClick={() => setLibraryGalleryMode('advanced')}>{t('library.modes.advanced', 'Erweitert')}</button>
+              <button type="button" className={libraryGalleryMode === 'simple' ? 'active' : ''} onClick={() => setLibraryGalleryMode('simple')}><ResponsiveLabel full={t('library.modes.simple', 'Einfach')} short={t('library.modes.simpleShort', 'Einfach')} /></button>
+              <button type="button" className={libraryGalleryMode === 'advanced' ? 'active' : ''} onClick={() => setLibraryGalleryMode('advanced')}><ResponsiveLabel full={t('library.modes.advanced', 'Erweitert')} short={t('library.modes.advancedShort', 'Erw.')} /></button>
             </div>
           )}
           {libraryViewMode === 'flat-list' && (
             <div className="button-row compact gallery-view-toggles" aria-label={t('library.flatListModeAria', 'Titelliste Modus')}>
-              <button type="button" className={libraryFlatListMode === 'simple' ? 'active' : ''} onClick={() => setLibraryFlatListMode('simple')}>{t('library.modes.simple', 'Einfach')}</button>
-              <button type="button" className={libraryFlatListMode === 'advanced' ? 'active' : ''} onClick={() => setLibraryFlatListMode('advanced')}>{t('library.modes.advanced', 'Erweitert')}</button>
+              <button type="button" className={libraryFlatListMode === 'simple' ? 'active' : ''} onClick={() => setLibraryFlatListMode('simple')}><ResponsiveLabel full={t('library.modes.simple', 'Einfach')} short={t('library.modes.simpleShort', 'Einfach')} /></button>
+              <button type="button" className={libraryFlatListMode === 'advanced' ? 'active' : ''} onClick={() => setLibraryFlatListMode('advanced')}><ResponsiveLabel full={t('library.modes.advanced', 'Erweitert')} short={t('library.modes.advancedShort', 'Erw.')} /></button>
             </div>
           )}
           {libraryViewMode === 'flat-list' && (
             <div className="asset-flat-size-controls" aria-label={t('library.flatListSizeAria', 'Titelliste Spaltengröße')}>
               <button type="button" onClick={() => setLibraryFlatListScale((value) => Math.max(0, value - 1))} disabled={libraryFlatListScale <= 0} title={t('library.flatListCompact', 'Titelliste kompakter anzeigen')}>−</button>
-              <span>{flatListScaleLabel}</span>
+              <span><ResponsiveLabel full={flatListScaleLabel} short={flatListScaleShortLabel} /></span>
               <button type="button" onClick={() => setLibraryFlatListScale((value) => Math.min(2, value + 1))} disabled={libraryFlatListScale >= 2} title={t('library.flatListWide', 'Titelliste breiter anzeigen')}>+</button>
             </div>
           )}
@@ -4231,7 +4238,7 @@ ${generationOptionsText(asset)}`,
             </label>
           )}
           <label className="page-size-select elegant-select" title={t('library.pageSize', 'Anzahl anzeigen')}>
-            <span>{t('library.count', 'Anzahl')}</span>
+            <span><ResponsiveLabel full={t('library.count', 'Anzahl')} short={t('library.countShort', 'Anz.')} /></span>
             <select value={libraryPageSize} onChange={(event) => setLibraryPageSize(event.target.value)} aria-label={t('library.pageSize', 'Anzahl anzeigen')}>
               <option value="25">25</option>
               <option value="50">50</option>
@@ -4242,7 +4249,7 @@ ${generationOptionsText(asset)}`,
           {libraryPageSize !== 'all' && (
             <div className="library-page-nav">
               <button type="button" disabled={safeLibraryPage <= 1} onClick={() => setLibraryPage((value) => Math.max(1, value - 1))} aria-label={t('library.previousPage', 'Vorherige Seite')}>←</button>
-              <span>{t('library.pageStatus', 'Seite {{page}} / {{total}}', { page: safeLibraryPage, total: libraryTotalPages })}</span>
+              <span><ResponsiveLabel full={t('library.pageStatus', 'Seite {{page}} / {{total}}', { page: safeLibraryPage, total: libraryTotalPages })} short={t('library.pageStatusShort', '{{page}}/{{total}}', { page: safeLibraryPage, total: libraryTotalPages })} /></span>
               <button type="button" disabled={safeLibraryPage >= libraryTotalPages} onClick={() => setLibraryPage((value) => Math.min(libraryTotalPages, value + 1))} aria-label={t('library.nextPage', 'Nächste Seite')}>→</button>
             </div>
           )}
@@ -4797,10 +4804,10 @@ ${generationOptionsText(asset)}`,
           </select>
           <div className="filter-chips library-command-chips">
             {localizedPrimaryTypeFilters.map(([key, label]) => (
-              <button key={key} type="button" className={type === key ? 'active' : ''} onClick={() => setType(key)}><Filter size={14} /> {label}</button>
+              <button key={key} type="button" className={type === key ? 'active' : ''} onClick={() => setType(key)}><Filter size={14} /> <ResponsiveLabel full={label} short={t(`library.typeFiltersShort.${key}`, label)} /></button>
             ))}
             <details className={`library-more-filter chip-select ${localizedSecondaryTypeFilters.some(([key]) => key === type) ? 'active' : ''}`}>
-              <summary><Filter size={14} /> {t('library.moreFilters', 'Weitere')} <ChevronDown size={14} /></summary>
+              <summary><Filter size={14} /> <ResponsiveLabel full={t('library.moreFilters', 'Weitere')} short={t('library.moreFiltersShort', 'Mehr')} /> <ChevronDown size={14} /></summary>
               <div className="library-more-filter-menu">
                 {localizedSecondaryTypeFilters.map(([key, label]) => (
                   <button key={key} type="button" className={type === key ? 'active' : ''} onClick={(event) => { setType(key); event.currentTarget.closest('details')?.removeAttribute('open'); }}>{label}</button>
@@ -4809,9 +4816,9 @@ ${generationOptionsText(asset)}`,
             </details>
             <button type="button" className={localFilter === 'favorites' ? 'active' : ''} onClick={() => preserveWindowScroll(() => setLocalFilter(localFilter === 'favorites' ? 'all' : 'favorites'))}><ThumbsUp size={14} /> {t('library.favorites', 'Favoriten')}</button>
             <span className="library-chip-spacer" aria-hidden="true" />
-            <button type="button" onClick={() => setManualImportOpen(true)}><Plus size={15} /> {t('library.actions.importAudio', 'Audio importieren')}</button>
-            <button type="button" onClick={cacheMissingLibraryContent} disabled={contentCacheBusy}>{contentCacheBusy ? t('library.actions.checking', 'Prüfe…') : t('library.actions.checkContent', 'Inhalte prüfen')}</button>
-            <button type="button" onClick={onReload}>{t('common.refresh', 'Aktualisieren')}</button>
+            <button type="button" onClick={() => setManualImportOpen(true)}><Plus size={15} /> <ResponsiveLabel full={t('library.actions.importAudio', 'Audio importieren')} short={t('library.actions.importAudioShort', 'Import')} /></button>
+            <button type="button" onClick={cacheMissingLibraryContent} disabled={contentCacheBusy}>{contentCacheBusy ? t('library.actions.checking', 'Prüfe…') : <ResponsiveLabel full={t('library.actions.checkContent', 'Inhalte prüfen')} short={t('library.actions.checkContentShort', 'Prüfen')} />}</button>
+            <button type="button" className="library-refresh-chip" onClick={onReload}><ResponsiveLabel full={t('common.refresh', 'Aktualisieren')} short={t('common.refreshShort', 'Aktual.')} /></button>
           </div>
         </div>
         {SelectedBulkActions()}
@@ -4866,14 +4873,18 @@ ${generationOptionsText(asset)}`,
                 </div>
               </div>
               <div className="project-actions">
-                <span className="status cached"><ListMusic size={14} /> {formatDuration(project.duration)}</span>
-                {project.assets.some((asset) => isAssetFavorite(asset)) && <span className="status favorite"><ThumbsUp size={14} fill="currentColor" /> {project.assets.filter((asset) => isAssetFavorite(asset)).length === project.assets.length ? t('library.favoriteOne', 'Favorit') : t('library.favoriteCount', '{{count}}/{{total}} Favoriten', { count: project.assets.filter((asset) => isAssetFavorite(asset)).length, total: project.assets.length })}</span>}
-                {isProjectFullyLocal(project) && <span className="status cached">{fullLocalLabel(t)}</span>}
-                {projectContentBadgeLabel(project, (asset) => hasAssetSrt(asset, srtByAsset), 'SRT') && <span className="status cached">{projectContentBadgeLabel(project, (asset) => hasAssetSrt(asset, srtByAsset), 'SRT')}</span>}
-                {projectContentBadgeLabel(project, (asset) => assetContentBadges(asset, srtByAsset).some((badge) => badge.key === 'stems'), 'STEMS') && <span className="status cached">{projectContentBadgeLabel(project, (asset) => assetContentBadges(asset, srtByAsset).some((badge) => badge.key === 'stems'), 'STEMS')}</span>}
-                {projectContentBadgeLabel(project, (asset) => assetContentBadges(asset, srtByAsset).some((badge) => badge.key === 'wav'), 'WAV') && <span className="status cached">{projectContentBadgeLabel(project, (asset) => assetContentBadges(asset, srtByAsset).some((badge) => badge.key === 'wav'), 'WAV')}</span>}
-                <button type="button" onClick={() => playProject(project)}><Headphones size={16} /> {projectPlaying ? t('player.pause', 'Pause') : t('player.play', 'Abspielen')}</button>
-                <button type="button" onClick={() => onOpenDaw?.(project.playable[0] || project.assets[0])}>Mini-DAW</button>
+                <div className="project-badges">
+                  <span className="status cached"><ListMusic size={14} /> {formatDuration(project.duration)}</span>
+                  {project.assets.some((asset) => isAssetFavorite(asset)) && <span className="status favorite"><ThumbsUp size={14} fill="currentColor" /> {project.assets.filter((asset) => isAssetFavorite(asset)).length === project.assets.length ? t('library.favoriteOne', 'Favorit') : t('library.favoriteCount', '{{count}}/{{total}} Favoriten', { count: project.assets.filter((asset) => isAssetFavorite(asset)).length, total: project.assets.length })}</span>}
+                  {isProjectFullyLocal(project) && <span className="status cached">{fullLocalLabel(t)}</span>}
+                  {projectContentBadgeLabel(project, (asset) => hasAssetSrt(asset, srtByAsset), 'SRT') && <span className="status cached">{projectContentBadgeLabel(project, (asset) => hasAssetSrt(asset, srtByAsset), 'SRT')}</span>}
+                  {projectContentBadgeLabel(project, (asset) => assetContentBadges(asset, srtByAsset).some((badge) => badge.key === 'stems'), 'STEMS') && <span className="status cached">{projectContentBadgeLabel(project, (asset) => assetContentBadges(asset, srtByAsset).some((badge) => badge.key === 'stems'), 'STEMS')}</span>}
+                  {projectContentBadgeLabel(project, (asset) => assetContentBadges(asset, srtByAsset).some((badge) => badge.key === 'wav'), 'WAV') && <span className="status cached">{projectContentBadgeLabel(project, (asset) => assetContentBadges(asset, srtByAsset).some((badge) => badge.key === 'wav'), 'WAV')}</span>}
+                </div>
+                <div className="project-action-buttons">
+                  <button type="button" onClick={() => playProject(project)}><Headphones size={16} /> {projectPlaying ? t('player.pause', 'Pause') : t('player.play', 'Abspielen')}</button>
+                  <button type="button" onClick={() => onOpenDaw?.(project.playable[0] || project.assets[0])}>Mini-DAW</button>
+                </div>
               </div>
             </article>
           );
@@ -4958,7 +4969,7 @@ function ActionModal({ asset, onClose, onAction, onDelete, onOpenDaw, onReuse, o
   const audioAnalysis = readAudioAiAnalysis(asset);
   const aiTags = readLibraryAiTags(asset);
   return (
-    <Modal open={Boolean(asset)} title={asset ? t('library.actionModal.titleWithAsset', 'Aktionen: {{title}}', { title: pickTitle(asset) }) : t('library.actionModal.title', 'Aktionen')} onClose={onClose}>
+    <Modal open={Boolean(asset)} title={asset ? t('library.actionModal.titleWithAsset', 'Aktionen: {{title}}', { title: pickTitle(asset) }) : t('library.actionModal.title', 'Aktionen')} onClose={onClose} cardClassName="library-action-modal" contentClassName="library-action-modal-content">
       {asset && <div className="stack">
         <p className="muted">songs.id: {songDatabaseId(asset) ?? '—'} · audio_assets.id: {asset.id || '—'} · Audio-ID: {asset.audio_id || '—'} · Task-ID: {asset.suno_task_id || asset.task_id || '—'}</p>
         {localOnlyHint(asset, t) && <p className="warning-text">{localOnlyHint(asset, t)}</p>}

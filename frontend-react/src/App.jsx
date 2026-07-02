@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { BookOpenText, Brush, ChevronDown, Command, FileText, Home, ListMusic, Menu, Mic2, Moon, MoreHorizontal, Music, RefreshCw, Rocket, Scissors, Search, Settings, Shield, Sun, X } from 'lucide-react';
+import { ArrowUp, BookOpenText, Brush, ChevronDown, Command, FileText, Home, ListMusic, Menu, Mic2, Moon, MoreHorizontal, Music, RefreshCw, Rocket, Scissors, Search, Settings, Shield, Sun, X } from 'lucide-react';
 import { api } from './api/client.js';
 import { assetSearchText, friendlyNotification } from './utils.js';
 import { Login } from './components/Login.jsx';
@@ -285,6 +285,8 @@ export default function App() {
   const [commandQuery, setCommandQuery] = useState('');
   const [mobileSearchOpen, setMobileSearchOpen] = useState(false);
   const [topbarMenuOpen, setTopbarMenuOpen] = useState(false);
+  const [showMobileScrollTop, setShowMobileScrollTop] = useState(false);
+  const showMobileScrollTopRef = useRef(false);
   const playbackRefreshLockRef = useRef(false);
   const cachedRefreshStateRef = useRef({ assets: [], tasks: [], notifications: [] });
   const lastPlaybackCommitRef = useRef({ currentAssetId: null, isPlaying: false, currentTime: 0, duration: 0, committedAt: 0 });
@@ -344,8 +346,43 @@ export default function App() {
     setMobileSearchOpen(false);
   }, [activeTab]);
 
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined;
+    let ticking = false;
+    const updateScrollTopButton = () => {
+      ticking = false;
+      const isMobile = typeof window.matchMedia === 'function'
+        ? window.matchMedia('(max-width: 760px)').matches
+        : window.innerWidth <= 760;
+      const nextVisible = isMobile && window.scrollY > 240;
+      if (showMobileScrollTopRef.current === nextVisible) return;
+      showMobileScrollTopRef.current = nextVisible;
+      setShowMobileScrollTop(nextVisible);
+    };
+    const requestUpdate = () => {
+      if (ticking) return;
+      ticking = true;
+      window.requestAnimationFrame(updateScrollTopButton);
+    };
+    updateScrollTopButton();
+    window.addEventListener('scroll', requestUpdate, { passive: true });
+    window.addEventListener('resize', requestUpdate);
+    return () => {
+      window.removeEventListener('scroll', requestUpdate);
+      window.removeEventListener('resize', requestUpdate);
+    };
+  }, []);
+
   const toggleTheme = useCallback(() => {
     setTheme((current) => current === 'light' ? 'dark' : 'light');
+  }, []);
+
+  const scrollToPageTop = useCallback(() => {
+    setTopbarMenuOpen(false);
+    setMobileSearchOpen(false);
+    if (typeof window === 'undefined') return;
+    document.querySelector('.studio-main-content')?.scrollTo?.({ top: 0, behavior: 'smooth' });
+    window.scrollTo({ top: 0, behavior: 'smooth' });
   }, []);
 
   const notify = useCallback((message, type = 'info') => setToast({ message, type }), []);
@@ -1561,12 +1598,18 @@ export default function App() {
 
   const libraryRouteDetailSlug = useMemo(() => (activeTab === 'library' ? routeDetailSegment(routePathname, 'library') : ''), [activeTab, routePathname]);
 
+  const stablePlaybackTime = playerState.isPlaying ? 0 : Number(playerState.currentTime || 0);
   const stablePlaybackState = useMemo(() => ({
     currentAssetId: playerState.currentAssetId || null,
     isPlaying: Boolean(playerState.isPlaying),
-    currentTime: playerState.isPlaying ? 0 : Number(playerState.currentTime || 0),
+    currentTime: stablePlaybackTime,
     duration: Number(playerState.duration || 0),
-  }), [playerState.currentAssetId, playerState.isPlaying, playerState.currentTime, playerState.duration]);
+  }), [
+    playerState.currentAssetId,
+    playerState.isPlaying,
+    stablePlaybackTime,
+    playerState.duration
+  ]);
 
   // Aktive Task-/Notification-Livewerte duerfen nicht jede Arbeitsseite neu
   // rendern. Library, Editor und andere Inhaltsseiten brauchen diese Werte nicht
@@ -1627,6 +1670,7 @@ export default function App() {
           </form>
 
           <div className="studio-mobile-actions">
+            <button type="button" className={`mobile-scroll-top-button ${showMobileScrollTop ? 'is-visible' : ''}`} onClick={scrollToPageTop} title={t('topbar.scrollTop', 'Nach oben')} aria-label={t('topbar.scrollTop', 'Nach oben')} aria-hidden={!showMobileScrollTop} tabIndex={showMobileScrollTop ? 0 : -1}><ArrowUp size={17} /></button>
             <button type="button" onClick={() => setMobileSearchOpen((value) => { const next = !value; if (next) setTopbarMenuOpen(false); return next; })} className={mobileSearchOpen ? 'active' : ''} title={t('topbar.openSearch', 'Suche öffnen')} aria-expanded={mobileSearchOpen}><Search size={17} /></button>
             <button type="button" onClick={() => setTopbarMenuOpen((value) => { const next = !value; if (next) setMobileSearchOpen(false); return next; })} className={topbarMenuOpen ? 'active' : ''} title={t('topbar.quickMenu', 'Schnellmenü')} aria-expanded={topbarMenuOpen}><MoreHorizontal size={18} /></button>
           </div>

@@ -72,3 +72,24 @@ Donnerbalken NYC
         {"label": "Verse", "type": "verse", "start": 6.0, "end": 18.0, "source": "srt_alignment"},
         {"label": "Chorus", "type": "chorus", "start": 18.0, "end": 120.0, "source": "srt_alignment"},
     ]
+
+
+def test_srt_structure_segments_keep_first_hook_when_suno_repeats_prefix_words() -> None:
+    source_lyrics = """
+[Chorus]
+Do you remember standing on a broken field
+[Verse]
+I walked the road with dust on my hands
+""".strip()
+    srt_segments = [
+        {"index": 1, "start": 4.0, "end": 4.8, "text": "Do you remember"},
+        {"index": 2, "start": 5.0, "end": 8.0, "text": "Do you remember standing on a broken field"},
+        {"index": 3, "start": 30.0, "end": 33.0, "text": "I walked the road with dust on my hands"},
+    ]
+
+    result = build_structure_segments_from_srt_alignment(source_lyrics, srt_segments, 90)
+
+    assert result == [
+        {"label": "Chorus", "type": "chorus", "start": 2.0, "end": 28.0, "source": "srt_alignment"},
+        {"label": "Verse", "type": "verse", "start": 28.0, "end": 90.0, "source": "srt_alignment"},
+    ]

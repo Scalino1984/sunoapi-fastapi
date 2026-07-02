@@ -23,6 +23,7 @@ export const de = {
     untitled: 'Unbenannt',
     unknown: 'unbekannt',
     refresh: 'Aktualisieren',
+    refreshShort: 'Aktual.',
     retry: 'Erneut laden',
     reset: 'Zurücksetzen',
     save: 'Speichern',
@@ -86,6 +87,7 @@ export const de = {
     dark: 'Dark',
     light: 'Light',
     refresh: 'Aktualisieren',
+    scrollTop: 'Nach oben',
     statusPageOpen: 'Statusseite öffnen',
     activeTasksLong: '{{count}} aktive Tasks',
     productionMonitorReady: 'Produktionsmonitor bereit',
@@ -579,6 +581,7 @@ export const de = {
     sortAria: 'Library sortieren',
     localFilterAria: 'Sicherung und Local-Status filtern',
     moreFilters: 'Weitere',
+    moreFiltersShort: 'Mehr',
     details: 'Details',
     openDetails: 'Details öffnen',
     openSongDetails: 'Songdetails öffnen',
@@ -613,18 +616,25 @@ export const de = {
     tilesPerRow: 'Kacheln pro Reihe',
     pageSize: 'Anzahl anzeigen',
     count: 'Anzahl',
+    countShort: 'Anz.',
     allLower: 'alle',
     previousPage: 'Vorherige Seite',
     nextPage: 'Nächste Seite',
     pageStatus: 'Seite {{page}} / {{total}}',
+    pageStatusShort: '{{page}}/{{total}}',
     views: {
       list: 'Listenansicht',
       flatList: 'Titelliste',
-      gallery: 'Cover-Ansicht'
+      gallery: 'Cover-Ansicht',
+      listShort: 'Liste',
+      flatListShort: 'Titel',
+      galleryShort: 'Cover'
     },
     modes: {
       simple: 'Einfach',
-      advanced: 'Erweitert'
+      advanced: 'Erweitert',
+      simpleShort: 'Einfach',
+      advancedShort: 'Erw.'
     },
     stats: {
       groups: 'Songgruppen',
@@ -889,13 +899,26 @@ export const de = {
       mashup: 'Mashup',
       sounds: 'Sounds'
     },
+    typeFiltersShort: {
+      all: 'Alle',
+      generate: 'Gen.',
+      manual: 'Import',
+      extend: 'Ext.',
+      cover: 'Cover',
+      vocals: 'Vocals',
+      instrumental: 'Instr.',
+      mashup: 'Mashup',
+      sounds: 'Sounds'
+    },
     operation: {
       manualImport: 'Manuell importiert'
     },
     actions: {
       importAudio: 'Audio importieren',
+      importAudioShort: 'Import',
       checking: 'Prüfe…',
       checkContent: 'Inhalte prüfen',
+      checkContentShort: 'Prüfen',
       removeFavorite: 'Favorit entfernen',
       saveFavorite: 'Als Favorit speichern',
       openOriginalTitle: 'Original öffnen: {{title}}',

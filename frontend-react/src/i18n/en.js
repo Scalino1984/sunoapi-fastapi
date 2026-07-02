@@ -23,6 +23,7 @@ export const en = {
     untitled: 'Untitled',
     unknown: 'unknown',
     refresh: 'Refresh',
+    refreshShort: 'Refresh',
     retry: 'Retry',
     reset: 'Reset',
     save: 'Save',
@@ -86,6 +87,7 @@ export const en = {
     dark: 'Dark',
     light: 'Light',
     refresh: 'Refresh',
+    scrollTop: 'Back to top',
     statusPageOpen: 'Open status page',
     activeTasksLong: '{{count}} active tasks',
     productionMonitorReady: 'Production monitor ready',
@@ -579,6 +581,7 @@ export const en = {
     sortAria: 'Sort library',
     localFilterAria: 'Filter backup and local status',
     moreFilters: 'More',
+    moreFiltersShort: 'More',
     details: 'Details',
     openDetails: 'Open details',
     openSongDetails: 'Open song details',
@@ -613,18 +616,25 @@ export const en = {
     tilesPerRow: 'Tiles per row',
     pageSize: 'Show count',
     count: 'Count',
+    countShort: 'Count',
     allLower: 'all',
     previousPage: 'Previous page',
     nextPage: 'Next page',
     pageStatus: 'Page {{page}} / {{total}}',
+    pageStatusShort: '{{page}}/{{total}}',
     views: {
       list: 'List view',
       flatList: 'Title list',
-      gallery: 'Cover view'
+      gallery: 'Cover view',
+      listShort: 'List',
+      flatListShort: 'Title',
+      galleryShort: 'Cover'
     },
     modes: {
       simple: 'Simple',
-      advanced: 'Advanced'
+      advanced: 'Advanced',
+      simpleShort: 'Simple',
+      advancedShort: 'Adv.'
     },
     stats: {
       groups: 'Song groups',
@@ -889,13 +899,26 @@ export const en = {
       mashup: 'Mashup',
       sounds: 'Sounds'
     },
+    typeFiltersShort: {
+      all: 'All',
+      generate: 'Gen.',
+      manual: 'Import',
+      extend: 'Ext.',
+      cover: 'Cover',
+      vocals: 'Vocals',
+      instrumental: 'Instr.',
+      mashup: 'Mashup',
+      sounds: 'Sounds'
+    },
     operation: {
       manualImport: 'Manually imported'
     },
     actions: {
       importAudio: 'Import audio',
+      importAudioShort: 'Import',
       checking: 'Checking…',
       checkContent: 'Check content',
+      checkContentShort: 'Check',
       removeFavorite: 'Remove favorite',
       saveFavorite: 'Save as favorite',
       openOriginalTitle: 'Open original: {{title}}',
