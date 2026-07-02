@@ -352,6 +352,18 @@ function audioStatusLabel(asset, translate = null) {
   return asset?.status || status || 'remote';
 }
 
+function isAssetFullyLocal(asset) {
+  return Boolean(isAudioLocal(asset) && isCoverCached(asset));
+}
+
+function fullLocalLabel(translate = null) {
+  return translateFallback(translate, 'library.localFilter.local', 'Lokal');
+}
+
+function storageStatusLabel(asset, translate = null) {
+  return isAssetFullyLocal(asset) ? fullLocalLabel(translate) : audioStatusLabel(asset, translate);
+}
+
 function assetMetadata(asset) {
   return asset?.metadata_json && typeof asset.metadata_json === 'object' ? asset.metadata_json : {};
 }
@@ -488,13 +500,9 @@ function localOnlyHint(asset, translate = null) {
   return tr('library.messages.localAssetSunoDisabled', 'Lokales Asset: SunoAPI.org-Folgeaktionen deaktiviert.');
 }
 
-function projectAudioLocalLabel(project, translate = null) {
-  const tr = (key, fallback, values) => translateFallback(translate, key, fallback, values);
-  const count = (project?.assets || []).filter(isAudioLocal).length;
-  const total = (project?.assets || []).length;
-  if (!count) return '';
-  const label = tr('library.localFilter.audioLocal', 'Audio lokal');
-  return count === total ? label : `${count}/${total} ${label}`;
+function isProjectFullyLocal(project) {
+  const rows = project?.assets || [];
+  return Boolean(rows.length && rows.every(isAssetFullyLocal));
 }
 
 function assetSrtState(asset, srtByAsset = {}) {
@@ -518,7 +526,6 @@ function assetContentBadges(asset, srtByAsset = {}) {
   const stemFiles = stems.files && typeof stems.files === 'object' ? stems.files : {};
   const wav = metadata.wav_conversion && typeof metadata.wav_conversion === 'object' ? metadata.wav_conversion : {};
   if (hasAssetSrt(asset, srtByAsset)) badges.push({ key: 'srt', label: 'SRT', className: 'cached' });
-  if (hasAssetHalfSrt(asset, srtByAsset)) badges.push({ key: 'half-srt', label: 'HALF-SRT', className: 'cached' });
   if (stemFiles.vocals || stemFiles.instrumental) badges.push({ key: 'stems', label: 'STEMS', className: 'cached' });
   if (wav.available || wav.public_url || wav.download_url || wav.path) badges.push({ key: 'wav', label: 'WAV', className: 'cached' });
   if (metadata.timestamped_lyrics || metadata.timestampedLyrics) badges.push({ key: 'timestamped', label: 'TIMESTAMPED', className: 'cached' });
@@ -705,6 +712,28 @@ function srtSegmentsFromState(state) {
 function findActiveSrtSegment(segments, currentTime) {
   const t = Number(currentTime || 0);
   return (segments || []).find((segment) => t >= Number(segment.start || 0) && t < Number(segment.end || 0)) || null;
+}
+
+function findRecentlyEndedSrtSegment(segments, currentTime, holdSeconds = 0.45, bridgeGapSeconds = 1.8) {
+  const t = Number(currentTime || 0);
+  let previous = null;
+  const rows = segments || [];
+  for (const segment of rows) {
+    const start = Number(segment.start || 0);
+    const end = Number(segment.end || 0);
+    if (start > t) break;
+    if (end <= t && t - end <= holdSeconds) previous = segment;
+  }
+  if (previous) return previous;
+
+  for (let index = 0; index < rows.length; index += 1) {
+    const segment = rows[index];
+    const end = Number(segment.end || 0);
+    const next = rows[index + 1] || null;
+    const nextStart = Number(next?.start || 0);
+    if (end <= t && next && t < nextStart && nextStart - end <= bridgeGapSeconds) return segment;
+  }
+  return previous;
 }
 
 export function LibraryPage({ assets, loadError = '', voices = [], playlists = [], onReload, onPlay, notify, onUseLyric, onReusePrompt, openAssetId, openAssetRequestKey = 0, onOpenAssetHandled, resetSignal = 0, onOpenDaw, playbackState = {}, onToggleCurrentPlayback, onDetailTitleChange, routeDetailSlug = '', searchQuery = '' }) {
@@ -1150,13 +1179,13 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
     if (!segments.length) return null;
     const time = Number(playbackState?.currentTime || 0);
     const active = findActiveSrtSegment(segments, time);
-    const upcoming = active || segments.find((segment) => Number(segment.start || 0) > time) || null;
-    if (!upcoming?.text) return null;
+    const visible = active || findRecentlyEndedSrtSegment(segments, time);
+    if (!visible?.text) return null;
     return {
       assetId: asset.id,
-      text: String(upcoming.text || '').trim(),
-      start: Number(upcoming.start || 0),
-      end: Number(upcoming.end || 0),
+      text: String(visible.text || '').trim(),
+      start: Number(visible.start || 0),
+      end: Number(visible.end || 0),
       isPlaying: Boolean(playbackState?.isPlaying),
       hasSrt: true,
     };
@@ -2791,7 +2820,8 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
     const segments = draftSegmentsForAsset(asset);
     const liveSegments = srtSegmentsFromState(state);
     const activeSegment = isCurrentAsset(asset) ? findActiveSrtSegment(liveSegments, playbackState?.currentTime || 0) : null;
-    const nextSegment = isCurrentAsset(asset) && !activeSegment ? liveSegments.find((segment) => Number(segment.start || 0) > Number(playbackState?.currentTime || 0)) : null;
+    const visibleSegment = activeSegment || (isCurrentAsset(asset) ? findRecentlyEndedSrtSegment(liveSegments, playbackState?.currentTime || 0) : null);
+    const visibleText = String(visibleSegment?.text || '').trim();
     return (
       <div className="meta-card wide srt-card">
         <div className="row between align-start">
@@ -2821,8 +2851,8 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
               <span>{isCurrentAsset(asset) ? playbackState?.isPlaying ? t('library.srt.liveRunning', 'Live-Untertitel läuft') : t('library.srt.liveReady', 'Live-Untertitel bereit') : t('library.srt.live', 'Live-Untertitel')}</span>
               <small>{isCurrentAsset(asset) ? `${formatDuration(playbackState?.currentTime || 0)} / ${formatDuration(playbackState?.duration || asset.duration_seconds)}` : t('library.srt.startVariantToRead', 'Starte diese Variante zum Mitlesen')}</small>
             </div>
-            <strong>{activeSegment?.text || nextSegment?.text || t('player.noActiveSubtitle', 'Noch keine aktive Untertitel-Zeile.')}</strong>
-            {(activeSegment || nextSegment) && <small>{formatDuration((activeSegment || nextSegment).start)} → {formatDuration((activeSegment || nextSegment).end)}</small>}
+            <strong>{visibleText || '\u00a0'}</strong>
+            {visibleSegment && <small>{formatDuration(visibleSegment.start)} → {formatDuration(visibleSegment.end)}</small>}
           </div>
         )}
         <div className="srt-editor-inline-note">
@@ -2860,7 +2890,8 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
     const segments = draftSegmentsForAsset(asset);
     const liveSegments = srtSegmentsFromState(state);
     const activeSegment = isCurrentAsset(asset) ? findActiveSrtSegment(liveSegments, playbackState?.currentTime || 0) : null;
-    const nextSegment = isCurrentAsset(asset) && !activeSegment ? liveSegments.find((segment) => Number(segment.start || 0) > Number(playbackState?.currentTime || 0)) : null;
+    const visibleSegment = activeSegment || (isCurrentAsset(asset) ? findRecentlyEndedSrtSegment(liveSegments, playbackState?.currentTime || 0) : null);
+    const visibleText = String(visibleSegment?.text || '').trim();
     const rawOpen = srtRawOpenIds.has(asset.id);
     return (
       <Modal
@@ -2893,8 +2924,8 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
                   <span>{isCurrentAsset(asset) ? playbackState?.isPlaying ? t('library.srt.liveRunning', 'Live-Untertitel läuft') : t('library.srt.liveReady', 'Live-Untertitel bereit') : t('library.srt.live', 'Live-Untertitel')}</span>
                   <small>{isCurrentAsset(asset) ? `${formatDuration(playbackState?.currentTime || 0)} / ${formatDuration(playbackState?.duration || asset.duration_seconds)}` : t('library.srt.startVariantToRead', 'Starte diese Variante zum Mitlesen')}</small>
                 </div>
-                <strong>{activeSegment?.text || nextSegment?.text || t('player.noActiveSubtitle', 'Noch keine aktive Untertitel-Zeile.')}</strong>
-                {(activeSegment || nextSegment) && <small>{formatDuration((activeSegment || nextSegment).start)} → {formatDuration((activeSegment || nextSegment).end)}</small>}
+                <strong>{visibleText || '\u00a0'}</strong>
+                {visibleSegment && <small>{formatDuration(visibleSegment.start)} → {formatDuration(visibleSegment.end)}</small>}
               </div>
               <div className="meta-card srt-modal-summary-card">
                 <h4>{t('library.srt.helpTitle', 'Bedienhilfe')}</h4>
@@ -4326,7 +4357,7 @@ ${generationOptionsText(asset)}`,
         <div className="asset-flat-main">
           <button className="asset-flat-title" type="button" onClick={(event) => openGalleryAssetDetails(project, asset, event)} title={t('library.openSongDetails', 'Songdetails öffnen')}>
             <strong>{pickTitle(asset)}</strong>
-            <span>{advanced ? `${project?.title || t('library.noSongGroup', 'Ohne Songgruppe')} · ${label} · ${operationLabel(asset.operation_type || asset.task_type || asset.operation_label, t)}` : `${label} · ${formatDuration(asset.duration_seconds)} · ${audioStatusLabel(asset, t)}`}</span>
+            <span>{advanced ? `${project?.title || t('library.noSongGroup', 'Ohne Songgruppe')} · ${label} · ${operationLabel(asset.operation_type || asset.task_type || asset.operation_label, t)}` : `${label} · ${formatDuration(asset.duration_seconds)} · ${storageStatusLabel(asset, t)}`}</span>
           </button>
           {advanced && active && (
             <div className="library-inline-waveform asset-flat-waveform">
@@ -4336,14 +4367,14 @@ ${generationOptionsText(asset)}`,
           )}
           {advanced && <div className="asset-flat-meta">
             <span>{formatDuration(asset.duration_seconds)}</span>
-            <span>{audioStatusLabel(asset, t)}</span>
+            <span>{storageStatusLabel(asset, t)}</span>
             <span>audio_assets.id {asset.id}</span>
             {asset.audio_id && <span>Audio-ID {shortId(asset.audio_id, 12)}</span>}
           </div>}
         </div>
         {advanced && <div className="asset-flat-badges">
           {isAssetFavorite(asset) && <span className="status favorite"><ThumbsUp size={14} fill="currentColor" /> {t('library.favorites', 'Favorit')}</span>}
-          {isCoverCached(asset) && <span className="status cached">{t('library.localFilter.coverLocal', 'Cover lokal')}</span>}
+          {isAssetFullyLocal(asset) && <span className="status cached">{fullLocalLabel(t)}</span>}
           {badges.map((badge) => <span key={badge.key} className={`status ${badge.className || 'cached'}`}>{badge.label}</span>)}
         </div>}
         <div className="asset-flat-actions">
@@ -4603,8 +4634,7 @@ ${generationOptionsText(asset)}`,
                             </span>
                           </span>
                           <span className="variant-accordion-badges">
-                            <span className={`status ${audioStatusClass(asset)}`}>{audioStatusLabel(asset, t)}</span>
-                            {isCoverCached(asset) && <span className="status cached">{t('library.localFilter.coverLocal', 'Cover lokal')}</span>}
+                            <span className={`status ${isAssetFullyLocal(asset) ? 'cached' : audioStatusClass(asset)}`}>{storageStatusLabel(asset, t)}</span>
                             {isAssetFavorite(asset) && <span className="status favorite"><ThumbsUp size={13} fill="currentColor" /> {t('library.favoriteOne', 'Favorit')}</span>}
                             {assetContentBadges(asset, srtByAsset).map((badge) => <span key={badge.key} className={`status ${badge.className || 'cached'}`}>{badge.label}</span>)}
                             <span className="muted compact-only">{formatDuration(asset.duration_seconds)}</span>
@@ -4838,10 +4868,8 @@ ${generationOptionsText(asset)}`,
               <div className="project-actions">
                 <span className="status cached"><ListMusic size={14} /> {formatDuration(project.duration)}</span>
                 {project.assets.some((asset) => isAssetFavorite(asset)) && <span className="status favorite"><ThumbsUp size={14} fill="currentColor" /> {project.assets.filter((asset) => isAssetFavorite(asset)).length === project.assets.length ? t('library.favoriteOne', 'Favorit') : t('library.favoriteCount', '{{count}}/{{total}} Favoriten', { count: project.assets.filter((asset) => isAssetFavorite(asset)).length, total: project.assets.length })}</span>}
-                {project.assets.some(isAudioLocal) && <span className="status cached">{projectAudioLocalLabel(project, t)}</span>}
-                {project.assets.some(isCoverCached) && <span className="status cached">{projectContentBadgeLabel(project, isCoverCached, 'Cover lokal')}</span>}
+                {isProjectFullyLocal(project) && <span className="status cached">{fullLocalLabel(t)}</span>}
                 {projectContentBadgeLabel(project, (asset) => hasAssetSrt(asset, srtByAsset), 'SRT') && <span className="status cached">{projectContentBadgeLabel(project, (asset) => hasAssetSrt(asset, srtByAsset), 'SRT')}</span>}
-                {projectContentBadgeLabel(project, (asset) => hasAssetHalfSrt(asset, srtByAsset), 'HALF-SRT') && <span className="status cached">{projectContentBadgeLabel(project, (asset) => hasAssetHalfSrt(asset, srtByAsset), 'HALF-SRT')}</span>}
                 {projectContentBadgeLabel(project, (asset) => assetContentBadges(asset, srtByAsset).some((badge) => badge.key === 'stems'), 'STEMS') && <span className="status cached">{projectContentBadgeLabel(project, (asset) => assetContentBadges(asset, srtByAsset).some((badge) => badge.key === 'stems'), 'STEMS')}</span>}
                 {projectContentBadgeLabel(project, (asset) => assetContentBadges(asset, srtByAsset).some((badge) => badge.key === 'wav'), 'WAV') && <span className="status cached">{projectContentBadgeLabel(project, (asset) => assetContentBadges(asset, srtByAsset).some((badge) => badge.key === 'wav'), 'WAV')}</span>}
                 <button type="button" onClick={() => playProject(project)}><Headphones size={16} /> {projectPlaying ? t('player.pause', 'Pause') : t('player.play', 'Abspielen')}</button>

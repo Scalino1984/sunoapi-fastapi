@@ -414,11 +414,13 @@ button.danger,
   box-shadow: 0 22px 80px rgba(0,0,0,.55), inset 0 1px 0 rgba(255,255,255,.05);
 }
 .mini-player-left {
+  align-self: start;
   min-width: 0;
   display: grid;
   grid-template-columns: 66px minmax(0, 1fr);
   gap: 13px;
   align-items: center;
+  padding-top: 5px;
 }
 .mini-player-left img {
   width: 66px;
@@ -453,25 +455,15 @@ button.danger,
   filter: saturate(.92) brightness(.95);
 }
 .mini-player-right {
-  display: flex;
+  align-self: start;
+  display: grid;
+  grid-template-columns: repeat(5, 40px);
   align-items: center;
-  justify-content: flex-end;
-  gap: 10px;
-}
-.player-state {
-  padding: 7px 10px;
-  border-radius: 999px;
-  border: 1px solid rgba(147,197,253,.18);
-  color: var(--muted);
-  font-size: .78rem;
-  font-weight: 800;
-  text-transform: uppercase;
-  letter-spacing: .06em;
-}
-.player-state.playing {
-  border-color: rgba(67,230,143,.32);
-  color: #86efac;
-  background: rgba(67,230,143,.08);
+  justify-content: start;
+  column-gap: 8px;
+  row-gap: 6px;
+  min-width: 0;
+  padding-top: 12px;
 }
 .enhanced-mini-player .react-waveform {
   min-height: 52px;
@@ -496,20 +488,23 @@ button.danger,
   display: none;
 }
 .custom-mini-player {
-  grid-template-columns: minmax(260px, 0.85fr) minmax(520px, 1.65fr) minmax(260px, auto);
+  grid-template-columns: minmax(270px, 0.72fr) minmax(540px, 1.72fr) minmax(238px, 292px);
+  align-items: start;
   background:
     radial-gradient(circle at 12% 10%, rgba(56, 189, 248, .18), transparent 30%),
     radial-gradient(circle at 84% 100%, rgba(168, 85, 247, .18), transparent 34%),
     linear-gradient(180deg, rgba(13, 19, 35, .98), rgba(6, 10, 20, .98));
 }
 .custom-player-shell {
+  align-self: start;
   min-width: 0;
   display: grid;
   gap: 6px;
+  transform: translateX(-20px);
 }
 .custom-player-controls {
   display: grid;
-  grid-template-columns: 38px 48px 38px auto auto minmax(180px, 1fr) auto;
+  grid-template-columns: 38px 38px 38px 48px 38px 38px auto auto minmax(180px, 1fr) auto;
   gap: 10px;
   align-items: center;
   padding: 8px 10px;
@@ -583,10 +578,40 @@ button.danger,
 }
 .custom-player-actions {
   position: relative;
+  column-gap: 8px;
+  row-gap: 6px;
+  align-content: center;
+}
+.custom-player-actions > button,
+.custom-player-actions > .icon-button,
+.custom-player-actions > .player-menu-wrap > button {
+  width: 40px;
+  height: 40px;
+  min-width: 40px;
+  padding: 0;
+}
+.player-volume-row {
+  grid-column: 1 / -1;
+  order: 20;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
   gap: 8px;
+  min-width: 0;
+  width: 100%;
+  padding: 3px 5px;
+  border: 1px solid rgba(147,197,253,.12);
+  border-radius: 999px;
+  background: rgba(5, 10, 24, .34);
+}
+.player-volume-row button {
+  width: 34px;
+  height: 30px;
+  min-width: 34px;
+  padding: 0;
 }
 .custom-volume {
-  width: 92px;
+  width: min(128px, 100%);
   height: 28px;
   appearance: none;
   -webkit-appearance: none;
@@ -690,18 +715,26 @@ button.danger,
     grid-template-columns: 1fr;
   }
   .custom-player-actions {
+    display: flex;
+    flex-wrap: wrap;
     justify-content: space-between;
+  }
+  .custom-player-shell {
+    transform: none;
+  }
+  .player-volume-row {
+    flex: 0 0 100%;
+    width: auto;
   }
 }
 @media (max-width: 720px) {
   .custom-player-controls {
-    grid-template-columns: 34px 44px 34px auto 1fr auto;
+    grid-template-columns: 34px 34px 34px 44px 34px 34px auto 1fr auto;
     gap: 6px;
     padding: 7px;
   }
   .custom-volume,
-  .player-download-primary,
-  .player-state {
+  .player-download-primary {
     display: none;
   }
 }
@@ -747,14 +780,21 @@ button.danger,
   z-index: 1200;
   display: inline-flex;
   align-items: center;
-  gap: 10px;
-  padding: 14px 18px;
+  gap: 8px;
+  padding: 10px 14px;
   border-radius: 999px;
   border: 1px solid rgba(255,255,255,.18);
   box-shadow: 0 18px 45px rgba(0,0,0,.35);
   background: linear-gradient(135deg, #7c3aed, #2563eb);
   color: #fff;
   font-weight: 800;
+  font-size: .92rem;
+  line-height: 1;
+}
+
+.global-ai-toggle svg {
+  width: 19px;
+  height: 19px;
 }
 
 .global-ai-panel {
@@ -1098,6 +1138,28 @@ button.danger,
   font-weight: 650;
   line-height: 1.55;
   white-space: pre-wrap;
+}
+.ai-song-title-suggestion {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  padding: 10px 12px;
+  border: 1px solid rgba(56, 189, 248, 0.22);
+  border-radius: 14px;
+  background: rgba(56, 189, 248, 0.08);
+}
+.ai-song-title-suggestion span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.ai-song-title-suggestion strong {
+  flex: 1 1 180px;
+  min-width: 0;
+  color: var(--text);
 }
 .form-error {
   margin: 0;
@@ -1814,14 +1876,21 @@ button.danger.ghost {
   z-index: 1200;
   display: inline-flex;
   align-items: center;
-  gap: 10px;
-  padding: 14px 18px;
+  gap: 8px;
+  padding: 10px 14px;
   border-radius: 999px;
   border: 1px solid rgba(255,255,255,.18);
   box-shadow: 0 18px 45px rgba(0,0,0,.35);
   background: linear-gradient(135deg, #7c3aed, #2563eb);
   color: #fff;
   font-weight: 800;
+  font-size: .92rem;
+  line-height: 1;
+}
+
+.global-ai-toggle svg {
+  width: 19px;
+  height: 19px;
 }
 
 .global-ai-panel {
@@ -2609,8 +2678,7 @@ body[data-theme="light"] .status {
 }
 
 body[data-theme="light"] .status.cached,
-body[data-theme="light"] .status.SUCCESS,
-body[data-theme="light"] .player-state.playing {
+body[data-theme="light"] .status.SUCCESS {
   color: #047857;
   background: rgba(16, 185, 129, 0.12);
 }
@@ -3982,7 +4050,7 @@ textarea {
   }
 
   .custom-player-controls {
-    grid-template-columns: 36px 46px 36px minmax(0, 1fr);
+    grid-template-columns: 36px 36px 36px 46px 36px 36px minmax(0, 1fr);
     border-radius: 18px;
   }
 
@@ -6179,7 +6247,7 @@ a.button.disabled {
 
 @media (max-width: 1280px) {
   .custom-player-controls {
-    grid-template-columns: 38px 48px 38px auto minmax(160px, 1fr) auto;
+    grid-template-columns: 38px 38px 38px 48px 38px 38px auto minmax(160px, 1fr) auto;
   }
 
   .mini-player-view-toolbar-inline {

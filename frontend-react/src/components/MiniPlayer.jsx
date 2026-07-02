@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Captions, ChevronDown, ChevronUp, Download, ExternalLink, FileText, Headphones, Image as ImageIcon, MoreVertical, Pause, Play, Repeat, SkipBack, SkipForward, Sparkles, ThumbsUp, Volume2, VolumeX, Waves, X } from 'lucide-react';
+import { Captions, ChevronDown, ChevronUp, Download, ExternalLink, FastForward, FileText, Headphones, Image as ImageIcon, MoreVertical, Pause, Play, Repeat, Rewind, RotateCcw, SkipBack, SkipForward, Sparkles, ThumbsUp, Volume2, VolumeX, Waves, X } from 'lucide-react';
 import { api } from '../api/client.js';
 import { formatDuration, handleCoverImageError, operationLabel, pickCover, pickLyrics, pickPrompt, pickStyle, pickTitle } from '../utils.js';
 import { Waveform } from './Waveform.jsx';
@@ -50,6 +50,28 @@ function findActiveSrtSegment(segments, currentTime) {
   return (segments || []).find((segment) => t >= Number(segment.start || 0) && t < Number(segment.end || 0)) || null;
 }
 
+function findRecentlyEndedSrtSegment(segments, currentTime, holdSeconds = 0.45, bridgeGapSeconds = 1.8) {
+  const t = Number(currentTime || 0);
+  let previous = null;
+  const rows = segments || [];
+  for (const segment of rows) {
+    const start = Number(segment.start || 0);
+    const end = Number(segment.end || 0);
+    if (start > t) break;
+    if (end <= t && t - end <= holdSeconds) previous = segment;
+  }
+  if (previous) return previous;
+
+  for (let index = 0; index < rows.length; index += 1) {
+    const segment = rows[index];
+    const end = Number(segment.end || 0);
+    const next = rows[index + 1] || null;
+    const nextStart = Number(next?.start || 0);
+    if (end <= t && next && t < nextStart && nextStart - end <= bridgeGapSeconds) return segment;
+  }
+  return previous;
+}
+
 const TASK_SUCCESS_STATUSES = new Set(['SUCCESS', 'COMPLETED', 'COMPLETE', 'DONE', 'FINISHED']);
 const TASK_FAILURE_STATUSES = new Set(['FAILED', 'ERROR', 'CANCELLED', 'CANCELED', 'TIMEOUT']);
 
@@ -90,6 +112,28 @@ function stableStreamUrl(assetId, cacheBust = false) {
   const safeId = encodeURIComponent(String(assetId || '').trim());
   if (!safeId) return '';
   return `/api/archive/audio/${safeId}/stream${cacheBust ? `?retry=${Date.now()}` : ''}`;
+}
+
+function parseMaybeJson(value) {
+  if (!value) return null;
+  if (typeof value === 'object') return value;
+  try { return JSON.parse(value); } catch { return null; }
+}
+
+function trustedAssetDuration(asset) {
+  const assetDuration = Number(asset?.duration_seconds || 0);
+  const waveform = parseMaybeJson(asset?.waveform_json);
+  const waveformDuration = Number(waveform?.duration_seconds || 0);
+  if (Number.isFinite(waveformDuration) && waveformDuration > 0) return waveformDuration;
+  if (Number.isFinite(assetDuration) && assetDuration > 0) return assetDuration;
+  return 0;
+}
+
+function resolvePlaybackDuration(nativeDuration, asset) {
+  const nativeValue = Number(nativeDuration || 0);
+  const trustedValue = trustedAssetDuration(asset);
+  if (trustedValue > 0) return trustedValue;
+  return nativeValue > 0 ? nativeValue : 0;
 }
 
 export function MiniPlayer({ queue, currentIndex, loop, sidebarMode = 'open', mobileNavOpen = false, playerCommand = 0, onPlaybackStateChange, onLoopChange, onIndexChange, onOpenDetails, onPrepareMusic, onFavoriteChange, onClose }) {
@@ -363,7 +407,7 @@ export function MiniPlayer({ queue, currentIndex, loop, sidebarMode = 'open', mo
     setError('');
     setIsPlaying(false);
     setCurrentTime(0);
-    setDuration(Number(current?.duration_seconds || 0));
+    setDuration(trustedAssetDuration(current));
     setMenuOpen(false);
     setExpanded(false);
 
@@ -459,8 +503,8 @@ export function MiniPlayer({ queue, currentIndex, loop, sidebarMode = 'open', mo
     if (action === 'pause') { pausePlayer(); return; }
     if (action === 'previous') { previous(); return; }
     if (action === 'next') { next(); return; }
-    if (action === 'seek-backward') { seekRelative(-5); return; }
-    if (action === 'seek-forward') { seekRelative(5); return; }
+    if (action === 'seek-backward') { seekRelative(-10); return; }
+    if (action === 'seek-forward') { seekRelative(10); return; }
     if (action === 'mute') { setMuted((value) => !value); return; }
     if (action === 'stop-playback') { stopPlaybackOnly(); return; }
     if (action === 'stop') { closePlayer(); }
@@ -468,10 +512,10 @@ export function MiniPlayer({ queue, currentIndex, loop, sidebarMode = 'open', mo
 
   const srtSegments = useMemo(() => srtSegmentsFromState(srtState), [srtState]);
   const activeSrtSegment = findActiveSrtSegment(srtSegments, currentTime);
-  const nextSrtSegment = !activeSrtSegment ? srtSegments.find((segment) => Number(segment.start || 0) > Number(currentTime || 0)) : null;
   const hasSrt = srtSegments.length > 0;
-  const displayedSrtSegment = activeSrtSegment || nextSrtSegment || null;
-  const displayedSrtText = displayedSrtSegment?.text || t('player.noActiveSubtitle', 'Noch keine aktive Untertitel-Zeile.');
+  const heldSrtSegment = activeSrtSegment ? null : findRecentlyEndedSrtSegment(srtSegments, currentTime);
+  const displayedSrtSegment = activeSrtSegment || heldSrtSegment || null;
+  const displayedSrtText = displayedSrtSegment?.text || '';
   const displayedSrtLength = displayedSrtText.replace(/\s+/g, ' ').trim().length;
   const displayedSrtFontSize = displayedSrtLength > 125
     ? '0.58rem'
@@ -490,7 +534,7 @@ export function MiniPlayer({ queue, currentIndex, loop, sidebarMode = 'open', mo
     window.dispatchEvent(new CustomEvent('player:srt-line', {
       detail: {
         assetId: current.id,
-        text: hasSrt ? displayedSrtText : '',
+        text: displayedSrtText,
         start: displayedSrtSegment?.start || 0,
         end: displayedSrtSegment?.end || 0,
         hasSrt,
@@ -595,6 +639,32 @@ export function MiniPlayer({ queue, currentIndex, loop, sidebarMode = 'open', mo
     setIsPlaying(false);
   }
 
+  async function restartCurrent() {
+    const audio = audioRef.current;
+    if (!audio || !current?.id) return;
+    audio.currentTime = 0;
+    setCurrentTime(0);
+    try {
+      await audio.play();
+      setIsPlaying(true);
+      setError('');
+    } catch {
+      setError(t('player.errors.preparing', 'Audio wird vorbereitet. Bitte einen Moment…'));
+      await preparePlaybackAsset({ cacheBust: true });
+      const retryAudio = audioRef.current;
+      if (!retryAudio) return;
+      retryAudio.currentTime = 0;
+      setCurrentTime(0);
+      try {
+        await retryAudio.play();
+        setIsPlaying(true);
+        setError('');
+      } catch {
+        setError(t('player.errors.playbackStartFailed', 'Wiedergabe konnte nicht gestartet werden. Bitte kurz warten und erneut Play drücken.'));
+      }
+    }
+  }
+
   function pausePlayer() {
     if (!audioRef.current) return;
     audioRef.current.pause();
@@ -641,8 +711,9 @@ export function MiniPlayer({ queue, currentIndex, loop, sidebarMode = 'open', mo
 
   function onLoadedMetadata() {
     const detectedDuration = audioRef.current?.duration;
-    if (Number.isFinite(detectedDuration) && detectedDuration > 0) {
-      setDuration(detectedDuration);
+    const nextDuration = resolvePlaybackDuration(detectedDuration, current);
+    if (nextDuration > 0) {
+      setDuration(nextDuration);
     }
   }
 
@@ -653,7 +724,7 @@ export function MiniPlayer({ queue, currentIndex, loop, sidebarMode = 'open', mo
 
   function seekRelative(deltaSeconds) {
     if (!audioRef.current) return;
-    const detectedDuration = duration || audioRef.current.duration || Number(current?.duration_seconds || 0) || 0;
+    const detectedDuration = duration || resolvePlaybackDuration(audioRef.current.duration, current) || 0;
     const currentPosition = audioRef.current.currentTime || 0;
     const target = Math.min(Math.max(0, currentPosition + Number(deltaSeconds || 0)), detectedDuration || Math.max(0, currentPosition + Number(deltaSeconds || 0)));
     audioRef.current.currentTime = target;
@@ -814,6 +885,7 @@ export function MiniPlayer({ queue, currentIndex, loop, sidebarMode = 'open', mo
       </div>
 
       <div className="mini-player-mobile-controls">
+        <button type="button" className="player-round" onClick={restartCurrent} title={t('player.restartCurrent', 'Aktuellen Song von vorn abspielen')}><RotateCcw size={18} /></button>
         <button type="button" className="player-main-play" onClick={togglePlay} title={isPlaying ? t('player.pause', 'Pause') : t('player.play', 'Abspielen')}>{isPlaying ? <Pause size={20} /> : <Play size={20} />}</button>
         <button type="button" className="player-mobile-expand" onClick={() => setExpanded((value) => !value)} aria-expanded={expanded} title={expanded ? t('player.collapse', 'Player einklappen') : t('player.expand', 'Player erweitern')}>{expanded ? <ChevronDown size={18} /> : <ChevronUp size={18} />}</button>
         <button type="button" className="player-close-button player-close-mobile" onClick={closePlayer} aria-label={t('player.close', 'Player schließen')} title={t('player.close', 'Player schließen')}><X size={18} /></button>
@@ -822,7 +894,10 @@ export function MiniPlayer({ queue, currentIndex, loop, sidebarMode = 'open', mo
       <div className="custom-player-shell">
         <div className="custom-player-controls">
           <button type="button" className="player-round" onClick={previous} disabled={!canPrevious} title={t('player.previous', 'Vorheriger Track')}><SkipBack size={18} /></button>
+          <button type="button" className="player-round" onClick={restartCurrent} title={t('player.restartCurrent', 'Aktuellen Song von vorn abspielen')}><RotateCcw size={18} /></button>
+          <button type="button" className="player-round" onClick={() => seekRelative(-10)} title={t('player.seekBackward10', '10 Sekunden zurück')} aria-label={t('player.seekBackward10', '10 Sekunden zurück')}><Rewind size={18} /></button>
           <button type="button" className="player-main-play" onClick={togglePlay} title={isPlaying ? t('player.pause', 'Pause') : t('player.play', 'Abspielen')}>{isPlaying ? <Pause size={22} /> : <Play size={22} />}</button>
+          <button type="button" className="player-round" onClick={() => seekRelative(10)} title={t('player.seekForward10', '10 Sekunden vor')} aria-label={t('player.seekForward10', '10 Sekunden vor')}><FastForward size={18} /></button>
           <button type="button" className="player-round" onClick={next} disabled={!canNext} title={t('player.next', 'Nächster Track')}><SkipForward size={18} /></button>
           <div className="mini-player-view-toolbar mini-player-view-toolbar-inline" aria-label={t('player.display', 'Player-Anzeige')}>
             <button type="button" className={playerView === 'waveform' ? 'active' : ''} onClick={() => setPlayerView('waveform')} title={t('player.showWaveform', 'Waveform anzeigen')}><Waves size={14} /> Waveform</button>
@@ -842,7 +917,7 @@ export function MiniPlayer({ queue, currentIndex, loop, sidebarMode = 'open', mo
           {playerView === 'srt' && hasSrt ? (
             <div className="mini-player-srt-live" style={{ '--srt-live-font-size': displayedSrtFontSize }}>
               <span className="mini-player-srt-label">{t('player.liveSrt', 'Live-SRT')}</span>
-              <strong title={displayedSrtText}>{displayedSrtText}</strong>
+              <strong title={displayedSrtText}>{displayedSrtText || '\u00a0'}</strong>
               {displayedSrtSegment && <small>{formatClock(displayedSrtSegment.start)} → {formatClock(displayedSrtSegment.end)}</small>}
             </div>
           ) : (
@@ -852,11 +927,8 @@ export function MiniPlayer({ queue, currentIndex, loop, sidebarMode = 'open', mo
       </div>
 
       <div className="mini-player-right custom-player-actions">
-        <span className={isPlaying ? 'player-state playing' : 'player-state'}>{isPlaying ? t('player.running', 'läuft') : t('player.ready', 'bereit')}</span>
         <button type="button" className={currentFavorite ? 'active favorite-mini-button is-favorite' : 'favorite-mini-button'} onClick={toggleCurrentFavorite} disabled={favoriteSaving} title={currentFavorite ? t('player.removeFavorite', 'Favorit entfernen') : t('player.saveFavorite', 'Als Favorit speichern')}><ThumbsUp size={18} fill={currentFavorite ? 'currentColor' : 'none'} /></button>
         <button type="button" className={loop ? 'active' : ''} onClick={() => onLoopChange(!loop)} title={t('player.loop', 'Loop')}><Repeat size={18} /></button>
-        <button type="button" onClick={() => setMuted(!muted)} title={muted ? t('player.enableSound', 'Ton aktivieren') : t('player.mute', 'Stumm')}>{muted ? <VolumeX size={18} /> : <Volume2 size={18} />}</button>
-        <input className="custom-volume" type="range" min="0" max="100" value={muted ? 0 : Math.round(volume * 100)} onChange={changeVolume} aria-label={t('player.volume', 'Lautstärke')} style={{ '--volume-fill': `${muted ? 0 : Math.round(volume * 100)}%` }} />
         <div className="player-menu-wrap">
           <button type="button" onClick={() => setMenuOpen(!menuOpen)} title={t('player.options', 'Optionen')}><MoreVertical size={18} /></button>
           {menuOpen && (
@@ -876,6 +948,10 @@ export function MiniPlayer({ queue, currentIndex, loop, sidebarMode = 'open', mo
         </div>
         <a className="icon-button player-download-primary" href={api.archive.downloadUrl(current.id)} title={t('player.download', 'Download')}><Download size={17} /></a>
         <button type="button" className="player-close-button player-close-desktop" onClick={closePlayer} aria-label={t('player.close', 'Player schließen')} title={t('player.close', 'Player schließen')}><X size={18} /></button>
+        <div className="player-volume-row">
+          <button type="button" onClick={() => setMuted(!muted)} title={muted ? t('player.enableSound', 'Ton aktivieren') : t('player.mute', 'Stumm')}>{muted ? <VolumeX size={18} /> : <Volume2 size={18} />}</button>
+          <input className="custom-volume" type="range" min="0" max="100" value={muted ? 0 : Math.round(volume * 100)} onChange={changeVolume} aria-label={t('player.volume', 'Lautstärke')} style={{ '--volume-fill': `${muted ? 0 : Math.round(volume * 100)}%` }} />
+        </div>
       </div>
     </aside>
   );

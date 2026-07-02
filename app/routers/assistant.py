@@ -39,6 +39,8 @@ class StyleSuggestionRequest(BaseModel):
     extra_prompt: str | None = Field(default=None, max_length=3000)
     title: str | None = Field(default=None, max_length=255)
     current_style: str | None = Field(default=None, max_length=1000)
+    bpm_min: int | None = Field(default=None, ge=40, le=240)
+    bpm_max: int | None = Field(default=None, ge=40, le=240)
     profile_id: int | None = None
     features: StyleSuggestionFeatures = Field(default_factory=StyleSuggestionFeatures)
     variant_strategy: str = Field(default="balanced", max_length=80)
@@ -71,6 +73,7 @@ class StyleSuggestionLyricVocalTag(BaseModel):
 
 class StyleSuggestionItem(BaseModel):
     title: str
+    suggested_song_title: str | None = None
     style: str
     reason: str | None = None
     bpm: str | None = None
@@ -199,6 +202,8 @@ async def assistant_style_suggestions(payload: StyleSuggestionRequest, db: Sessi
             extra_prompt=payload.extra_prompt,
             title=payload.title,
             current_style=payload.current_style,
+            bpm_min=payload.bpm_min,
+            bpm_max=payload.bpm_max,
             profile_id=payload.profile_id,
             features=payload.features.model_dump(),
             variant_strategy=payload.variant_strategy,

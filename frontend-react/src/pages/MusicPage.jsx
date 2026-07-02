@@ -53,6 +53,8 @@ const MUSIC_PAGE_RESULT_MAX_CHARS = 8_000;
 const MUSIC_PAGE_ARRAY_MAX_ITEMS = 12;
 const STYLE_ENGINE_LYRICS_MAX_CHARS = 5000;
 const STYLE_ENGINE_MUSIC_STYLE_MAX_CHARS = 1000;
+const STYLE_ENGINE_BPM_MIN = 40;
+const STYLE_ENGINE_BPM_MAX = 240;
 
 function limitText(value, maxLength = MUSIC_PAGE_TEXT_MAX_CHARS) {
   const text = String(value || '');
@@ -95,6 +97,8 @@ function compactMusicPageState(value) {
     prompt: limitText(source.prompt, MUSIC_PAGE_TEXT_MAX_CHARS),
     style: limitText(source.style, MUSIC_PAGE_TEXT_MAX_CHARS),
     styleExtraPrompt: limitText(source.styleExtraPrompt, 4000),
+    styleBpmMin: limitText(source.styleBpmMin, 10),
+    styleBpmMax: limitText(source.styleBpmMax, 10),
     audioUrl: limitText(source.audioUrl, 2000),
     negativeTags: limitText(source.negativeTags, 4000),
     operationTags: limitText(source.operationTags, 4000),
@@ -444,6 +448,7 @@ function buildStyleProfileJson(suggestion) {
   return {
     source: 'ai_style_suggestions',
     role: suggestion?.role || null,
+    suggested_song_title: suggestionSongTitle(suggestion) || null,
     bpm: suggestion?.bpm || null,
     key_hint: suggestion?.key_hint || null,
     energy: suggestion?.energy || null,
@@ -454,6 +459,16 @@ function buildStyleProfileJson(suggestion) {
     negative_tags: suggestionNegativeTags(suggestion),
     scores: suggestion?.scores || null
   };
+}
+
+function suggestionSongTitle(suggestion) {
+  return String(
+    suggestion?.suggested_song_title
+    || suggestion?.suggestedSongTitle
+    || suggestion?.song_title
+    || suggestion?.songTitle
+    || ''
+  ).trim();
 }
 
 function instrumentLabel(item) {
@@ -671,6 +686,8 @@ export function MusicPage({ styles, voices = [], uploadedFiles = [], assets = []
   const [styleVariantStrategy, setStyleVariantStrategy] = useState(() => storedMusicState.styleVariantStrategy || 'balanced');
   const [styleFeatureOptions, setStyleFeatureOptions] = useState(() => normalizeStyleFeatures(storedMusicState.styleFeatureOptions));
   const [styleExtraPrompt, setStyleExtraPrompt] = useState(() => storedMusicState.styleExtraPrompt || '');
+  const [styleBpmMin, setStyleBpmMin] = useState(() => storedMusicState.styleBpmMin || '');
+  const [styleBpmMax, setStyleBpmMax] = useState(() => storedMusicState.styleBpmMax || '');
   const [styleSuggestions, setStyleSuggestions] = useState(() => Array.isArray(storedMusicState.styleSuggestions) ? storedMusicState.styleSuggestions : []);
   const [stylePresetModalOpen, setStylePresetModalOpen] = useState(false);
   const [styleSuggestionRuntime, setStyleSuggestionRuntime] = useState(() => storedMusicState.styleSuggestionRuntime || null);
@@ -739,6 +756,8 @@ export function MusicPage({ styles, voices = [], uploadedFiles = [], assets = []
       styleVariantStrategy,
       styleFeatureOptions,
       styleExtraPrompt,
+      styleBpmMin,
+      styleBpmMax,
       styleSuggestions,
       styleSuggestionRuntime,
       selectedVoiceId,
@@ -782,7 +801,7 @@ export function MusicPage({ styles, voices = [], uploadedFiles = [], assets = []
     });
   }, [
     title, prompt, style, model, customMode, instrumental, wizard, step, startMode,
-    styleAmount, styleVariantStrategy, styleFeatureOptions, styleExtraPrompt, styleSuggestions, styleSuggestionRuntime, selectedVoiceId,
+    styleAmount, styleVariantStrategy, styleFeatureOptions, styleExtraPrompt, styleBpmMin, styleBpmMax, styleSuggestions, styleSuggestionRuntime, selectedVoiceId,
     generationProvider, operationMode, selectedAssetId, selectedUploadId, sunoImportId,
     sunoImportCacheAudio, sunoImportCacheCover, sunoImportOverwrite, audioUrl, continueAt, autoContinueAt,
     negativeTags, operationTags, vocalGender, styleWeight, weirdnessConstraint, audioWeight,
@@ -839,7 +858,7 @@ export function MusicPage({ styles, voices = [], uploadedFiles = [], assets = []
     }
     window.addEventListener('assistant:music-generate-styles', handleAssistantStyleRequest);
     return () => window.removeEventListener('assistant:music-generate-styles', handleAssistantStyleRequest);
-  }, [title, prompt, style, styleAmount, styleExtraPrompt]);
+  }, [title, prompt, style, styleAmount, styleExtraPrompt, styleBpmMin, styleBpmMax]);
 
   const modelLimit = useMemo(() => {
     const limits = runtime?.model_limits?.[model] || {};
@@ -973,6 +992,11 @@ export function MusicPage({ styles, voices = [], uploadedFiles = [], assets = []
   async function generateStyleSuggestions() {
     const lyrics = String(prompt || '').trim();
     const currentMusicStyle = String(style || '').trim();
+    const bpmMinText = String(styleBpmMin || '').trim();
+    const bpmMaxText = String(styleBpmMax || '').trim();
+    const hasBpmRange = Boolean(bpmMinText || bpmMaxText);
+    let bpmMinValue = null;
+    let bpmMaxValue = null;
     if (!lyrics) {
       const message = t('music.messages.stylePromptMissing', 'Bitte zuerst Lyrics oder einen Prompt einfügen. Dann kann die KI passende Suno-Styles erstellen.');
       setStyleSuggestionError(message);
@@ -991,6 +1015,28 @@ export function MusicPage({ styles, voices = [], uploadedFiles = [], assets = []
       notify?.(message, 'error');
       return;
     }
+    if (hasBpmRange) {
+      if (!bpmMinText || !bpmMaxText) {
+        const message = t('music.messages.styleBpmRangeIncomplete', 'BPM-Eingrenzung benötigt Von- und Bis-Wert.');
+        setStyleSuggestionError(message);
+        notify?.(message, 'error');
+        return;
+      }
+      if (!/^\d+$/.test(bpmMinText) || !/^\d+$/.test(bpmMaxText)) {
+        const message = t('music.messages.styleBpmRangeInteger', 'BPM-Eingrenzung muss aus ganzen Zahlen bestehen.');
+        setStyleSuggestionError(message);
+        notify?.(message, 'error');
+        return;
+      }
+      bpmMinValue = Number(bpmMinText);
+      bpmMaxValue = Number(bpmMaxText);
+      if (bpmMinValue < STYLE_ENGINE_BPM_MIN || bpmMaxValue > STYLE_ENGINE_BPM_MAX || bpmMinValue > bpmMaxValue) {
+        const message = t('music.messages.styleBpmRangeInvalid', 'BPM-Eingrenzung muss zwischen {{min}} und {{max}} liegen; Von darf nicht größer als Bis sein.', { min: STYLE_ENGINE_BPM_MIN, max: STYLE_ENGINE_BPM_MAX });
+        setStyleSuggestionError(message);
+        notify?.(message, 'error');
+        return;
+      }
+    }
 
     setStyleSuggestionLoading(true);
     setStyleSuggestionError('');
@@ -1001,6 +1047,7 @@ export function MusicPage({ styles, voices = [], uploadedFiles = [], assets = []
         extra_prompt: styleExtraPrompt,
         title,
         current_style: currentMusicStyle,
+        ...(hasBpmRange ? { bpm_min: bpmMinValue, bpm_max: bpmMaxValue } : {}),
         variant_strategy: styleVariantStrategy,
         features: styleFeatureOptions,
         batch_mode: 'auto'
@@ -1035,6 +1082,14 @@ export function MusicPage({ styles, voices = [], uploadedFiles = [], assets = []
         : t('music.messages.masterStyleApplied', 'Master Style „{{title}}“ übernommen.', { title: suggestion?.title || t('music.aiStyleFallback', 'KI-Vorschlag') }),
       'success'
     );
+  }
+
+  function applySuggestedSongTitle(suggestion) {
+    const nextTitleRaw = suggestionSongTitle(suggestion);
+    if (!nextTitleRaw) return;
+    const nextTitle = titleLimit && nextTitleRaw.length > titleLimit ? nextTitleRaw.slice(0, titleLimit).trim() : nextTitleRaw;
+    setTitle(nextTitle);
+    notify?.(t('music.messages.songTitleApplied', 'Songtitel „{{title}}“ übernommen.', { title: nextTitle }), 'success');
   }
 
   function applyAiStyleWithNegative(suggestion, mode = 'append') {
@@ -2043,6 +2098,12 @@ export function MusicPage({ styles, voices = [], uploadedFiles = [], assets = []
         <label>{t('music.styleEngine.amount', 'Menge')}
           <input type="number" min="1" max="5" value={styleAmount} onChange={(event) => setStyleAmount(clampStyleAmount(event.target.value))} />
         </label>
+        <label>{t('music.styleEngine.bpmMin', 'BPM von')}
+          <input type="number" min={STYLE_ENGINE_BPM_MIN} max={STYLE_ENGINE_BPM_MAX} step="1" value={styleBpmMin} onChange={(event) => setStyleBpmMin(event.target.value)} placeholder="94" />
+        </label>
+        <label>{t('music.styleEngine.bpmMax', 'BPM bis')}
+          <input type="number" min={STYLE_ENGINE_BPM_MIN} max={STYLE_ENGINE_BPM_MAX} step="1" value={styleBpmMax} onChange={(event) => setStyleBpmMax(event.target.value)} placeholder="100" />
+        </label>
         <div className="wide ai-style-feature-toggles" role="group" aria-label={t('music.styleEngine.featureAria', 'Style-Features auswählen')}>
           {localizedStyleFeatureOptions.map(([key, label, description]) => {
             const active = styleFeatureOptions[key] !== false;
@@ -2077,12 +2138,20 @@ export function MusicPage({ styles, voices = [], uploadedFiles = [], assets = []
             const scores = suggestion?.scores && typeof suggestion.scores === 'object' ? suggestion.scores : null;
             const negative = suggestionNegativeTags(suggestion);
             const lyricTags = suggestionLyricVocalTags(suggestion);
+            const suggestedTitle = suggestionSongTitle(suggestion);
             return (
               <article className="ai-style-card" key={`${suggestion.title || 'style'}-${index}`}>
                 <div>
                   <span>{suggestion.role || t('music.styleEngine.suggestionNumber', 'Vorschlag {{number}}', { number: index + 1 })}</span>
                   <h3>{suggestion.title || t('music.styleEngine.aiStyleNumber', 'KI-Style {{number}}', { number: index + 1 })}</h3>
                 </div>
+                {suggestedTitle && (
+                  <div className="ai-song-title-suggestion">
+                    <span>{t('music.styleEngine.suggestedSongTitle', 'Songtitel')}</span>
+                    <strong>{suggestedTitle}</strong>
+                    <button type="button" onClick={() => applySuggestedSongTitle(suggestion)}>{t('music.actions.applySongTitle', 'Titel übernehmen')}</button>
+                  </div>
+                )}
                 {(suggestion.bpm || suggestion.energy || suggestion.vocal_delivery) && (
                   <div className="ai-style-meta-row">
                     {suggestion.bpm && <span>BPM {suggestion.bpm}</span>}

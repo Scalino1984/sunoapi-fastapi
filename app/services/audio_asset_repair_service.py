@@ -218,7 +218,10 @@ def repair_local_file_metadata(asset: AudioAsset) -> bool:
         "content_type": normalize_audio_content_type(asset.content_type, path),
     }
     duration = read_audio_duration_seconds(path)
-    if duration:
+    if duration and not asset.duration_seconds:
+        # Some Suno MP3 files have misleading headers and browser/native readers
+        # may disagree by seconds or minutes. Metadata repair may fill a missing
+        # duration, but it must not replace a duration already stored by the app.
         updates["duration_seconds"] = duration
     for key, value in updates.items():
         if getattr(asset, key) != value:

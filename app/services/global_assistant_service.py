@@ -21,7 +21,7 @@ from app.services.assistant_action_registry import (
 
 SUNO_STYLE_LYRICS_MAX_LENGTH = 5000
 SUNO_STYLE_PROMPT_MAX_LENGTH = 1000
-SUNO_STYLE_BASE_MAX_LENGTH = 560
+SUNO_STYLE_PROMPT_TARGET_LENGTH = 940
 SUNO_STYLE_ARRANGEMENT_MAX_LENGTH = 220
 SUNO_STYLE_DEFAULT_BPM = 100
 SUNO_STYLE_MIN_BPM = 40
@@ -405,6 +405,16 @@ class GlobalAssistantService:
             return None
 
         raw_bpm = raw.get("bpm") or raw.get("tempo") or fallback.get("bpm") or ""
+        suggested_song_title = (
+            raw.get("suggested_song_title")
+            or raw.get("suggestedSongTitle")
+            or raw.get("song_title")
+            or raw.get("songTitle")
+            or raw.get("recommended_title")
+            or raw.get("recommendedTitle")
+            or fallback.get("suggested_song_title")
+            or ""
+        )
         fixed_bpm = self._normalize_bpm_value(
             raw_bpm,
             style,
@@ -418,7 +428,8 @@ class GlobalAssistantService:
 
         normalized: dict[str, Any] = {
             "title": self._limit_text(title, 120) or f"KI-Style {index}",
-            "style": self._limit_text(style, 1200),
+            "suggested_song_title": self._limit_text(suggested_song_title, 120) or None,
+            "style": self._limit_text(style, 1600),
             "reason": self._limit_text(reason, 600) or "Passt laut KI-Analyse zu Songtext, Stimmung, Delivery und Suno-Zielrichtung.",
             "bpm": fixed_bpm,
             "key_hint": self._limit_text(raw.get("key_hint") or raw.get("key") or fallback.get("key_hint") or "", 120) or None,
@@ -459,9 +470,10 @@ class GlobalAssistantService:
             item.get("vocal_delivery"),
         )
         base_style = self._normalize_bpm_mentions_in_text(
-            self._limit_text(item.get("style") or "", SUNO_STYLE_BASE_MAX_LENGTH),
+            self._limit_text(item.get("style") or "", 1600),
             bpm,
         )
+        base_style = self._limit_style_prompt(base_style, SUNO_STYLE_PROMPT_MAX_LENGTH)
         if base_style:
             parts.append(base_style.rstrip(" .;,"))
 
@@ -517,9 +529,14 @@ class GlobalAssistantService:
 
         # SunoAPI accepts only a limited style field. Keep the actual style as the
         # single master prompt, but compress it before it reaches the generation form.
+        # Preserve the AI's complete style field first; older logic reduced the base
+        # style to 560 chars even when it was already a valid Suno prompt.
+        if len(base_style) >= 720:
+            return self._ensure_style_prompt_has_fixed_bpm(base_style, bpm)
+
         compact_parts: list[str] = []
         if base_style:
-            compact_parts.append(self._limit_text(base_style, 420).rstrip(" .;,"))
+            compact_parts.append(self._limit_style_prompt(base_style, 720).rstrip(" .;,"))
         compact_instruments = ", ".join(dict.fromkeys(instrument_phrases[:6]))
         if compact_instruments:
             compact_parts.append(f"instrumentation: {self._limit_text(compact_instruments, 260)}")
@@ -531,7 +548,7 @@ class GlobalAssistantService:
         if compact_arrangement:
             compact_parts.append(f"arrangement: {self._limit_text(compact_arrangement, SUNO_STYLE_ARRANGEMENT_MAX_LENGTH)}")
         compact = self._ensure_style_prompt_has_fixed_bpm("; ".join(part for part in compact_parts if part).strip(" ;"), bpm)
-        return self._limit_text(compact, SUNO_STYLE_PROMPT_MAX_LENGTH) or self._limit_text(master, SUNO_STYLE_PROMPT_MAX_LENGTH) or base_style
+        return self._limit_style_prompt(compact, SUNO_STYLE_PROMPT_MAX_LENGTH) or self._limit_style_prompt(master, SUNO_STYLE_PROMPT_MAX_LENGTH) or base_style
 
     def _is_valid_bpm(self, value: int | None) -> bool:
         return value is not None and SUNO_STYLE_MIN_BPM <= value <= SUNO_STYLE_MAX_BPM
@@ -627,6 +644,68 @@ class GlobalAssistantService:
                 return str(bpm)
         return str(self._infer_default_bpm(*values))
 
+    def _normalize_bpm_range(self, bpm_min: Any = None, bpm_max: Any = None) -> tuple[int, int] | None:
+        min_empty = bpm_min is None or str(bpm_min).strip() == ""
+        max_empty = bpm_max is None or str(bpm_max).strip() == ""
+        if min_empty and max_empty:
+            return None
+        if min_empty or max_empty:
+            raise ValueError("BPM-Eingrenzung benötigt immer Von- und Bis-Wert.")
+        try:
+            lower = int(str(bpm_min).strip())
+            upper = int(str(bpm_max).strip())
+        except ValueError as exc:
+            raise ValueError("BPM-Eingrenzung muss aus ganzen Zahlen bestehen.") from exc
+        if not self._is_valid_bpm(lower) or not self._is_valid_bpm(upper):
+            raise ValueError(f"BPM-Eingrenzung muss zwischen {SUNO_STYLE_MIN_BPM} und {SUNO_STYLE_MAX_BPM} liegen.")
+        if lower > upper:
+            raise ValueError("BPM-Eingrenzung ist ungültig: Von darf nicht größer als Bis sein.")
+        return lower, upper
+
+    def _coerce_bpm_to_range(self, value: Any, bpm_range: tuple[int, int], *context: Any) -> str:
+        bpm = self._extract_bpm_from_text(value, strict=False)
+        if bpm is None:
+            bpm = self._infer_default_bpm(value, *context)
+        lower, upper = bpm_range
+        return str(max(lower, min(upper, bpm)))
+
+    def _apply_bpm_range_to_suggestions(self, suggestions: list[dict[str, Any]], bpm_range: tuple[int, int] | None) -> None:
+        if not bpm_range:
+            return
+        for suggestion in suggestions:
+            if not isinstance(suggestion, dict):
+                continue
+            fixed_bpm = self._coerce_bpm_to_range(
+                suggestion.get("bpm"),
+                bpm_range,
+                suggestion.get("style"),
+                suggestion.get("title"),
+                suggestion.get("reason"),
+                suggestion.get("energy"),
+                suggestion.get("vocal_delivery"),
+            )
+            suggestion["bpm"] = fixed_bpm
+            suggestion["style"] = self._force_style_prompt_bpm(suggestion.get("style") or "", fixed_bpm)
+
+    def _force_style_prompt_bpm(self, value: Any, bpm: str | int | None) -> str:
+        text = self._normalize_bpm_mentions_in_text(value, bpm)
+        fixed = str(bpm or "").strip()
+        if not text or not fixed:
+            return text
+        text = re.sub(
+            r"(?i)\b(?P<prefix>(?:tempo\s*[:=]?\s*)?)\d{2,3}\s*bpm\b",
+            lambda match: f"{match.group('prefix') or ''}{fixed} BPM",
+            text,
+        )
+        text = re.sub(
+            r"(?i)\bbpm\s*[:=]\s*\d{2,3}\b",
+            f"BPM: {fixed}",
+            text,
+        )
+        if not self._style_prompt_has_fixed_bpm(text):
+            text = f"{text.rstrip(' .;,')}; tempo {fixed} BPM" if text else f"tempo {fixed} BPM"
+        return re.sub(r"\s+", " ", text).strip()
+
     def _normalize_bpm_mentions_in_text(self, value: Any, bpm: str | int | None) -> str:
         text = str(value or "").strip()
         fixed = str(bpm or "").strip()
@@ -662,9 +741,9 @@ class GlobalAssistantService:
         text = self._normalize_bpm_mentions_in_text(value, bpm)
         fixed = str(bpm or "").strip()
         if not fixed:
-            return self._limit_text(text, SUNO_STYLE_PROMPT_MAX_LENGTH)
+            return self._limit_style_prompt(text, SUNO_STYLE_PROMPT_MAX_LENGTH)
         if self._style_prompt_has_fixed_bpm(text):
-            return self._limit_text(text, SUNO_STYLE_PROMPT_MAX_LENGTH)
+            return self._limit_style_prompt(text, SUNO_STYLE_PROMPT_MAX_LENGTH)
         addition = f"tempo {fixed} BPM"
         if not text:
             return addition
@@ -672,13 +751,35 @@ class GlobalAssistantService:
         if len(text) + len(separator) + len(addition) <= SUNO_STYLE_PROMPT_MAX_LENGTH:
             return f"{text}{separator}{addition}"
         reserve = len(separator) + len(addition)
-        return f"{self._limit_text(text, max(0, SUNO_STYLE_PROMPT_MAX_LENGTH - reserve)).rstrip(' .;,')}{separator}{addition}"
+        return f"{self._limit_style_prompt(text, max(0, SUNO_STYLE_PROMPT_MAX_LENGTH - reserve)).rstrip(' .;,')}{separator}{addition}"
 
     def _limit_text(self, value: Any, max_length: int) -> str:
         text = str(value or "").replace("\r\n", "\n").replace("\r", "\n").strip()
         if len(text) > max_length:
             return text[:max_length].rstrip()
         return text
+
+    def _limit_style_prompt(self, value: Any, max_length: int = SUNO_STYLE_PROMPT_MAX_LENGTH) -> str:
+        text = re.sub(r"\s+", " ", str(value or "").replace("\r\n", "\n").replace("\r", "\n")).strip()
+        if len(text) <= max_length:
+            return text
+        clipped = text[:max_length].rstrip()
+        soft_min = int(max_length * 0.72)
+        breakpoints = [
+            clipped.rfind("; "),
+            clipped.rfind(". "),
+            clipped.rfind(", "),
+            clipped.rfind(" | "),
+            clipped.rfind(" - "),
+        ]
+        soft_break = max(breakpoints)
+        if soft_break >= soft_min:
+            clipped = clipped[:soft_break]
+        else:
+            space_break = clipped.rfind(" ")
+            if space_break >= soft_min:
+                clipped = clipped[:space_break]
+        return clipped.strip(" ,;.-|")
 
     def _normalize_instruments(self, value: Any, max_items: int = 10) -> list[dict[str, str]]:
         if value is None:
@@ -1200,13 +1301,17 @@ class GlobalAssistantService:
         vocal_tags: list[dict[str, Any]],
         instruction_files: list[dict[str, Any]],
         compact_reference: bool,
+        bpm_range: tuple[int, int] | None = None,
         previous_suggestions: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         reference = self._compact_style_reference() if compact_reference else SUNO_STYLE_DOCUMENTATION_REFERENCE
         previous_titles = [self._limit_text(item.get("title"), 120) for item in (previous_suggestions or []) if item.get("title")]
         rules = [
             f"Gib exakt {batch_amount} Vorschlag/Vorschläge für diesen Batch zurück. Insgesamt werden {requested_amount} Vorschläge erzeugt.",
-            "Jeder Style ist ein vollständiger kopierbarer Suno-Master-Style-Prompt in einem Feld mit maximal 1000 Zeichen: Instrumente, Arrangement, Vocal-Delivery, feste BPM, Energie und Produktion müssen im style-Feld enthalten sein, nicht nur in Zusatzfeldern.",
+            "Jeder Style ist ein vollständiger kopierbarer Suno-Master-Style-Prompt in einem Feld mit maximal 1000 Zeichen; Zielbereich 900 bis 950 Zeichen, damit der Prompt vollständig endet und nicht serverseitig gekürzt werden muss.",
+            "Liefere pro Vorschlag zusätzlich suggested_song_title als kurzen release-tauglichen Songtitel. suggested_song_title ist der eigentliche Songtitel, title bleibt nur der Name der Style-Variante.",
+            "Style-Prompts müssen abgeschlossen formuliert sein: keine abgeschnittenen Satzenden, keine offenen Aufzählungen, keine wichtigen Informationen erst am Ende verstecken.",
+            "Instrumente, Arrangement, Vocal-Delivery, feste BPM, Energie und Produktion müssen im style-Feld enthalten sein, nicht nur in Zusatzfeldern.",
             'bpm ist Pflicht und muss immer eine feste ganze Zahl als String enthalten, z. B. "170". Keine Bereiche wie "167-172", keine ca.-Angaben und kein leeres bpm-Feld.',
             'Das style-Feld muss dieselbe feste BPM enthalten, z. B. "170 BPM". Wenn ein Tempo-Wunsch als Bereich vorliegt, wähle den musikalisch passendsten Mittelwert.',
             "Nutze erkennbare Sprache, Rap-/Gesangsstimme, Stimmung, Hook-Art, Beat-Art und Energie aus dem Text.",
@@ -1227,6 +1332,9 @@ class GlobalAssistantService:
             rules.append("Tokenschwacher Modus: besonders kompakt antworten, keine langen Begründungen, keine Wiederholung der Regeln, JSON sauber halten.")
         if previous_titles:
             rules.append(f"Vermeide Dopplungen zu bereits erzeugten Titeln/Rollen: {', '.join(previous_titles[:8])}.")
+        if bpm_range:
+            lower, upper = bpm_range
+            rules.append(f"Tempo-Eingrenzung aktiv: Wähle exakt eine ganze BPM-Zahl zwischen {lower} und {upper}. Entscheide innerhalb dieses Bereichs nach Style, Textfluss, Hook-Energie und Groove. Keine BPM außerhalb dieses Bereichs.")
         return {
             "task": "generate_suno_style_suggestions",
             "amount": batch_amount,
@@ -1239,6 +1347,7 @@ class GlobalAssistantService:
             "extra_user_control_prompt": self._trim_text(extra_prompt, 3000),
             "features": normalized_features,
             "variant_strategy": normalized_strategy,
+            "tempo_constraints": {"enabled": bool(bpm_range), "bpm_min": bpm_range[0], "bpm_max": bpm_range[1]} if bpm_range else {"enabled": False},
             "suno_quality_reference": reference,
             "vocal_tag_recipe_reference": self._compact_style_reference() if compact_reference else SUNO_VOCAL_TAG_RECIPE_REFERENCE,
             "variant_strategy_meaning": {
@@ -1300,6 +1409,7 @@ class GlobalAssistantService:
                 continue
             suggestions.append({
                 "title": title[:120] or f"KI-Style {len(suggestions) + 1}",
+                "suggested_song_title": None,
                 "style": style[:1500],
                 "reason": reason[:600] or "Passt laut KI-Analyse zu Songtext, Stimmung, Delivery und Suno-Zielrichtung.",
                 "instruments": [],
@@ -1324,6 +1434,8 @@ class GlobalAssistantService:
         extra_prompt: str | None = None,
         title: str | None = None,
         current_style: str | None = None,
+        bpm_min: int | None = None,
+        bpm_max: int | None = None,
         profile_id: int | None = None,
         features: dict[str, Any] | None = None,
         variant_strategy: str | None = None,
@@ -1337,6 +1449,7 @@ class GlobalAssistantService:
         clean_current_style = str(current_style or "").strip()
         if len(clean_current_style) > SUNO_STYLE_PROMPT_MAX_LENGTH:
             raise ValueError(f"Music Style darf für Styles generieren maximal {SUNO_STYLE_PROMPT_MAX_LENGTH} Zeichen enthalten.")
+        bpm_range = self._normalize_bpm_range(bpm_min, bpm_max)
 
         requested_amount = max(1, min(int(amount or 3), 5))
         normalized_features = self._normalize_style_features(features)
@@ -1363,6 +1476,8 @@ class GlobalAssistantService:
             "source": "assistant_profile" if profile_options.get("profile_id") else "admin_defaults",
             "lyrics_max_chars": SUNO_STYLE_LYRICS_MAX_LENGTH,
             "music_style_max_chars": SUNO_STYLE_PROMPT_MAX_LENGTH,
+            "music_style_target_chars": SUNO_STYLE_PROMPT_TARGET_LENGTH,
+            "bpm_range": {"min": bpm_range[0], "max": bpm_range[1]} if bpm_range else None,
             "deferred_lyric_tagging": bool(self.settings.ai_style_generation_deferred_lyric_tagging_enabled),
             "style_batching": {
                 "mode": batch_plan["mode"],
@@ -1378,10 +1493,13 @@ class GlobalAssistantService:
             "Spezialaufgabe: Analysiere Songtexte und erstelle professionelle Suno-Style-Prompts als strukturiertes Musik-Briefing. "
             "Nutze die integrierte SunoAI Master-Dokumentation und den Vocal-Tag-Baukasten als Qualitätsreferenz. "
             "Die Styles müssen direkt in Suno nutzbar sein und präzise Genre, Subgenre, feste BPM als einzelne ganze Zahl, Drums, Bass, Instrumente, Vocal-Delivery, Stimmung, Sprache und Produktionsästhetik nennen. Keine BPM-Bereiche und keine fehlende BPM. "
-            "Das style-Feld bleibt ein vollständiger Music-Style-Prompt mit maximal 1000 Zeichen; section-spezifische Songtext-Vocal-Tags gehören ausschließlich in lyric_vocal_tags. "
+            "Wenn tempo_constraints aktiv sind, muss die feste BPM innerhalb dieses Bereichs liegen und trotzdem musikalisch passend zu Text, Hook und Groove gewählt werden. "
+            "Das style-Feld bleibt ein vollständiger Music-Style-Prompt mit Zielbereich 900 bis 950 Zeichen und harter Obergrenze 1000 Zeichen; section-spezifische Songtext-Vocal-Tags gehören ausschließlich in lyric_vocal_tags. "
+            "Style-Prompts müssen sauber abgeschlossen sein und dürfen nicht mitten in einer Aufzählung oder einem Satz enden. "
+            "Gib pro Vorschlag ein separates Feld suggested_song_title für den eigentlichen Songtitel aus; title ist nur die interne Überschrift der Style-Variante. "
             "Erstelle unterschiedliche, aber passende Varianten. Keine vollständigen Songtexte schreiben. Keine erfundenen URLs oder technischen IDs. "
             "Verwende keine direkten Künstler-Imitationen; übersetze Referenzen in neutrale Produktionsmerkmale. "
-            "Antwortformat exakt als JSON: {\"suggestions\":[{\"title\":\"...\",\"role\":\"Beste Hook-Variante\",\"style\":\"vollständiger Suno-Master-Style-Prompt inklusive Genre, fester BPM-Zahl, Instrumentierung, Vocal-Delivery, Arrangement und Produktionsästhetik in einem Feld\",\"reason\":\"...\",\"bpm\":\"96\",\"key_hint\":\"minor\",\"energy\":\"dark, punchy\",\"vocal_delivery\":\"...\",\"instruments\":[{\"name\":\"dusty drums\",\"role\":\"drums\",\"reason\":\"...\"}],\"arrangement\":[{\"section\":\"Hook\",\"idea\":\"...\"}],\"lyric_vocal_tags\":[{\"section\":\"Verse 1\",\"tag\":\"[Verse 1: gritty male vocals, aggressive rap flow, defiant, high energy, native Jamaican Patois]\",\"reason\":\"...\"},{\"section\":\"Chorus\",\"tag\":\"[Chorus: catchy patois hook, shouted call-and-response, doubled vocals, explosive energy]\",\"reason\":\"...\"}],\"negative_tags\":\"...\",\"scores\":{\"fit\":0.9,\"hook_potential\":0.8,\"suno_clarity\":0.88,\"risk\":0.1}}]}"
+            "Antwortformat exakt als JSON: {\"suggestions\":[{\"title\":\"Style-Variante\",\"suggested_song_title\":\"Songtitel\",\"role\":\"Beste Hook-Variante\",\"style\":\"vollständiger Suno-Master-Style-Prompt inklusive Genre, fester BPM-Zahl, Instrumentierung, Vocal-Delivery, Arrangement und Produktionsästhetik in einem Feld\",\"reason\":\"...\",\"bpm\":\"96\",\"key_hint\":\"minor\",\"energy\":\"dark, punchy\",\"vocal_delivery\":\"...\",\"instruments\":[{\"name\":\"dusty drums\",\"role\":\"drums\",\"reason\":\"...\"}],\"arrangement\":[{\"section\":\"Hook\",\"idea\":\"...\"}],\"lyric_vocal_tags\":[{\"section\":\"Verse 1\",\"tag\":\"[Verse 1: gritty male vocals, aggressive rap flow, defiant, high energy, native Jamaican Patois]\",\"reason\":\"...\"},{\"section\":\"Chorus\",\"tag\":\"[Chorus: catchy patois hook, shouted call-and-response, doubled vocals, explosive energy]\",\"reason\":\"...\"}],\"negative_tags\":\"...\",\"scores\":{\"fit\":0.9,\"hook_potential\":0.8,\"suno_clarity\":0.88,\"risk\":0.1}}]}"
         )
 
         suggestions: list[dict[str, Any]] = []
@@ -1400,6 +1518,7 @@ class GlobalAssistantService:
                 vocal_tags=vocal_tags,
                 instruction_files=instruction_files,
                 compact_reference=batch_plan["compact_reference"],
+                bpm_range=bpm_range,
                 previous_suggestions=suggestions,
             )
             result = await AiChatService().run_json_task(
@@ -1412,6 +1531,7 @@ class GlobalAssistantService:
             parsed_batch = self._normalize_style_suggestions(result.data, batch_amount)
             if not parsed_batch:
                 parsed_batch = self._normalize_style_suggestions({"raw_text": result.raw_text}, batch_amount)
+            self._apply_bpm_range_to_suggestions(parsed_batch, bpm_range)
             suggestions.extend(parsed_batch)
             if len(suggestions) >= requested_amount:
                 break
