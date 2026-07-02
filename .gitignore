@@ -78,6 +78,11 @@ README_FEATURE_ROOT_*.md
 README_LOCAL_MASTER_UNIFIED_AUDIO.md
 README_PORTABLE_BACKUP_RESTORE.md
 analyses/
+
+# Local/personal deployment and repository management helpers
+scripts/rsync-to-vserver.sh
+scripts/github-repo-manager.sh
+deploy/systemd/suno-react-dev-wsl.service
 documentation/local_audiofiles.txt
 documentation/storage_snapshot.txt
 documentation/tree-list-storage.txt
