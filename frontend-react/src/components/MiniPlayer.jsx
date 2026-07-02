@@ -517,17 +517,11 @@ export function MiniPlayer({ queue, currentIndex, loop, sidebarMode = 'open', mo
   const displayedSrtSegment = activeSrtSegment || heldSrtSegment || null;
   const displayedSrtText = displayedSrtSegment?.text || '';
   const displayedSrtLength = displayedSrtText.replace(/\s+/g, ' ').trim().length;
-  const displayedSrtFontSize = displayedSrtLength > 125
-    ? '0.58rem'
-    : displayedSrtLength > 105
-      ? '0.64rem'
-      : displayedSrtLength > 85
-        ? '0.72rem'
-        : displayedSrtLength > 65
-          ? '0.82rem'
-          : displayedSrtLength > 45
-            ? '0.94rem'
-            : '1.08rem';
+  const displayedSrtFontSize = displayedSrtLength > 165
+    ? '0.86rem'
+    : displayedSrtLength > 120
+      ? '0.92rem'
+      : '1rem';
 
   useEffect(() => {
     if (typeof window === 'undefined' || !current?.id) return;

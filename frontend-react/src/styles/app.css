@@ -1107,7 +1107,13 @@ button.danger,
   margin: 0 0 6px;
 }
 .ai-style-controls {
+  grid-template-columns: minmax(96px, .7fr) repeat(2, minmax(120px, 1fr));
   align-items: end;
+}
+@media (max-width: 760px) {
+  .ai-style-controls {
+    grid-template-columns: 1fr;
+  }
 }
 .ai-style-results {
   display: grid;
@@ -6178,10 +6184,9 @@ a.button.disabled {
   position: relative;
   min-height: 58px;
   display: grid;
-  grid-template-columns: 86px minmax(0, 1fr) 86px;
+  grid-template-columns: minmax(0, 1fr);
   align-items: center;
-  gap: 10px;
-  padding: 9px 14px;
+  padding: 9px 104px;
   border: 1px solid rgba(56,189,248,.25);
   border-radius: 18px;
   background:
@@ -6192,6 +6197,10 @@ a.button.disabled {
 }
 
 .mini-player-srt-live .mini-player-srt-label {
+  position: absolute;
+  left: 14px;
+  top: 50%;
+  transform: translateY(-50%);
   padding: 5px 8px;
   border-radius: 999px;
   color: #67e8f9;
@@ -6220,6 +6229,10 @@ a.button.disabled {
 }
 
 .mini-player-srt-live small {
+  position: absolute;
+  right: 14px;
+  top: 50%;
+  transform: translateY(-50%);
   color: var(--muted);
   font-size: .72rem;
   font-weight: 800;
@@ -6229,14 +6242,24 @@ a.button.disabled {
 
 @media (max-width: 900px) {
   .mini-player-srt-live {
-    grid-template-columns: 1fr;
-    gap: 6px;
+    padding: 30px 12px 28px;
   }
 
   .mini-player-srt-live .mini-player-srt-label,
   .mini-player-srt-live small {
-    justify-self: center;
+    left: 50%;
+    right: auto;
+    transform: translateX(-50%);
     text-align: center;
+  }
+
+  .mini-player-srt-live .mini-player-srt-label {
+    top: 7px;
+  }
+
+  .mini-player-srt-live small {
+    top: auto;
+    bottom: 7px;
   }
 
   .mini-player-srt-live strong {
