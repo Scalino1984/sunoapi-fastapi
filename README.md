@@ -125,6 +125,10 @@ Write, revise and structure lyrics directly inside the app.
 
 Long-running AI tasks need visibility. The Status page keeps production transparent.
 
+![Status task details](documentation/images/status-details.png)
+
+Task detail views expose request payloads, provider responses, progress logs and result data so failed or expensive operations can be inspected without rerunning them.
+
 - live task overview
 - task details with request, response and result payloads
 - SunoAPI.org task import
@@ -181,6 +185,7 @@ The screenshots below use development/demo data and show the current product are
 | Songtext Studio canvas | ![Songtext Studio canvas](documentation/images/songtext-studio-canvas.png) |
 | Mini-DAW waveform editor | ![Mini DAW waveform editor](documentation/images/mini-daw-waveform-editor.png) |
 | Status, tasks and Suno imports | ![Status tasks and Suno imports](documentation/images/status-tasks-and-suno-imports.png) |
+| Status task details | ![Status task details](documentation/images/status-details.png) |
 | System maintenance and backup | ![System maintenance and backup](documentation/images/system-maintenance-and-backup.png) |
 | Admin AI assistant and audio analysis | ![Admin AI assistant and audio analysis](documentation/images/admin-ai-assistant-and-audio-analysis.png) |
 | Admin vocal tags management | ![Admin vocal tags management](documentation/images/admin-vocal-tags-management.png) |
