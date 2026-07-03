@@ -2,6 +2,8 @@ from __future__ import annotations
 
 # CORE CONTRACT
 # Zweck: Erzeugt SRT/Half-SRT aus AudioAssets und Lyrics als Source of Truth.
+# Audios ohne verwertbare Lyrics duerfen als Fallback ASR-only-SRT erzeugen;
+# dieser Fallback darf den normalen Lyrics-Cleanup-/Alignment-Pfad nicht ersetzen.
 # Kritische Logik: Lyrics-Cleanup, Transkriptionsprovider, Alignment, Task-Finalisierung.
 # Tasks duerfen nie dauerhaft RUNNING bleiben; Providerfehler muessen FAILED setzen.
 # SRT-Zeiten bauen structure_segments_json fuer Waveform-Abschnitte.
@@ -1476,7 +1478,7 @@ def _manual_import_prompt_is_lyrics(candidate: dict[str, Any], request_payload: 
     return any(prompt in normalized_lyrics for prompt in normalized_prompts)
 
 
-def resolve_lyrics_for_audio_asset(db: Session, audio_asset_id: int, manual_override: str | None = None) -> str:
+def resolve_lyrics_for_audio_asset(db: Session, audio_asset_id: int, manual_override: str | None = None, *, allow_missing: bool = False) -> str:
     override = _usable_lyrics_candidate(manual_override, authoritative=True)
     if override:
         return override
@@ -1517,6 +1519,8 @@ def resolve_lyrics_for_audio_asset(db: Session, audio_asset_id: int, manual_over
             if lyrics:
                 return lyrics
 
+        if allow_missing:
+            return ""
         raise HTTPException(status_code=422, detail="Für dieses manuell importierte Audio wurde kein verwertbarer Songtext gefunden. Bitte Songtext im Import oder in den Songdetails hinterlegen.")
 
     if song:
@@ -1572,7 +1576,14 @@ def resolve_lyrics_for_audio_asset(db: Session, audio_asset_id: int, manual_over
                 if lyrics:
                     return lyrics
 
+    if allow_missing:
+        return ""
     raise HTTPException(status_code=422, detail="Für diesen Song wurde kein verwertbarer Songtext gefunden.")
+
+
+def has_visible_lyrics_for_alignment(lyrics: str) -> bool:
+    """True nur wenn der Text sichtbare Lyrics-Zeilen fuer das Standard-Alignment enthaelt."""
+    return bool(_script_parse_lyrics_text(lyrics, skip_prefixes=("#", "/", ";"), skip_parens=False))
 
 def load_transcription_admin_settings(db: Session) -> dict[str, Any]:
     settings = get_settings()
@@ -2780,6 +2791,109 @@ def align_lyrics_to_timeline_bundle(lyrics: str, asr: AsrResult, duration_second
 
 def align_lyrics_to_timeline(lyrics: str, asr: AsrResult, duration_seconds: float) -> list[dict[str, Any]]:
     return align_lyrics_to_timeline_bundle(lyrics, asr, duration_seconds)["segments"]
+
+
+def _transcription_only_segments_from_asr_segments(asr_segments: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    segments: list[dict[str, Any]] = []
+    for item in asr_segments or []:
+        text = str(item.get("text") or "").strip()
+        start = _seconds(item.get("start"), -1.0)
+        end = _seconds(item.get("end"), -1.0)
+        if not text or start < 0 or end <= start:
+            continue
+        segments.append({
+            "index": len(segments) + 1,
+            "start": round(start, 3),
+            "end": round(end, 3),
+            "text": text,
+            "alignment_confidence": 1.0,
+            "matched": True,
+            "alignment_method": "transcription_only_asr_segment",
+        })
+    return segments
+
+
+def _transcription_only_segments_from_words(words: list[WordTiming]) -> list[dict[str, Any]]:
+    valid_words = [
+        word
+        for word in sorted(words or [], key=lambda item: (item.start, item.end))
+        if str(word.word or "").strip() and word.end > word.start >= 0
+    ]
+    if not valid_words:
+        return []
+
+    max_chars = 76
+    max_duration = 5.5
+    gap_threshold = 0.85
+    current_words: list[WordTiming] = []
+    segments: list[dict[str, Any]] = []
+
+    def flush() -> None:
+        if not current_words:
+            return
+        text = " ".join(str(item.word or "").strip() for item in current_words if str(item.word or "").strip()).strip()
+        if text:
+            start = float(current_words[0].start)
+            end = max(float(current_words[-1].end), start + 0.3)
+            segments.append({
+                "index": len(segments) + 1,
+                "start": round(start, 3),
+                "end": round(end, 3),
+                "text": text,
+                "alignment_confidence": 1.0,
+                "matched": True,
+                "alignment_method": "transcription_only_word_group",
+            })
+        current_words.clear()
+
+    for word in valid_words:
+        word_text = str(word.word or "").strip()
+        if not word_text:
+            continue
+        if current_words:
+            previous = current_words[-1]
+            candidate_text = " ".join([*(str(item.word or "").strip() for item in current_words), word_text]).strip()
+            candidate_duration = float(word.end) - float(current_words[0].start)
+            gap = float(word.start) - float(previous.end)
+            if gap > gap_threshold or len(candidate_text) > max_chars or candidate_duration > max_duration:
+                flush()
+        current_words.append(word)
+    flush()
+    return segments
+
+
+def build_transcription_only_srt_bundle(asr: AsrResult, duration_seconds: float) -> dict[str, Any]:
+    """Fallback fuer Audios ohne sichtbare Lyrics; Standard bleibt Lyrics-Alignment."""
+    segments = _transcription_only_segments_from_asr_segments(asr.segments or [])
+    source = "asr_segments"
+    if not segments:
+        segments = _transcription_only_segments_from_words(asr.words or [])
+        source = "word_timestamps"
+    if not segments and str(asr.text or "").strip():
+        end = max(float(duration_seconds or 0.0), 0.6)
+        segments = [{
+            "index": 1,
+            "start": 0.0,
+            "end": round(end, 3),
+            "text": str(asr.text or "").strip(),
+            "alignment_confidence": 0.35,
+            "matched": False,
+            "alignment_method": "transcription_only_full_text",
+        }]
+        source = "full_text"
+
+    normalized_segments = validate_and_normalize_srt_segments(segments)
+    if not normalized_segments:
+        raise HTTPException(status_code=422, detail="Transkription lieferte keinen verwertbaren Text fuer SRT.")
+    return {
+        "segments": normalized_segments,
+        "half_srt_text": segments_to_half_srt(normalized_segments, max_chars=22, min_dur=0.6),
+        "alignment_report": [],
+        "half_max_chars": 22,
+        "mode": "transcription_only_no_lyrics",
+        "source": source,
+    }
+
 
 def _normalize_segment_timing(segments: list[dict[str, Any]], duration_seconds: float) -> list[dict[str, Any]]:
     previous_end = 0.0
@@ -4006,30 +4120,60 @@ async def generate_srt_for_audio_asset(
             detail="Lyrics/Prompt werden als Source of Truth aufgeloest.",
             extra={"backend": backend, "configured_language": configured_language},
         )
-        source_lyrics = resolve_lyrics_for_audio_asset(db, audio_asset_id, manual_lyrics)
+        source_lyrics = resolve_lyrics_for_audio_asset(db, audio_asset_id, manual_lyrics, allow_missing=True)
+        has_alignment_lyrics = has_visible_lyrics_for_alignment(source_lyrics)
 
-        _update_srt_status_step(
-            db,
-            srt_task,
-            asset,
-            "lyrics_cleanup_started",
-            detail="Deterministische und optionale KI-Textaufbereitung laeuft.",
-            extra={"source_chars": len(source_lyrics or "")},
-        )
-        lyrics, lyrics_cleanup_info = await prepare_lyrics_for_srt_alignment(db, asset, source_lyrics, admin_settings)
-        _update_srt_status_step(
-            db,
-            srt_task,
-            asset,
-            "lyrics_cleanup_completed",
-            detail="Textaufbereitung abgeschlossen.",
-            extra={
-                "source_chars": lyrics_cleanup_info.get("source_chars") if isinstance(lyrics_cleanup_info, dict) else len(source_lyrics or ""),
-                "clean_chars": lyrics_cleanup_info.get("clean_chars") if isinstance(lyrics_cleanup_info, dict) else len(lyrics or ""),
-                "method": lyrics_cleanup_info.get("method") if isinstance(lyrics_cleanup_info, dict) else None,
-                "ai_used": bool((lyrics_cleanup_info.get("ai") or {}).get("used")) if isinstance(lyrics_cleanup_info, dict) and isinstance(lyrics_cleanup_info.get("ai"), dict) else False,
-            },
-        )
+        if has_alignment_lyrics:
+            _update_srt_status_step(
+                db,
+                srt_task,
+                asset,
+                "lyrics_cleanup_started",
+                detail="Deterministische und optionale KI-Textaufbereitung laeuft.",
+                extra={"source_chars": len(source_lyrics or "")},
+            )
+            lyrics, lyrics_cleanup_info = await prepare_lyrics_for_srt_alignment(db, asset, source_lyrics, admin_settings)
+            has_alignment_lyrics = has_visible_lyrics_for_alignment(lyrics)
+            _update_srt_status_step(
+                db,
+                srt_task,
+                asset,
+                "lyrics_cleanup_completed",
+                detail="Textaufbereitung abgeschlossen.",
+                extra={
+                    "source_chars": lyrics_cleanup_info.get("source_chars") if isinstance(lyrics_cleanup_info, dict) else len(source_lyrics or ""),
+                    "clean_chars": lyrics_cleanup_info.get("clean_chars") if isinstance(lyrics_cleanup_info, dict) else len(lyrics or ""),
+                    "method": lyrics_cleanup_info.get("method") if isinstance(lyrics_cleanup_info, dict) else None,
+                    "ai_used": bool((lyrics_cleanup_info.get("ai") or {}).get("used")) if isinstance(lyrics_cleanup_info, dict) and isinstance(lyrics_cleanup_info.get("ai"), dict) else False,
+                    "alignment_lyrics": has_alignment_lyrics,
+                },
+            )
+        else:
+            lyrics = ""
+            lyrics_cleanup_info = {
+                "enabled": False,
+                "used": False,
+                "method": "skipped_no_lyrics",
+                "source_chars": 0,
+                "clean_chars": 0,
+                "reason": "no_visible_lyrics_for_alignment",
+            }
+            _update_srt_status_step(
+                db,
+                srt_task,
+                asset,
+                "lyrics_cleanup_started",
+                detail="Kein verwertbarer Songtext vorhanden; Textaufbereitung wird uebersprungen.",
+                extra=lyrics_cleanup_info,
+            )
+            _update_srt_status_step(
+                db,
+                srt_task,
+                asset,
+                "lyrics_cleanup_completed",
+                detail="Kein verwertbarer Songtext vorhanden; SRT wird aus Transkription erstellt.",
+                extra=lyrics_cleanup_info,
+            )
 
         language, language_info = resolve_transcription_language(configured_language, lyrics)
         _update_srt_status_step(
@@ -4127,8 +4271,15 @@ async def generate_srt_for_audio_asset(
             asr.raw["songstudio_transcription_audio_source"] = transcription_audio_source
             asr.raw["songstudio_lyrics_cleanup"] = lyrics_cleanup_info
 
-        _update_srt_status_step(db, srt_task, asset, "alignment_started", detail="Lyrics werden auf die Transkriptionszeiten ausgerichtet.")
-        alignment_bundle = align_lyrics_to_timeline_bundle(lyrics, asr, duration)
+        _update_srt_status_step(
+            db,
+            srt_task,
+            asset,
+            "alignment_started",
+            detail="Lyrics werden auf die Transkriptionszeiten ausgerichtet." if has_alignment_lyrics else "Keine Lyrics vorhanden; ASR-Text wird direkt als SRT segmentiert.",
+            extra={"mode": "lyrics_alignment" if has_alignment_lyrics else "transcription_only_no_lyrics"},
+        )
+        alignment_bundle = align_lyrics_to_timeline_bundle(lyrics, asr, duration) if has_alignment_lyrics else build_transcription_only_srt_bundle(asr, duration)
         segments = alignment_bundle["segments"]
         half_srt_text = str(alignment_bundle.get("half_srt_text") or "")
         srt_text = segments_to_srt(segments)
@@ -4142,6 +4293,8 @@ async def generate_srt_for_audio_asset(
                 "segments": len(segments or []),
                 "alignment_warnings": len(alignment_bundle.get("alignment_report") or []),
                 "half_srt": bool(half_srt_text.strip()),
+                "mode": alignment_bundle.get("mode") or "lyrics_alignment",
+                "source": alignment_bundle.get("source"),
             },
         )
         if not srt_text.strip():
@@ -4168,13 +4321,13 @@ async def generate_srt_for_audio_asset(
         transcript.generated_at = utc_now_naive()
         transcript.updated_at = utc_now_naive()
         db.add(transcript)
-        structure_segments = _store_structure_segments_from_srt_alignment(db, asset, source_lyrics, segments, duration)
+        structure_segments = _store_structure_segments_from_srt_alignment(db, asset, source_lyrics, segments, duration) if has_alignment_lyrics else []
         _update_srt_status_step(
             db,
             srt_task,
             asset,
             "structure_segments_stored",
-            detail="Waveform-Struktursegmente wurden aus SRT-Zeiten gespeichert.",
+            detail="Waveform-Struktursegmente wurden aus SRT-Zeiten gespeichert." if has_alignment_lyrics else "Keine Lyrics-Struktur vorhanden; Waveform-Struktursegmente wurden nicht geaendert.",
             extra={"structure_segments": len(structure_segments or [])},
             commit=False,
         )
@@ -4186,6 +4339,9 @@ async def generate_srt_for_audio_asset(
         result["lyrics_cleanup"] = lyrics_cleanup_info
         result["alignment_report"] = alignment_bundle.get("alignment_report") or []
         result["half_max_chars"] = alignment_bundle.get("half_max_chars", 22)
+        result["srt_generation_mode"] = alignment_bundle.get("mode") or "lyrics_alignment"
+        if alignment_bundle.get("source"):
+            result["srt_generation_source"] = alignment_bundle.get("source")
         if structure_segments:
             result["structure_segments"] = structure_segments
         _finish_srt_status_task(db, srt_task, asset, "SUCCESS", "SRT wurde erzeugt und gespeichert.", result)
