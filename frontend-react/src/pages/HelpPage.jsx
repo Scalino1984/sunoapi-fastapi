@@ -8,6 +8,7 @@ const shortcutGroups = [
       ['Leertaste', 'Play/Pause, sofern kein Textfeld aktiv ist'],
       ['P', 'Play/Pause'],
       ['K', 'Play/Pause'],
+      ['V', 'Aktuellen Song von vorne spielen'],
       ['W', 'Nächster Track'],
       ['N', 'Nächster Track'],
       ['Z', 'Vorheriger Track'],
@@ -27,7 +28,7 @@ const shortcutGroups = [
       ['ESC', 'Oberstes Modal, Menü oder Suche schließen, danach Songdetails Schritt für Schritt zurück'],
       ['X', 'Songdetails schließen und zurück zur Library, auch wenn der Audio-Player läuft'],
       ['M', 'Sidebar-Modus umschalten: offen → Symbole → weg'],
-      ['H oder ?', 'Diese Hilfe öffnen']
+      ['H oder ?', 'Hilfe als Schnellübersicht öffnen']
     ]
   }
 ];
@@ -53,7 +54,7 @@ const quickStartSteps = [
   },
   {
     title: '4. Status und Exporte kontrollieren',
-    text: 'Die Statusseite zeigt laufende Tasks, Import-Backfills und Detailprotokolle. Workflow und Mini-DAW bereiten Exporte, Pakete und Bearbeitung vor.',
+    text: 'Die Statusseite zeigt laufende Tasks und Detailprotokolle. Mini-DAW, Library-ZIP und einzelne Exportfunktionen übernehmen Pakete und Bearbeitung.',
     target: 'status',
     action: 'Status öffnen'
   }
@@ -146,7 +147,6 @@ const directLinks = [
   ['/music', 'Musik generieren'],
   ['/library', 'Library'],
   ['/lyrics', 'Songstudio'],
-  ['/production', 'Workflow'],
   ['/texts', 'Songtexte'],
   ['/playlists', 'Playlists'],
   ['/styles', 'Styles'],
@@ -206,6 +206,7 @@ const helpContentEn = {
         ['Space', 'Play/pause if no text field is active'],
         ['P', 'Play/pause'],
         ['K', 'Play/pause'],
+        ['V', 'Replay current song from start'],
         ['W', 'Next track'],
         ['N', 'Next track'],
         ['Z', 'Previous track'],
@@ -225,7 +226,7 @@ const helpContentEn = {
         ['ESC', 'Close the topmost modal, menu or search, then step back through song details'],
         ['X', 'Close song details and return to the library, even while the audio player is running'],
         ['M', 'Toggle sidebar mode: open → icons → hidden'],
-        ['H or ?', 'Open this help page']
+        ['H or ?', 'Open help as a quick overview']
       ]
     }
   ],
@@ -250,7 +251,7 @@ const helpContentEn = {
     },
     {
       title: '4. Check status and exports',
-      text: 'The status page shows running tasks, import backfills and detailed logs. Workflow and Mini DAW help prepare exports, packages and edits.',
+      text: 'The status page shows running tasks and detailed logs. Mini DAW, library ZIP and dedicated export actions handle packages and edits.',
       target: 'status',
       action: 'Open status'
     }
@@ -339,7 +340,6 @@ const helpContentEn = {
     ['/music', 'Generate music'],
     ['/library', 'Library'],
     ['/lyrics', 'Song studio'],
-    ['/production', 'Workflow'],
     ['/texts', 'Lyrics'],
     ['/playlists', 'Playlists'],
     ['/styles', 'Styles'],

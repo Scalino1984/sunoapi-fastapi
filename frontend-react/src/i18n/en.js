@@ -49,11 +49,13 @@ export const en = {
   nav: {
     home: 'Home',
     library: 'Library',
+    imports: 'Import',
     music: 'Music',
     lyrics: 'Studio',
     production: 'Workflow',
     texts: 'Lyrics',
     playlists: 'Playlists',
+    trash: 'Trash',
     styles: 'Styles',
     daw: 'Mini DAW',
     admin: 'Admin',
@@ -82,6 +84,7 @@ export const en = {
     credits: 'Credits: {{value}}',
     focusTitle: 'Show/hide extra containers',
     focus: 'Focus',
+    help: 'Open help (H)',
     enableDark: 'Enable dark mode',
     enableLight: 'Enable light mode',
     dark: 'Dark',
@@ -139,6 +142,17 @@ export const en = {
     downloadAudioPackage: 'Audio package ZIP',
     downloadAudio: 'Download audio',
     position: 'Position',
+    shortcuts: {
+      playPause: 'Space/K/P',
+      restartCurrent: 'V',
+      previous: 'Shift+←/Z',
+      next: 'Shift+→/N/W',
+      seekBackward10: '←/J',
+      seekForward10: '→/L',
+      loop: 'R',
+      close: 'C',
+      openDetails: 'D'
+    },
     errors: {
       audioLoad: 'Audio could not be loaded.',
       audioPreparing: 'Audio is being prepared locally. Retrying start…',
@@ -374,6 +388,67 @@ export const en = {
       songBatchFailed: 'Suno song batch could not be imported.'
     }
   },
+  trash: {
+    eyebrow: 'Deleted content',
+    title: 'Trash',
+    text: 'Content moved to trash from library actions appears here. You can restore it or remove it permanently.',
+    searchPlaceholder: 'Search title or deletion reason',
+    contentType: 'Content type',
+    restore: 'Restore',
+    purge: 'Delete permanently',
+    restoreSelected: 'Restore selection',
+    purgeSelected: 'Delete selection permanently',
+    emptyTrash: 'Empty entire trash',
+    selectAll: 'Select all',
+    clearSelection: 'Clear all',
+    selectionTitle: 'Selection',
+    selectedCount: '{{count}} selected',
+    selectItem: 'Select {{title}}',
+    deletedAt: 'Deleted',
+    emptyTitle: 'Trash is empty',
+    emptyText: 'Deleted content appears here after it was removed with soft delete.',
+    sidebar: {
+      empty: 'Trash is empty',
+      emptyShort: 'Empty',
+      hasItems: 'Trash contains items',
+      hasItemsShort: 'Deleted content available'
+    },
+    filters: {
+      all: 'All',
+      audio: 'Audio',
+      song: 'Songs',
+      lyric: 'Lyrics',
+      style: 'Styles',
+      playlist: 'Playlists',
+      task: 'Tasks',
+      project: 'Projects'
+    },
+    types: {
+      audio: 'Audio',
+      song: 'Song',
+      lyric: 'Lyrics',
+      style: 'Style',
+      playlist: 'Playlist',
+      persona: 'Persona',
+      task: 'Task',
+      project: 'Project',
+      'production-profile': 'Production profile'
+    },
+    messages: {
+      loadFailed: 'Trash could not be loaded.',
+      restored: 'Content was restored.',
+      restoreFailed: 'Content could not be restored.',
+      purgeConfirm: 'Delete “{{title}}” permanently?\n\nThis action cannot be undone.',
+      purged: 'Content was permanently deleted.',
+      purgeFailed: 'Content could not be permanently deleted.',
+      bulkRestored: '{{count}} item(s) were restored.',
+      bulkRestoreFailed: 'Selection could not be restored.',
+      bulkPurgeConfirm: 'Delete {{count}} selected item(s) permanently?\n\nThis action cannot be undone.',
+      bulkPurged: '{{count}} item(s) were permanently deleted.',
+      bulkPurgePartialFailed: '{{count}} item(s) could not be permanently deleted.',
+      emptyConfirm: 'Empty the entire trash with {{count}} item(s) permanently?\n\nThis action cannot be undone.'
+    }
+  },
   system: {
     eyebrow: 'Operations',
     state: {
@@ -498,6 +573,9 @@ export const en = {
       eyebrow: 'Welcome back',
       title: 'What do you want to produce today?',
       text: 'Start with a clear workflow or continue directly from your latest projects.'
+    },
+    clock: {
+      label: 'Current time'
     },
     stats: {
       credits: 'Credits',

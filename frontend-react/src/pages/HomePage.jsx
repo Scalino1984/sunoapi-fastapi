@@ -1,10 +1,47 @@
-import React, { useMemo } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Bell, BookOpenText, Download, FileText, Headphones, ListMusic, Mic2, Music, Wand2 } from 'lucide-react';
 import { EmptyState } from '../components/EmptyState.jsx';
 import { formatDate, formatDuration, groupAssetsByProject, pickStyle, safeArray, summarizeStyle } from '../utils.js';
 import { useI18n } from '../i18n/I18nContext.jsx';
 
-export function HomePage({ assets = [], lyrics = [], playlists = [], tasks = [], notifications = [], credits, onNavigate, onPlay, onOpenAsset }) {
+function LiveHomeClock() {
+  const { language } = useI18n();
+  const [now, setNow] = useState(() => new Date());
+  const locale = language === 'en' ? 'en-US' : 'de-DE';
+  const seconds = now.getSeconds();
+  const minutes = now.getMinutes();
+  const hours = now.getHours() % 12;
+  const secondDeg = seconds * 6;
+  const minuteDeg = (minutes + seconds / 60) * 6;
+  const hourDeg = (hours + minutes / 60) * 30;
+  const currentDate = useMemo(() => new Intl.DateTimeFormat(locale, {
+    weekday: 'long',
+    day: '2-digit',
+    month: 'long',
+    year: 'numeric',
+  }).format(now), [locale, now]);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(new Date()), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  return (
+    <time className="home-clock" dateTime={now.toISOString()} aria-label={currentDate}>
+      <span className="home-clock-face" aria-hidden="true">
+        <span className="home-clock-hand home-clock-hour" style={{ transform: `translateX(-50%) rotate(${hourDeg}deg)` }} />
+        <span className="home-clock-hand home-clock-minute" style={{ transform: `translateX(-50%) rotate(${minuteDeg}deg)` }} />
+        <span className="home-clock-hand home-clock-second" style={{ transform: `translateX(-50%) rotate(${secondDeg}deg)` }} />
+        <span className="home-clock-pin" />
+      </span>
+      <span className="home-clock-copy">
+        <small>{currentDate}</small>
+      </span>
+    </time>
+  );
+}
+
+export function HomePage({ assets = [], lyrics = [], playlists = [], tasks = [], notifications = [], onNavigate, onPlay, onOpenAsset }) {
   const { t } = useI18n();
   const projects = useMemo(() => groupAssetsByProject(safeArray(assets, ['assets', 'items'])).slice(0, 6), [assets]);
   const openTasks = useMemo(() => safeArray(tasks, ['tasks', 'items']).filter((task) => {
@@ -30,11 +67,7 @@ export function HomePage({ assets = [], lyrics = [], playlists = [], tasks = [],
           <h1>{t('home.hero.title', 'Was möchtest du heute produzieren?')}</h1>
           <p className="muted">{t('home.hero.text', 'Starte über einen klaren Workflow oder setze direkt an deinen letzten Projekten fort.')}</p>
         </div>
-        <div className="home-stats">
-          <div><span>{t('home.stats.credits', 'Credits')}</span><strong>{credits ?? '—'}</strong></div>
-          <div><span>{t('home.stats.songs', 'Songs')}</span><strong>{projects.length}</strong></div>
-          <div><span>{t('home.stats.open', 'Offen')}</span><strong>{openTasks.length}</strong></div>
-        </div>
+        <LiveHomeClock />
       </section>
 
       <section className="workflow-card-grid">

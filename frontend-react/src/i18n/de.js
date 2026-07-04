@@ -49,11 +49,13 @@ export const de = {
   nav: {
     home: 'Home',
     library: 'Library',
+    imports: 'Import',
     music: 'Musik',
     lyrics: 'Studio',
     production: 'Workflow',
     texts: 'Songtexte',
     playlists: 'Playlists',
+    trash: 'Papierkorb',
     styles: 'Styles',
     daw: 'Mini-DAW',
     admin: 'Admin',
@@ -82,6 +84,7 @@ export const de = {
     credits: 'Credits: {{value}}',
     focusTitle: 'Zusatzcontainer ein-/ausblenden',
     focus: 'Fokus',
+    help: 'Hilfe öffnen (H)',
     enableDark: 'Dark Mode aktivieren',
     enableLight: 'Light Mode aktivieren',
     dark: 'Dark',
@@ -139,6 +142,17 @@ export const de = {
     downloadAudioPackage: 'Audio-Paket ZIP',
     downloadAudio: 'Audio herunterladen',
     position: 'Position',
+    shortcuts: {
+      playPause: 'Leertaste/K/P',
+      restartCurrent: 'V',
+      previous: 'Shift+←/Z',
+      next: 'Shift+→/N/W',
+      seekBackward10: '←/J',
+      seekForward10: '→/L',
+      loop: 'R',
+      close: 'C',
+      openDetails: 'D'
+    },
     errors: {
       audioLoad: 'Audio konnte nicht geladen werden.',
       audioPreparing: 'Audio wird lokal vorbereitet. Erneuter Start läuft…',
@@ -374,6 +388,67 @@ export const de = {
       songBatchFailed: 'Suno-Song-Batch konnte nicht importiert werden.'
     }
   },
+  trash: {
+    eyebrow: 'Gelöschte Inhalte',
+    title: 'Papierkorb',
+    text: 'Hier landen Inhalte, die über Library-Aktionen in den Papierkorb verschoben wurden. Du kannst sie wiederherstellen oder endgültig entfernen.',
+    searchPlaceholder: 'Titel oder Löschgrund suchen',
+    contentType: 'Inhaltstyp',
+    restore: 'Wiederherstellen',
+    purge: 'Endgültig löschen',
+    restoreSelected: 'Auswahl wiederherstellen',
+    purgeSelected: 'Auswahl endgültig löschen',
+    emptyTrash: 'Den gesamten Papierkorb leeren',
+    selectAll: 'Alle auswählen',
+    clearSelection: 'Alle aufheben',
+    selectionTitle: 'Auswahl',
+    selectedCount: '{{count}} ausgewählt',
+    selectItem: '{{title}} auswählen',
+    deletedAt: 'Gelöscht',
+    emptyTitle: 'Papierkorb ist leer',
+    emptyText: 'Gelöschte Inhalte erscheinen hier, sobald sie per Soft-Delete entfernt wurden.',
+    sidebar: {
+      empty: 'Papierkorb ist leer',
+      emptyShort: 'Leer',
+      hasItems: 'Papierkorb enthält Inhalte',
+      hasItemsShort: 'Gelöschte Inhalte vorhanden'
+    },
+    filters: {
+      all: 'Alle',
+      audio: 'Audio',
+      song: 'Songs',
+      lyric: 'Songtexte',
+      style: 'Styles',
+      playlist: 'Playlists',
+      task: 'Tasks',
+      project: 'Projekte'
+    },
+    types: {
+      audio: 'Audio',
+      song: 'Song',
+      lyric: 'Songtext',
+      style: 'Style',
+      playlist: 'Playlist',
+      persona: 'Persona',
+      task: 'Task',
+      project: 'Projekt',
+      'production-profile': 'Produktionsprofil'
+    },
+    messages: {
+      loadFailed: 'Papierkorb konnte nicht geladen werden.',
+      restored: 'Inhalt wurde wiederhergestellt.',
+      restoreFailed: 'Inhalt konnte nicht wiederhergestellt werden.',
+      purgeConfirm: '„{{title}}“ endgültig löschen?\n\nDiese Aktion kann nicht rückgängig gemacht werden.',
+      purged: 'Inhalt wurde endgültig gelöscht.',
+      purgeFailed: 'Inhalt konnte nicht endgültig gelöscht werden.',
+      bulkRestored: '{{count}} Inhalt(e) wurden wiederhergestellt.',
+      bulkRestoreFailed: 'Auswahl konnte nicht wiederhergestellt werden.',
+      bulkPurgeConfirm: '{{count}} ausgewählte Inhalt(e) endgültig löschen?\n\nDiese Aktion kann nicht rückgängig gemacht werden.',
+      bulkPurged: '{{count}} Inhalt(e) wurden endgültig gelöscht.',
+      bulkPurgePartialFailed: '{{count}} Inhalt(e) konnten nicht endgültig gelöscht werden.',
+      emptyConfirm: 'Den gesamten Papierkorb mit {{count}} Inhalt(en) endgültig leeren?\n\nDiese Aktion kann nicht rückgängig gemacht werden.'
+    }
+  },
   system: {
     eyebrow: 'Betrieb',
     state: {
@@ -498,6 +573,9 @@ export const de = {
       eyebrow: 'Willkommen zurück',
       title: 'Was möchtest du heute produzieren?',
       text: 'Starte über einen klaren Workflow oder setze direkt an deinen letzten Projekten fort.'
+    },
+    clock: {
+      label: 'Aktuelle Zeit'
     },
     stats: {
       credits: 'Credits',

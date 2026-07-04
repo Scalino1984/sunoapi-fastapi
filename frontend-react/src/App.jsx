@@ -1,17 +1,17 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowUp, BookOpenText, Brush, ChevronDown, Command, FileText, Home, ListMusic, Menu, Mic2, Moon, MoreHorizontal, Music, RefreshCw, Rocket, Scissors, Search, Settings, Shield, Sun, X } from 'lucide-react';
+import { ArrowUp, BookOpenText, Brush, ChevronDown, CircleHelp, Command, FileText, Home, ListMusic, Menu, Mic2, Moon, MoreHorizontal, Music, RefreshCw, Scissors, Search, Settings, Shield, Sun, Trash, Trash2, UploadCloud, X } from 'lucide-react';
 import { api } from './api/client.js';
 import { assetSearchText, friendlyNotification } from './utils.js';
 import { Login } from './components/Login.jsx';
 import { MiniPlayer } from './components/MiniPlayer.jsx';
 import { Toast } from './components/Toast.jsx';
 import { StatusDetailModal } from './components/StatusDetailModal.jsx';
+import { Modal } from './components/Modal.jsx';
 import { ProfileMenu } from './components/ProfileMenu.jsx';
 import { HomePage } from './pages/HomePage.jsx';
 import { LibraryPage } from './pages/LibraryPage.jsx';
 import { MusicPage } from './pages/MusicPage.jsx';
 import { LyricsStudioPage } from './pages/LyricsStudioPage.jsx';
-import { ProductionPage } from './pages/ProductionPage.jsx';
 import { HelpPage } from './pages/HelpPage.jsx';
 import { LibraryTextPage } from './pages/LibraryTextPage.jsx';
 import { PlaylistsPage } from './pages/PlaylistsPage.jsx';
@@ -20,6 +20,8 @@ import { AdminPage } from './pages/AdminPage.jsx';
 import { SystemPage } from './pages/SystemPage.jsx';
 import { StatusPage } from './pages/StatusPage.jsx';
 import { DawPage } from './pages/DawPage.jsx';
+import { TrashPage } from './pages/TrashPage.jsx';
+import { ImportPage } from './pages/ImportPage.jsx';
 import { GlobalAIAssistant } from './components/GlobalAIAssistant.jsx';
 import { AppAssistantProvider } from './context/AppAssistantContext.jsx';
 import { buildAvailableAssistantActions, createAssistantActions } from './assistant/assistantActions.js';
@@ -28,11 +30,12 @@ import { useI18n } from './i18n/I18nContext.jsx';
 const tabs = [
   ['home', 'Home', Home],
   ['library', 'Library', ListMusic],
+  ['imports', 'Import', UploadCloud],
   ['music', 'Musik', Music],
   ['lyrics', 'Studio', Mic2],
-  ['production', 'Workflow', Rocket],
   ['texts', 'Songtexte', FileText],
   ['playlists', 'Playlists', BookOpenText],
+  ['trash', 'Papierkorb', Trash2],
   ['styles', 'Styles', Brush],
   ['daw', 'Mini-DAW', Scissors],
   ['admin', 'Admin', Shield],
@@ -41,13 +44,6 @@ const tabs = [
   ['help', 'Hilfe', BookOpenText]
 ];
 
-
-const tabGroups = [
-  { label: 'Direkt', keys: ['home', 'library', 'lyrics', 'music'] },
-  { label: 'Produktion', keys: ['production', 'texts', 'styles', 'daw'] },
-  { label: 'Sammlung', keys: ['playlists'] },
-  { label: 'System', keys: ['status', 'admin', 'system', 'help'] }
-];
 
 const tabByKey = Object.fromEntries(tabs.map((tab) => [tab[0], tab]));
 
@@ -133,7 +129,7 @@ const NOTIFICATION_STARTUP_GRACE_MS = 5000;
 const SIDEBAR_STORAGE_KEY = 'react-sidebar-mode';
 const WORKSPACE_FOCUS_STORAGE_KEY = 'react-workspace-focus';
 
-const directSidebarKeys = ['home', 'library', 'lyrics', 'music'];
+const directSidebarKeys = ['home', 'library', 'imports', 'lyrics', 'music'];
 
 function getInitialSidebarMode() {
   try {
@@ -285,6 +281,8 @@ export default function App() {
   const [commandQuery, setCommandQuery] = useState('');
   const [mobileSearchOpen, setMobileSearchOpen] = useState(false);
   const [topbarMenuOpen, setTopbarMenuOpen] = useState(false);
+  const [helpModalOpen, setHelpModalOpen] = useState(false);
+  const [trashHasItems, setTrashHasItems] = useState(false);
   const [showMobileScrollTop, setShowMobileScrollTop] = useState(false);
   const showMobileScrollTopRef = useRef(false);
   const playbackRefreshLockRef = useRef(false);
@@ -620,6 +618,27 @@ export default function App() {
       if (!silent) setRefreshing(false);
     }
   }, []);
+
+  const refreshTrashIndicator = useCallback(async () => {
+    try {
+      const rows = await api.library.trash({ q: '', contentType: 'all', limit: 1 });
+      setTrashHasItems(Array.isArray(rows) && rows.length > 0);
+    } catch {
+      setTrashHasItems(false);
+    }
+  }, []);
+
+  const markTrashHasItems = useCallback(() => {
+    setTrashHasItems(true);
+  }, []);
+
+  useEffect(() => {
+    if (!user) {
+      setTrashHasItems(false);
+      return;
+    }
+    refreshTrashIndicator();
+  }, [refreshTrashIndicator, user]);
 
   const handleFavoriteChange = useCallback((assetId, isFavorite) => {
     const id = String(assetId || '');
@@ -1071,6 +1090,12 @@ export default function App() {
         sendPlayerCommand('seek-forward');
         return;
       }
+      if (lower === 'v') {
+        if (!hasQueue) return;
+        event.preventDefault();
+        sendPlayerCommand('restart-current');
+        return;
+      }
       if (lower === 'n' || lower === 'w') {
         if (!hasQueue) return;
         event.preventDefault();
@@ -1121,8 +1146,7 @@ export default function App() {
       }
       if (key === '?' || lower === 'h') {
         event.preventDefault();
-        setActiveTab('help');
-        notify('Hilfe geöffnet.', 'info');
+        setHelpModalOpen(true);
       }
     }
 
@@ -1557,9 +1581,9 @@ export default function App() {
     [t]
   );
   const localizedSidebarSections = useMemo(() => ([
-    { label: t('nav.groups.production', 'Produktion'), keys: ['production', 'daw'] },
+    { label: t('nav.groups.production', 'Produktion'), keys: ['daw'] },
     { label: t('nav.groups.collection', 'Sammlung'), keys: ['playlists', 'styles', 'texts'] },
-    { label: t('nav.groups.control', 'Kontrolle'), keys: ['status', 'system', 'help'] },
+    { label: t('nav.groups.control', 'Kontrolle'), keys: ['status', 'system'] },
     { label: t('nav.groups.administration', 'Verwaltung'), keys: ['admin'] }
   ]), [t]);
   const toggleLanguage = useCallback(() => {
@@ -1617,27 +1641,34 @@ export default function App() {
   const currentPageTasks = activeTab === 'home' || activeTab === 'status' ? tasks : null;
   const currentPageNotifications = activeTab === 'home' || activeTab === 'status' ? notifications : null;
   const currentPageTaskRefreshState = activeTab === 'music' || activeTab === 'status' ? taskRefreshState : null;
+  const navigateFromHelpModal = useCallback((key, options = {}) => {
+    setHelpModalOpen(false);
+    openMainTab(key, options);
+  }, [openMainTab]);
 
   const currentPage = useMemo(() => {
-    if (activeTab === 'home') return <HomePage assets={assets} lyrics={lyrics} playlists={playlists} tasks={tasks} notifications={notifications} credits={credits} onNavigate={openMainTab} onPlay={play} onOpenAsset={requestLibraryAssetOpen} />;
-    if (activeTab === 'library') return <LibraryPage assets={assets} loadError={libraryLoadError} voices={voices} playlists={playlists} onReload={refreshAll} onPlay={play} notify={notify} onUseLyric={useLyricForMusic} onReusePrompt={reusePromptForMusic} openAssetId={libraryOpenAssetId} openAssetRequestKey={libraryOpenRequestKey} onOpenAssetHandled={handleLibraryOpenAssetHandled} resetSignal={libraryResetSignal} onOpenDaw={(asset) => { setDawOpenAssetId(asset?.id || asset); setActiveTab('daw'); }} playbackState={stablePlaybackState} onToggleCurrentPlayback={toggleCurrentPlayer} onDetailTitleChange={handleLibraryDetailRouteChange} routeDetailSlug={libraryRouteDetailSlug} searchQuery={commandQuery} />;
+    if (activeTab === 'home') return <HomePage assets={assets} lyrics={lyrics} playlists={playlists} tasks={tasks} notifications={notifications} onNavigate={openMainTab} onPlay={play} onOpenAsset={requestLibraryAssetOpen} />;
+    if (activeTab === 'library') return <LibraryPage assets={assets} loadError={libraryLoadError} voices={voices} playlists={playlists} onReload={refreshAll} onPlay={play} notify={notify} onUseLyric={useLyricForMusic} onReusePrompt={reusePromptForMusic} openAssetId={libraryOpenAssetId} openAssetRequestKey={libraryOpenRequestKey} onOpenAssetHandled={handleLibraryOpenAssetHandled} resetSignal={libraryResetSignal} onOpenDaw={(asset) => { setDawOpenAssetId(asset?.id || asset); setActiveTab('daw'); }} playbackState={stablePlaybackState} onToggleCurrentPlayback={toggleCurrentPlayer} onDetailTitleChange={handleLibraryDetailRouteChange} routeDetailSlug={libraryRouteDetailSlug} searchQuery={commandQuery} onTrashChanged={markTrashHasItems} />;
+    if (activeTab === 'imports') return <ImportPage notify={notify} onReload={refreshAll} onOpenAsset={requestLibraryAssetOpen} />;
     if (activeTab === 'music') return <MusicPage styles={styles} voices={voices} uploadedFiles={uploadedFiles} assets={assets} draft={musicDraft} notify={notify} onRefresh={refreshAll} onMusicStarted={handleMusicStarted} initialWizard={musicWizardSignal} taskRefreshState={taskRefreshState} onCheckStatus={() => refreshPendingAndReload({ manual: true })} />;
     if (activeTab === 'lyrics') return <LyricsStudioPage lyrics={lyrics} assets={assets} notify={notify} onRefresh={refreshAll} useForMusic={useLyricForMusic} />;
-    if (activeTab === 'production') return <ProductionPage notify={notify} onReload={refreshAll} onNavigate={openMainTab} onOpenAsset={requestLibraryAssetOpen} />;
     if (activeTab === 'texts') return <LibraryTextPage lyrics={lyrics} notify={notify} onReload={refreshAll} useForMusic={useLyricForMusic} searchQuery={commandQuery} />;
     if (activeTab === 'playlists') return <PlaylistsPage playlists={playlists} assets={assets} notify={notify} onReload={refreshAll} onPlay={play} searchQuery={commandQuery} />;
+    if (activeTab === 'trash') return <TrashPage notify={notify} onReload={refreshAll} onTrashChanged={setTrashHasItems} />;
     if (activeTab === 'styles') return <StylesPage styles={styles} notify={notify} onReload={refreshAll} searchQuery={commandQuery} />;
     if (activeTab === 'daw') return <DawPage assets={assets} selectedAssetId={dawOpenAssetId} onSelectedHandled={() => setDawOpenAssetId(null)} onPlay={play} notify={notify} onReload={refreshAll} />;
     if (activeTab === 'admin') return <AdminPage notify={notify} />;
     if (activeTab === 'status') return <StatusPage notifications={notifications} tasks={tasks} onReload={refreshAll} onCheckStatus={() => refreshPendingAndReload({ manual: true })} taskRefreshState={taskRefreshState} onOpenNotification={openNotification} onOpenTaskDetails={openTaskDetails} notify={notify} />;
     if (activeTab === 'help') return <HelpPage onNavigate={openMainTab} notify={notify} />;
     return <SystemPage notify={notify} uploadedFiles={uploadedFiles} onRefresh={refreshAll} />;
-  }, [activeTab, assets, libraryLoadError, lyrics, styles, voices, uploadedFiles, playlists, musicDraft, currentPageNotifications, currentPageTasks, libraryOpenAssetId, dawOpenAssetId, libraryResetSignal, libraryRouteDetailSlug, commandQuery, musicWizardSignal, currentPageTaskRefreshState, stablePlaybackState, toggleCurrentPlayer, handleLibraryOpenAssetHandled, refreshAll, refreshPendingAndReload, handleMusicStarted, notify, requestLibraryAssetOpen, handleLibraryDetailRouteChange, libraryOpenRequestKey]);
+  }, [activeTab, assets, libraryLoadError, lyrics, styles, voices, uploadedFiles, playlists, musicDraft, currentPageNotifications, currentPageTasks, libraryOpenAssetId, dawOpenAssetId, libraryResetSignal, libraryRouteDetailSlug, commandQuery, musicWizardSignal, currentPageTaskRefreshState, stablePlaybackState, toggleCurrentPlayer, handleLibraryOpenAssetHandled, refreshAll, refreshPendingAndReload, handleMusicStarted, notify, requestLibraryAssetOpen, handleLibraryDetailRouteChange, libraryOpenRequestKey, markTrashHasItems]);
 
   if (!authChecked) return <main className="loading">{t('app.loading', 'Lade Anwendung…')}</main>;
   if (!user) return <Login onLogin={setUser} />;
 
   const openTaskCount = activeTaskCount(tasks);
+  const SidebarTrashIcon = trashHasItems ? Trash2 : Trash;
+  const trashLabel = localizedTabLabels.trash || t('nav.trash', 'Papierkorb');
 
   return (
     <AppAssistantProvider value={{ activeTab, assets, lyrics, styles, voices, playlists, tasks, notifications, executeFrontendAction, buildAssistantContext }}>
@@ -1679,6 +1710,7 @@ export default function App() {
             {openTaskCount > 0 && <button className="task-poll-pill live-pill" onClick={() => refreshPendingAndReload({ manual: true })} title={t('topbar.openTasksNow', 'Offene Suno-Tasks jetzt prüfen')}><RefreshCw size={14} className={taskRefreshState.running ? 'spin-icon' : ''} /> {t('topbar.activeTasksShort', '{{count}} aktiv', { count: openTaskCount })}</button>}
             <span className="credits topbar-credits">{t('topbar.credits', 'Credits: {{value}}', { value: credits ?? '—' })}</span>
             <button className={workspaceFocus ? 'active focus-toggle-button' : 'focus-toggle-button'} type="button" onClick={() => setWorkspaceFocus((value) => !value)} title={t('topbar.focusTitle', 'Zusatzcontainer ein-/ausblenden')}><Command size={16} /><span>{t('topbar.focus', 'Fokus')}</span></button>
+            <button className="header-help-button" type="button" onClick={() => setHelpModalOpen(true)} title={t('topbar.help', 'Hilfe öffnen (H)')} aria-label={t('topbar.help', 'Hilfe öffnen (H)')}><CircleHelp size={17} /></button>
             <button className="language-toggle-button" type="button" onClick={toggleLanguage} title={t('language.switchTo', 'Auf Englisch umschalten')} aria-label={t('language.switchTo', 'Auf Englisch umschalten')}>
               <span>{t('language.code', 'DE')}</span>
             </button>
@@ -1741,6 +1773,19 @@ export default function App() {
             })}
           </nav>
           <a
+            className={`sidebar-footer-card sidebar-footer-link sidebar-trash-link ${trashHasItems ? 'has-items' : 'is-empty'} ${activeTab === 'trash' ? 'active' : ''}`}
+            href={tabHref('trash')}
+            onClick={(event) => openTabLink(event, 'trash')}
+            title={trashHasItems ? t('trash.sidebar.hasItems', 'Papierkorb enthält Inhalte') : t('trash.sidebar.empty', 'Papierkorb ist leer')}
+            aria-label={trashHasItems ? t('trash.sidebar.hasItems', 'Papierkorb enthält Inhalte') : t('trash.sidebar.empty', 'Papierkorb ist leer')}
+          >
+            <SidebarTrashIcon size={19} />
+            <div>
+              <strong>{trashLabel}</strong>
+              <small>{trashHasItems ? t('trash.sidebar.hasItemsShort', 'Gelöschte Inhalte vorhanden') : t('trash.sidebar.emptyShort', 'Leer')}</small>
+            </div>
+          </a>
+          <a
             className={`sidebar-footer-card sidebar-footer-link ${activeTab === 'status' ? 'active' : ''}`}
             href={tabHref('status')}
             onClick={(event) => openTabLink(event, 'status')}
@@ -1775,6 +1820,9 @@ export default function App() {
         refreshRunning={modalTaskRefreshRunning || taskRefreshState.running}
         onPrepareRetry={prepareRetryFromStatus}
       />
+      <Modal open={helpModalOpen} title={t('nav.help', 'Hilfe')} onClose={() => setHelpModalOpen(false)} wide cardClassName="help-modal-card" contentClassName="help-modal-content">
+        <HelpPage onNavigate={navigateFromHelpModal} notify={notify} />
+      </Modal>
     </AppAssistantProvider>
   );
 }

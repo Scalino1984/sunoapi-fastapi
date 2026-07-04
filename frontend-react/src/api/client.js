@@ -307,7 +307,11 @@ export const api = {
     updateTitle: (type, id, title) => apiFetch(`/api/library/content/${type}/${id}/title`, { method: 'PATCH', body: JSON.stringify({ title }) }),
     updateCover: (type, id, formData) => apiFetch(`/api/library/content/${type}/${id}/cover`, { method: 'POST', body: formData }),
     deleteContent: (type, id) => apiFetch(`/api/library/content/${type}/${id}`, { method: 'DELETE' }),
-    bulkDeleteContent: (payload) => apiFetch('/api/library/content/bulk-delete', { method: 'POST', body: JSON.stringify(payload) })
+    bulkDeleteContent: (payload) => apiFetch('/api/library/content/bulk-delete', { method: 'POST', body: JSON.stringify(payload) }),
+    trash: ({ q = '', contentType = 'all', limit = 300 } = {}) => apiFetch(`/api/library/content/trash?q=${encodeURIComponent(q)}&content_type=${encodeURIComponent(contentType)}&limit=${encodeURIComponent(limit)}`),
+    restoreContent: (type, id) => apiFetch(`/api/library/content/${type}/${id}/restore`, { method: 'POST' }),
+    bulkRestoreContent: (payload) => apiFetch('/api/library/content/bulk-restore', { method: 'POST', body: JSON.stringify(payload) }),
+    purgeContent: (type, id, deleteFiles = true) => apiFetch(`/api/library/content/${type}/${id}/purge?delete_files=${deleteFiles ? 'true' : 'false'}`, { method: 'DELETE' })
   },
 
   assistant: {

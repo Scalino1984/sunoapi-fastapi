@@ -170,6 +170,10 @@ function useMediaQuery(query) {
   return matches;
 }
 
+function shortcutTitle(label, shortcut) {
+  return shortcut ? `${label} (${shortcut})` : label;
+}
+
 export function MiniPlayer({ queue, currentIndex, loop, sidebarMode = 'open', mobileNavOpen = false, playerCommand = 0, onPlaybackStateChange, onLoopChange, onIndexChange, onOpenDetails, onPrepareMusic, onFavoriteChange, onClose }) {
   const { t } = useI18n();
   const audioRef = useRef(null);
@@ -192,7 +196,8 @@ export function MiniPlayer({ queue, currentIndex, loop, sidebarMode = 'open', mo
   const [actionBusy, setActionBusy] = useState('');
   const [favoriteSaving, setFavoriteSaving] = useState(false);
   const [favoriteOverride, setFavoriteOverride] = useState(null);
-  const current = queue?.[currentIndex] || null;
+  const queueItems = Array.isArray(queue) ? queue : [];
+  const current = queueItems[currentIndex] || null;
   const currentAssetId = current?.id ? String(current.id) : '';
   const preferHalfSrtDisplay = useMediaQuery(MOBILE_SRT_MEDIA_QUERY);
 
@@ -535,6 +540,7 @@ export function MiniPlayer({ queue, currentIndex, loop, sidebarMode = 'open', mo
     if (!current) return;
 
     if (action === 'toggle') { void togglePlay(); return; }
+    if (action === 'restart-current') { void restartCurrent(); return; }
     if (action === 'pause') { pausePlayer(); return; }
     if (action === 'previous') { previous(); return; }
     if (action === 'next') { next(); return; }
@@ -607,13 +613,26 @@ export function MiniPlayer({ queue, currentIndex, loop, sidebarMode = 'open', mo
 
   const operation = operationLabel(current.operation_type || current.task_type, t);
   const currentVariantIndex = Number(current.project_variant_index || 0);
-  const currentVariantTotal = Number(current.project_variant_total || queue?.length || 0);
+  const currentVariantTotal = Number(current.project_variant_total || queueItems.length || 0);
   const currentDisplayTitle = current.project_variant_title
     || (currentVariantTotal > 1 && currentVariantIndex > 0 ? `${pickTitle(current)} ${currentVariantIndex}/${currentVariantTotal}` : pickTitle(current));
-  const canPrevious = currentIndex > 0;
-  const canNext = queue && currentIndex < queue.length - 1;
+  const currentQueueIndex = queueItems.findIndex((item) => String(item?.id || '') === currentAssetId);
+  const effectiveIndex = currentQueueIndex >= 0
+    ? currentQueueIndex
+    : Math.max(0, Math.min(Number(currentIndex || 0), Math.max(0, queueItems.length - 1)));
+  const canPrevious = effectiveIndex > 0;
+  const canNext = effectiveIndex < queueItems.length - 1;
   const progress = duration > 0 ? Math.min(100, Math.max(0, (currentTime / duration) * 100)) : 0;
   const currentFavorite = favoriteOverride === null ? Boolean(current?.is_favorite) : Boolean(favoriteOverride);
+  const keyPlayPause = t('player.shortcuts.playPause', 'Leertaste/K/P');
+  const keyRestart = t('player.shortcuts.restartCurrent', 'V');
+  const keyPrevious = t('player.shortcuts.previous', 'Shift+←/Z');
+  const keyNext = t('player.shortcuts.next', 'Shift+→/N/W');
+  const keySeekBackward = t('player.shortcuts.seekBackward10', '←/J');
+  const keySeekForward = t('player.shortcuts.seekForward10', '→/L');
+  const keyLoop = t('player.shortcuts.loop', 'R');
+  const keyClose = t('player.shortcuts.close', 'C');
+  const keyOpenDetails = t('player.shortcuts.openDetails', 'D');
 
   async function toggleCurrentFavorite() {
     if (!current?.id || favoriteSaving) return;
@@ -701,11 +720,11 @@ export function MiniPlayer({ queue, currentIndex, loop, sidebarMode = 'open', mo
   }
 
   function previous() {
-    if (canPrevious) onIndexChange(currentIndex - 1);
+    if (canPrevious) onIndexChange(effectiveIndex - 1);
   }
 
   function next() {
-    if (canNext) onIndexChange(currentIndex + 1);
+    if (canNext) onIndexChange(effectiveIndex + 1);
   }
 
   function closePlayer() {
@@ -735,7 +754,7 @@ export function MiniPlayer({ queue, currentIndex, loop, sidebarMode = 'open', mo
   function ended() {
     setIsPlaying(false);
     if (loop) return;
-    if (canNext) onIndexChange(currentIndex + 1);
+    if (canNext) onIndexChange(effectiveIndex + 1);
   }
 
   function onLoadedMetadata() {
@@ -907,27 +926,27 @@ export function MiniPlayer({ queue, currentIndex, loop, sidebarMode = 'open', mo
       <div className="mini-player-left">
         <img src={pickCover(current)} alt="Cover" onError={handleCoverImageError} />
         <div className="mini-meta">
-          <button type="button" className="mini-title-button" onClick={(event) => { event.preventDefault(); event.stopPropagation(); onOpenDetails?.(current); }} title={t('player.openDetails', 'Songdetails öffnen')}>{currentDisplayTitle}</button>
-          <span>{operation} · {currentIndex + 1}/{queue.length} · {formatDuration(duration || current.duration_seconds)}</span>
+          <button type="button" className="mini-title-button" onClick={(event) => { event.preventDefault(); event.stopPropagation(); onOpenDetails?.(current); }} title={shortcutTitle(t('player.openDetails', 'Songdetails öffnen'), keyOpenDetails)}>{currentDisplayTitle}</button>
+          <span>{operation} · {effectiveIndex + 1}/{queueItems.length} · {formatDuration(duration || current.duration_seconds)}</span>
           {error && <small className="warning-text">{error}</small>}
         </div>
       </div>
 
       <div className="mini-player-mobile-controls">
-        <button type="button" className="player-round" onClick={restartCurrent} title={t('player.restartCurrent', 'Aktuellen Song von vorn abspielen')}><RotateCcw size={18} /></button>
-        <button type="button" className="player-main-play" onClick={togglePlay} title={isPlaying ? t('player.pause', 'Pause') : t('player.play', 'Abspielen')}>{isPlaying ? <Pause size={20} /> : <Play size={20} />}</button>
+        <button type="button" className="player-round" onClick={restartCurrent} title={shortcutTitle(t('player.restartCurrent', 'Aktuellen Song von vorn abspielen'), keyRestart)}><RotateCcw size={18} /></button>
+        <button type="button" className="player-main-play" onClick={togglePlay} title={shortcutTitle(isPlaying ? t('player.pause', 'Pause') : t('player.play', 'Abspielen'), keyPlayPause)}>{isPlaying ? <Pause size={20} /> : <Play size={20} />}</button>
         <button type="button" className="player-mobile-expand" onClick={() => setExpanded((value) => !value)} aria-expanded={expanded} title={expanded ? t('player.collapse', 'Player einklappen') : t('player.expand', 'Player erweitern')}>{expanded ? <ChevronDown size={18} /> : <ChevronUp size={18} />}</button>
-        <button type="button" className="player-close-button player-close-mobile" onClick={closePlayer} aria-label={t('player.close', 'Player schließen')} title={t('player.close', 'Player schließen')}><X size={18} /></button>
+        <button type="button" className="player-close-button player-close-mobile" onClick={closePlayer} aria-label={t('player.close', 'Player schließen')} title={shortcutTitle(t('player.close', 'Player schließen'), keyClose)}><X size={18} /></button>
       </div>
 
       <div className="custom-player-shell">
         <div className="custom-player-controls">
-          <button type="button" className="player-round" onClick={previous} disabled={!canPrevious} title={t('player.previous', 'Vorheriger Track')}><SkipBack size={18} /></button>
-          <button type="button" className="player-round" onClick={restartCurrent} title={t('player.restartCurrent', 'Aktuellen Song von vorn abspielen')}><RotateCcw size={18} /></button>
-          <button type="button" className="player-round" onClick={() => seekRelative(-10)} title={t('player.seekBackward10', '10 Sekunden zurück')} aria-label={t('player.seekBackward10', '10 Sekunden zurück')}><Rewind size={18} /></button>
-          <button type="button" className="player-main-play" onClick={togglePlay} title={isPlaying ? t('player.pause', 'Pause') : t('player.play', 'Abspielen')}>{isPlaying ? <Pause size={22} /> : <Play size={22} />}</button>
-          <button type="button" className="player-round" onClick={() => seekRelative(10)} title={t('player.seekForward10', '10 Sekunden vor')} aria-label={t('player.seekForward10', '10 Sekunden vor')}><FastForward size={18} /></button>
-          <button type="button" className="player-round" onClick={next} disabled={!canNext} title={t('player.next', 'Nächster Track')}><SkipForward size={18} /></button>
+          <button type="button" className="player-round" onClick={previous} disabled={!canPrevious} title={shortcutTitle(t('player.previous', 'Vorheriger Track'), keyPrevious)}><SkipBack size={18} /></button>
+          <button type="button" className="player-round" onClick={restartCurrent} title={shortcutTitle(t('player.restartCurrent', 'Aktuellen Song von vorn abspielen'), keyRestart)}><RotateCcw size={18} /></button>
+          <button type="button" className="player-round" onClick={() => seekRelative(-10)} title={shortcutTitle(t('player.seekBackward10', '10 Sekunden zurück'), keySeekBackward)} aria-label={t('player.seekBackward10', '10 Sekunden zurück')}><Rewind size={18} /></button>
+          <button type="button" className="player-main-play" onClick={togglePlay} title={shortcutTitle(isPlaying ? t('player.pause', 'Pause') : t('player.play', 'Abspielen'), keyPlayPause)}>{isPlaying ? <Pause size={22} /> : <Play size={22} />}</button>
+          <button type="button" className="player-round" onClick={() => seekRelative(10)} title={shortcutTitle(t('player.seekForward10', '10 Sekunden vor'), keySeekForward)} aria-label={t('player.seekForward10', '10 Sekunden vor')}><FastForward size={18} /></button>
+          <button type="button" className="player-round" onClick={next} disabled={!canNext} title={shortcutTitle(t('player.next', 'Nächster Track'), keyNext)}><SkipForward size={18} /></button>
           <div className="mini-player-view-toolbar mini-player-view-toolbar-inline" aria-label={t('player.display', 'Player-Anzeige')}>
             <button type="button" className={playerView === 'waveform' ? 'active' : ''} onClick={() => setPlayerView('waveform')} title={t('player.showWaveform', 'Waveform anzeigen')}><Waves size={14} /> Waveform</button>
             <button type="button" className={playerView === 'srt' ? 'active' : ''} onClick={handleSrtButtonClick} disabled={srtLoading || srtGenerating} title={hasSrt ? t('player.showLiveSrt', 'Live-SRT anzeigen') : t('player.generateSrt', 'SRT erzeugen')}><Captions size={14} /> {srtGenerating ? 'SRT…' : 'SRT'}</button>
@@ -957,12 +976,12 @@ export function MiniPlayer({ queue, currentIndex, loop, sidebarMode = 'open', mo
 
       <div className="mini-player-right custom-player-actions">
         <button type="button" className={currentFavorite ? 'active favorite-mini-button is-favorite' : 'favorite-mini-button'} onClick={toggleCurrentFavorite} disabled={favoriteSaving} title={currentFavorite ? t('player.removeFavorite', 'Favorit entfernen') : t('player.saveFavorite', 'Als Favorit speichern')}><ThumbsUp size={18} fill={currentFavorite ? 'currentColor' : 'none'} /></button>
-        <button type="button" className={loop ? 'active' : ''} onClick={() => onLoopChange(!loop)} title={t('player.loop', 'Loop')}><Repeat size={18} /></button>
+        <button type="button" className={loop ? 'active' : ''} onClick={() => onLoopChange(!loop)} title={shortcutTitle(t('player.loop', 'Loop'), keyLoop)}><Repeat size={18} /></button>
         <div className="player-menu-wrap">
           <button type="button" onClick={() => setMenuOpen(!menuOpen)} title={t('player.options', 'Optionen')}><MoreVertical size={18} /></button>
           {menuOpen && (
             <div className="player-menu">
-              <button type="button" onClick={() => { setMenuOpen(false); onOpenDetails?.(current); }}><FileText size={15} /> {t('player.openDetails', 'Songdetails öffnen')}</button>
+              <button type="button" onClick={() => { setMenuOpen(false); onOpenDetails?.(current); }} title={shortcutTitle(t('player.openDetails', 'Songdetails öffnen'), keyOpenDetails)}><FileText size={15} /> {t('player.openDetails', 'Songdetails öffnen')}</button>
               <button type="button" onClick={toggleCurrentFavorite} disabled={favoriteSaving}><ThumbsUp size={15} fill={currentFavorite ? 'currentColor' : 'none'} /> {currentFavorite ? t('player.removeFavorite', 'Favorit entfernen') : t('player.favorite', 'Favorit')}</button>
               <button type="button" onClick={() => { setMenuOpen(false); hasSrt ? setPlayerView('srt') : void generateCurrentSrt({ switchToSrt: true }); }} disabled={srtLoading || srtGenerating}><Captions size={15} /> {hasSrt ? t('player.showSrt', 'SRT anzeigen') : srtGenerating ? t('player.srtRunning', 'SRT läuft…') : t('player.generateSrt', 'SRT erzeugen')}</button>
               {hasSrt && <a href={api.archive.srtDownloadUrl(current.id)}><Download size={15} /> {t('player.downloadSrt', 'SRT herunterladen')}</a>}
@@ -976,7 +995,7 @@ export function MiniPlayer({ queue, currentIndex, loop, sidebarMode = 'open', mo
           )}
         </div>
         <a className="icon-button player-download-primary" href={api.archive.downloadUrl(current.id)} title={t('player.download', 'Download')}><Download size={17} /></a>
-        <button type="button" className="player-close-button player-close-desktop" onClick={closePlayer} aria-label={t('player.close', 'Player schließen')} title={t('player.close', 'Player schließen')}><X size={18} /></button>
+        <button type="button" className="player-close-button player-close-desktop" onClick={closePlayer} aria-label={t('player.close', 'Player schließen')} title={shortcutTitle(t('player.close', 'Player schließen'), keyClose)}><X size={18} /></button>
         <div className="player-volume-row">
           <button type="button" onClick={() => setMuted(!muted)} title={muted ? t('player.enableSound', 'Ton aktivieren') : t('player.mute', 'Stumm')}>{muted ? <VolumeX size={18} /> : <Volume2 size={18} />}</button>
           <input className="custom-volume" type="range" min="0" max="100" value={muted ? 0 : Math.round(volume * 100)} onChange={changeVolume} aria-label={t('player.volume', 'Lautstärke')} style={{ '--volume-fill': `${muted ? 0 : Math.round(volume * 100)}%` }} />

@@ -752,7 +752,7 @@ function findRecentlyEndedSrtSegment(segments, currentTime, holdSeconds = 0.45, 
   return previous;
 }
 
-export function LibraryPage({ assets, loadError = '', voices = [], playlists = [], onReload, onPlay, notify, onUseLyric, onReusePrompt, openAssetId, openAssetRequestKey = 0, onOpenAssetHandled, resetSignal = 0, onOpenDaw, playbackState = {}, onToggleCurrentPlayback, onDetailTitleChange, routeDetailSlug = '', searchQuery = '' }) {
+export function LibraryPage({ assets, loadError = '', voices = [], playlists = [], onReload, onPlay, notify, onUseLyric, onReusePrompt, openAssetId, openAssetRequestKey = 0, onOpenAssetHandled, resetSignal = 0, onOpenDaw, playbackState = {}, onToggleCurrentPlayback, onDetailTitleChange, routeDetailSlug = '', searchQuery = '', onTrashChanged }) {
   const { t } = useI18n();
   const query = String(searchQuery || '');
   const [type, setType] = useState('all');
@@ -1626,6 +1626,7 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
     stopPlaybackForDeletedAssets([asset.id]);
     hideDeletedAssetsLocally([asset.id]);
     notify(t('library.messages.audioMovedToTrash', 'Audio wurde in den Papierkorb verschoben.'), 'success');
+    onTrashChanged?.();
     setActionAsset(null);
     closeAudioMenu();
     await reloadAfterLibraryMutation();
@@ -4010,6 +4011,7 @@ ${generationOptionsText(asset)}`,
     stopPlaybackForDeletedAssets(deletedIds);
     hideDeletedAssetsLocally(deletedIds);
     notify(t('library.messages.selectedMovedToTrash', '{{count}} ausgewählte Audio(s) wurden in den Papierkorb verschoben.', { count: deletedIds.length }), 'success');
+    onTrashChanged?.();
     setSelectedIds(new Set());
     await reloadAfterLibraryMutation();
   }
@@ -4574,7 +4576,6 @@ ${generationOptionsText(asset)}`,
               <button type="button" onClick={() => openPictureViewer(projectCoverAsset)} disabled={!projectCoverAsset}><Maximize2 size={16} /> {t('library.actions.viewCoverLarge', 'Cover groß anzeigen')}</button>
               <button type="button" onClick={() => downloadCoverImage(projectCoverAsset)} disabled={!projectCoverAsset}><Download size={16} /> {t('library.actions.downloadCover', 'Cover herunterladen')}</button>
               <button type="button" onClick={() => { const best = activeProject.assets.find((item) => isAssetFavorite(item)) || activeProject.playable?.[0] || activeProject.assets[0]; if (best) toggleAssetFavorite(best, !isAssetFavorite(best)); }} disabled={!activeProject.assets.length || Boolean(favoriteSavingIds.size)}><ThumbsUp size={16} fill={activeProject.assets.some((item) => isAssetFavorite(item)) ? 'currentColor' : 'none'} /> {activeProject.assets.some((item) => isAssetFavorite(item)) ? t('library.actions.removeFavorite', 'Favorit entfernen') : t('library.actions.saveFavorite', 'Als Favorit speichern')}</button>
-              <button type="button" onClick={() => setManualImportOpen(true)}><Plus size={16} /> {t('library.actions.importAudio', 'Audio importieren')}</button>
               <button type="button" onClick={() => exportProjectJson(activeProject)}>Projekt JSON</button>
               <button type="button" onClick={() => exportProjectText(activeProject)}>TXT Export</button>
               <button type="button" onClick={() => saveProjectLyrics(activeProject)}>{t('library.actions.saveLyrics', 'Songtext speichern')}</button>
@@ -4816,7 +4817,6 @@ ${generationOptionsText(asset)}`,
             </details>
             <button type="button" className={localFilter === 'favorites' ? 'active' : ''} onClick={() => preserveWindowScroll(() => setLocalFilter(localFilter === 'favorites' ? 'all' : 'favorites'))}><ThumbsUp size={14} /> {t('library.favorites', 'Favoriten')}</button>
             <span className="library-chip-spacer" aria-hidden="true" />
-            <button type="button" onClick={() => setManualImportOpen(true)}><Plus size={15} /> <ResponsiveLabel full={t('library.actions.importAudio', 'Audio importieren')} short={t('library.actions.importAudioShort', 'Import')} /></button>
             <button type="button" onClick={cacheMissingLibraryContent} disabled={contentCacheBusy}>{contentCacheBusy ? t('library.actions.checking', 'Prüfe…') : <ResponsiveLabel full={t('library.actions.checkContent', 'Inhalte prüfen')} short={t('library.actions.checkContentShort', 'Prüfen')} />}</button>
             <button type="button" className="library-refresh-chip" onClick={onReload}><ResponsiveLabel full={t('common.refresh', 'Aktualisieren')} short={t('common.refreshShort', 'Aktual.')} /></button>
           </div>
@@ -4833,6 +4833,7 @@ ${generationOptionsText(asset)}`,
           const currentProjectAsset = currentAssetForProject(project);
           const projectActive = Boolean(currentProjectAsset);
           const projectPlaying = isPlayingProject(project);
+          const projectQueue = (project.playable.length ? project.playable : project.assets.filter(isPlayable)).map((asset) => withVariantPlaybackMeta(asset, project)).filter(isPlayable);
           return (
             <article className={`project-row suno-row ${projectActive ? 'is-playing-row' : ''}`} key={project.id}>
               <button className={`cover-button ${projectActive ? 'is-active-cover' : ''}`} type="button" onClick={() => playProject(project)} title={projectPlaying ? t('player.pause', 'Pause') : t('library.playDirectly', 'Direkt abspielen')}>
@@ -4852,12 +4853,14 @@ ${generationOptionsText(asset)}`,
                   </div>
                 )}
                 <div className="project-audio-actions-strip" aria-label={t('library.audioQuickActions', 'Audio-Schnellaktionen')}>
-                  {project.assets.map((asset, index) => (
+                  {project.assets.map((asset, index) => {
+                    const queueIndex = Math.max(0, projectQueue.findIndex((row) => String(row.id) === String(asset.id)));
+                    return (
 	                    <div className={`project-audio-action-pill ${isCurrentAsset(asset) ? 'is-current' : ''} ${selectedIds.has(asset.id) ? 'is-selected' : ''}`} key={`project-action-${project.id}-${asset.id}`}>
 	                      <label className="project-audio-select-mini" title={t('library.selectAsset', '{{title}} auswählen', { title: variantTitle(asset, project) })}>
 	                        <input type="checkbox" checked={selectedIds.has(asset.id)} onChange={() => toggleSelected(asset.id)} aria-label={t('library.selectAsset', '{{title}} auswählen', { title: variantTitle(asset, project) })} />
 	                      </label>
-	                      <button type="button" className="project-audio-play-mini" onClick={() => playAsset(asset)} title={t('library.playAsset', '{{title}} abspielen', { title: variantTitle(asset, project) })}>
+	                      <button type="button" className="project-audio-play-mini" onClick={() => playAsset(asset, projectQueue, queueIndex, project)} title={t('library.playAsset', '{{title}} abspielen', { title: variantTitle(asset, project) })}>
                         {isPlayingAsset(asset) ? <Pause size={13} /> : <Play size={13} fill="currentColor" />}
                       </button>
                       <button type="button" className="project-audio-title-mini" onClick={(event) => openProjectDetails(project, event)} title={variantTitle(asset, project)}>
@@ -4869,7 +4872,7 @@ ${generationOptionsText(asset)}`,
                       </button>
                       <AudioActionMenu asset={asset} compact label="" dropUp />
                     </div>
-                  ))}
+                  );})}
                 </div>
               </div>
               <div className="project-actions">

@@ -29,7 +29,6 @@ const styleCategories = [
 const operationModes = [
   ['generate', 'Generate Music'],
   ['generate-lyrics', 'Generate Lyrics'],
-  ['import-suno-song', 'Suno Song-ID importieren'],
   ['extend', 'Extended'],
   ['upload-extend', 'Upload And Extend Audio'],
   ['upload-cover', 'Upload And Cover Song'],
@@ -697,7 +696,7 @@ export function MusicPage({ styles, voices = [], uploadedFiles = [], assets = []
   const [lyricTagPreview, setLyricTagPreview] = useState(EMPTY_LYRIC_TAG_PREVIEW);
   const [selectedVoiceId, setSelectedVoiceId] = useState(() => storedMusicState.selectedVoiceId || '');
   const [generationProvider, setGenerationProvider] = useState(() => storedMusicState.generationProvider || 'sunoapi');
-  const [operationMode, setOperationMode] = useState(() => storedMusicState.operationMode || 'generate');
+  const [operationMode, setOperationMode] = useState(() => storedMusicState.operationMode === 'import-suno-song' ? 'generate' : storedMusicState.operationMode || 'generate');
   const [selectedAssetId, setSelectedAssetId] = useState(() => storedMusicState.selectedAssetId || '');
   const [selectedUploadId, setSelectedUploadId] = useState(() => storedMusicState.selectedUploadId || '');
   const [sunoImportId, setSunoImportId] = useState(() => storedMusicState.sunoImportId || '');
@@ -1942,21 +1941,6 @@ export function MusicPage({ styles, voices = [], uploadedFiles = [], assets = []
         <div className="wide nested-panel soft-panel">
           <p className="eyebrow">{t('music.operationEyebrows.sunoLyricsApi', 'Suno Lyrics API')}</p>
           <p className="muted">{t('music.operationHelp.generateLyrics', 'Nutze das große Prompt-Feld für Thema, Stimmung, Sprache, Genre und gewünschte Struktur. Das Ergebnis erscheint nach Abschluss als Task/Archiv-Eintrag.')}</p>
-        </div>
-      )}
-      {operationMode === 'import-suno-song' && (
-        <div className="wide nested-panel soft-panel">
-          <p className="eyebrow">{t('music.importPublic.eyebrow', 'Öffentlicher Suno-Clip Import')}</p>
-          <h3>{t('music.importPublic.title', 'Suno Song-ID oder URL importieren')}</h3>
-          <p className="muted">{t('music.importPublic.text', 'Importiert einen einzelnen öffentlichen Suno-Clip in Songs, AudioAssets und Tasks. Lokale Funktionen bleiben aktiv; SunoAPI.org-Folgeaktionen werden für diesen Import deaktiviert.')}</p>
-          <label className="wide">{t('music.importPublic.songIdOrUrl', 'Suno Song-ID oder URL')}
-            <input value={sunoImportId} onChange={(event) => setSunoImportId(event.target.value)} placeholder={t('music.placeholders.sunoSongIdOrUrl', 'https://suno.com/song/96fdbd12-4ea1-41b4-a132-4b731ec6594e oder UUID')} />
-          </label>
-          <div className="button-row wrap">
-            <label className="check"><input type="checkbox" checked={sunoImportCacheAudio} onChange={(event) => setSunoImportCacheAudio(event.target.checked)} /> {t('music.importPublic.cacheAudio', 'Audio lokal speichern')}</label>
-            <label className="check"><input type="checkbox" checked={sunoImportCacheCover} onChange={(event) => setSunoImportCacheCover(event.target.checked)} /> {t('music.importPublic.cacheCover', 'Cover lokal speichern')}</label>
-            <label className="check"><input type="checkbox" checked={sunoImportOverwrite} onChange={(event) => setSunoImportOverwrite(event.target.checked)} /> {t('music.importPublic.overwrite', 'Vorhandenen Import aktualisieren')}</label>
-          </div>
         </div>
       )}
       {operationMode === 'stem-separation' && (
