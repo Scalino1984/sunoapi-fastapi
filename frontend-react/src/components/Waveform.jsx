@@ -133,7 +133,23 @@ function fallbackPeaks(count = 96) {
   return Array.from({ length: count }, (_, index) => 0.18 + Math.abs(Math.sin(index / 6.5)) * 0.5 + Math.abs(Math.cos(index / 17)) * 0.18);
 }
 
-export function Waveform({ asset, audioRef, compact = false, currentTime = 0, durationSeconds = null, interactive = true }) {
+function clampNumber(value, min, max) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return min;
+  return Math.max(min, Math.min(max, parsed));
+}
+
+export function Waveform({
+  asset,
+  audioRef,
+  compact = false,
+  currentTime = 0,
+  durationSeconds = null,
+  interactive = true,
+  showProgress = true,
+  sourceStartSeconds = 0,
+  sourceEndSeconds = null,
+}) {
   const { t } = useI18n();
   const [waveform, setWaveform] = useState(asset?.waveform_json || null);
   const [loading, setLoading] = useState(false);
@@ -176,18 +192,49 @@ export function Waveform({ asset, audioRef, compact = false, currentTime = 0, du
     return () => { cancelled = true; };
   }, [asset?.id, asset?.waveform_json, asset?.structure_segments_json, asset?.structure_segments, asset?.updated_at, asset?.waveform_generated_at]);
 
+  const sourceDuration = Number(waveform?.duration_seconds || asset?.duration_seconds || durationSeconds || 0);
+  const hasSourceWindow = Number.isFinite(Number(sourceEndSeconds))
+    && Number(sourceEndSeconds) > Number(sourceStartSeconds || 0)
+    && sourceDuration > 0;
+  const sourceWindowStart = hasSourceWindow ? clampNumber(sourceStartSeconds, 0, sourceDuration) : 0;
+  const sourceWindowEnd = hasSourceWindow ? clampNumber(sourceEndSeconds, sourceWindowStart, sourceDuration) : 0;
+
   const peaks = useMemo(() => {
     const rows = waveform?.peaks?.length ? waveform.peaks : fallbackPeaks(compact ? 72 : 160);
-    const max = Math.max(...rows, 1);
-    return rows.map((value) => Math.max(0.04, Math.min(1, Number(value || 0) / max)));
-  }, [waveform, compact]);
+    let visibleRows = rows;
+    if (hasSourceWindow && sourceDuration > 0 && rows.length > 4) {
+      const startIndex = Math.max(0, Math.floor((sourceWindowStart / sourceDuration) * rows.length));
+      const endIndex = Math.min(rows.length, Math.ceil((sourceWindowEnd / sourceDuration) * rows.length));
+      visibleRows = rows.slice(startIndex, Math.max(startIndex + 3, endIndex));
+    }
+    const max = Math.max(...visibleRows, 1);
+    return visibleRows.map((value) => Math.max(0.04, Math.min(1, Number(value || 0) / max)));
+  }, [waveform, compact, hasSourceWindow, sourceDuration, sourceWindowStart, sourceWindowEnd]);
 
-  const duration = Number(durationSeconds || waveform?.duration_seconds || asset?.duration_seconds || 0);
+  const duration = hasSourceWindow
+    ? Math.max(0.1, sourceWindowEnd - sourceWindowStart)
+    : Number(durationSeconds || waveform?.duration_seconds || asset?.duration_seconds || 0);
   const segments = useMemo(() => {
     const preferred = assetStructureSegments(asset);
     const source = preferred.length ? preferred : waveformSegments(waveform);
-    return scaleSegmentsForDisplay(normalizeSegments(source), duration);
-  }, [asset, waveform, duration]);
+    const normalized = scaleSegmentsForDisplay(normalizeSegments(source), sourceDuration || duration);
+    if (!hasSourceWindow) return scaleSegmentsForDisplay(normalized, duration);
+    return normalized
+      .map((segment) => {
+        const start = Number(segment.start || 0);
+        const end = Number(segment.end || start);
+        const clippedStart = Math.max(start, sourceWindowStart);
+        const clippedEnd = Math.min(end, sourceWindowEnd);
+        if (clippedEnd <= clippedStart) return null;
+        return {
+          ...segment,
+          start: clippedStart - sourceWindowStart,
+          end: clippedEnd - sourceWindowStart,
+          absoluteStart: clippedStart,
+        };
+      })
+      .filter(Boolean);
+  }, [asset, waveform, duration, sourceDuration, hasSourceWindow, sourceWindowStart, sourceWindowEnd]);
 
   function seekTo(seconds) {
     const audio = audioRef?.current;
@@ -206,24 +253,25 @@ export function Waveform({ asset, audioRef, compact = false, currentTime = 0, du
   }
 
   const safeCurrentTime = Number.isFinite(Number(currentTime)) ? Number(currentTime) : 0;
-  const progressRatio = duration > 0 ? Math.max(0, Math.min(1, safeCurrentTime / duration)) : 0;
-  const activeIndex = peaks.length > 0 ? Math.floor(progressRatio * peaks.length) : -1;
+  const progressRatio = showProgress && duration > 0 ? Math.max(0, Math.min(1, safeCurrentTime / duration)) : 0;
+  const activeIndex = showProgress && peaks.length > 0 ? Math.floor(progressRatio * peaks.length) : -1;
 
   return (
-    <div className={`react-waveform ${compact ? 'compact' : ''} ${loading ? 'loading' : ''} ${progressRatio > 0 ? 'has-progress' : ''}`}>
+    <div className={`react-waveform ${compact ? 'compact' : ''} ${loading ? 'loading' : ''} ${showProgress && progressRatio > 0 ? 'has-progress' : ''}`}>
       <div className="react-waveform-segments">
         {segments.map((segment, index) => {
           const start = Number(segment.start || 0);
           const end = Number(segment.end || start);
           const left = duration > 0 ? Math.max(0, Math.min(100, (start / duration) * 100)) : 0;
           const width = duration > 0 ? Math.max(1.5, Math.min(100 - left, ((end - start) / duration) * 100)) : 0;
-          return <button key={`${segment.label}-${index}-${start}-${end}`} type="button" className={`react-waveform-segment ${segmentClass(segment.type)}`} style={{ left: `${left}%`, width: `${width}%` }} onClick={() => seekTo(start)} title={segment.label || segment.type}>{segment.label}</button>;
+          const absoluteStart = Number.isFinite(Number(segment.absoluteStart)) ? Number(segment.absoluteStart) : start;
+          return <button key={`${segment.label}-${index}-${start}-${end}`} type="button" className={`react-waveform-segment ${segmentClass(segment.type)}`} style={{ left: `${left}%`, width: `${width}%` }} onClick={() => seekTo(absoluteStart)} title={segment.label || segment.type}>{segment.label}</button>;
         })}
       </div>
       <button type="button" className="react-waveform-bars" onClick={seekByClick} aria-label={t('waveform.navigation', 'Waveform Navigation')} disabled={!interactive || !audioRef?.current}>
         {peaks.map((value, index) => <span key={index} className={index <= activeIndex ? 'played' : ''} style={{ height: `${Math.max(5, value * 100)}%` }} />)}
       </button>
-      {progressRatio > 0 && <span className="react-waveform-progress-line" style={{ left: `${progressRatio * 100}%` }} />}
+      {showProgress && progressRatio > 0 && <span className="react-waveform-progress-line" style={{ left: `${progressRatio * 100}%` }} />}
     </div>
   );
 }

@@ -1194,15 +1194,99 @@ class MusicService:
             return await self.client.get_custom_voice_record(task_id)
         return await self.client.get_details(task_id)
 
+    def _infer_external_task_type_from_details(self, details: dict[str, Any], fallback: str = "generate_music") -> str:
+        values: list[str] = []
+        for item in _walk_values(details):
+            if not isinstance(item, dict):
+                continue
+            for key in ("taskType", "task_type", "operationType", "operation_type", "type", "source"):
+                value = item.get(key)
+                if value:
+                    values.append(str(value).lower())
+        joined = " ".join(values)
+        if "extend" in joined:
+            return "extend_music"
+        if "upload" in joined and "cover" in joined:
+            return "upload_and_cover"
+        if "upload" in joined and "extend" in joined:
+            return "upload_and_extend"
+        if "add" in joined and "vocal" in joined:
+            return "add_vocals"
+        if "add" in joined and "instrumental" in joined:
+            return "add_instrumental"
+        if "mashup" in joined:
+            return "generate_mashup"
+        if "sound" in joined:
+            return "generate_sounds"
+        if "lyric" in joined:
+            return "generate_lyrics"
+        if "wav" in joined:
+            return "convert_to_wav"
+        if "midi" in joined:
+            return "generate_midi"
+        if "video" in joined or "mp4" in joined:
+            return "create_video"
+        if "cover" in joined:
+            return "create_cover"
+        if "voice" in joined:
+            return "create_custom_voice"
+        if "separate" in joined or "stem" in joined or "vocal-removal" in joined:
+            return "separate"
+        return fallback or "generate_music"
+
+    async def _fetch_external_task_details_with_type(self, task_id: str, task_type: str | None = None) -> tuple[str, dict[str, Any]]:
+        requested_type = str(task_type or "auto").strip() or "auto"
+        if requested_type not in {"auto", "detect"}:
+            details = await self._fetch_external_task_details(task_id, requested_type)
+            return requested_type, details
+
+        candidates = [
+            "generate_music",
+            "create_cover",
+            "convert_to_wav",
+            "generate_midi",
+            "create_video",
+            "separate",
+            "generate_lyrics",
+            "create_custom_voice",
+        ]
+        errors: list[str] = []
+        for candidate in candidates:
+            try:
+                details = await self._fetch_external_task_details(task_id, candidate)
+                resolved = self._infer_external_task_type_from_details(details, fallback=candidate)
+                return resolved, details
+            except Exception as exc:
+                message = str(exc)
+                if (
+                    "SUNO_API_KEY" in message
+                    or "Timeout" in message
+                    or "Verbindungsfehler" in message
+                    or "HTTP-Fehler 401" in message
+                    or "HTTP-Fehler 403" in message
+                    or "HTTP-Fehler 429" in message
+                    or "HTTP-Fehler 5" in message
+                ):
+                    raise
+                errors.append(f"{candidate}: {message}")
+                continue
+        raise ValueError("Task-Typ konnte nicht automatisch erkannt werden. SunoAPI.org lieferte fuer keinen bekannten Record-Info-Endpunkt Daten.")
+
     async def _refresh_existing_imported_task_details(self, task: SunoTask, *, task_type: str, base_request_payload: dict[str, Any]) -> bool:
         if not task.task_id:
             return False
-        details = await self._fetch_external_task_details(str(task.task_id), task_type)
+        resolved_task_type, details = await self._fetch_external_task_details_with_type(str(task.task_id), task_type)
         existing_request = task.request_payload if isinstance(task.request_payload, dict) else {}
         merged_request = {**existing_request, **{key: value for key, value in base_request_payload.items() if value is not None}}
+        merged_request["task_type"] = resolved_task_type
+        if str(task_type or "").strip() in {"auto", "detect", ""}:
+            merged_request["auto_detected_task_type"] = True
         merged_request = _merge_generation_options_into_request(merged_request, details, task.response_payload)
 
         changed = False
+        if task.task_type != resolved_task_type:
+            task.task_type = resolved_task_type
+            changed = True
         if task.result_payload != details:
             task.result_payload = details
             flag_modified(task, "result_payload")
@@ -1275,7 +1359,8 @@ class MusicService:
 
     async def import_external_task(self, payload: dict[str, Any]) -> SunoTask:
         task_id = str(payload.get("task_id") or payload.get("taskId") or "").strip()
-        task_type = str(payload.get("task_type") or "generate_music").strip()
+        requested_task_type = str(payload.get("task_type") or "auto").strip() or "auto"
+        task_type = requested_task_type
         cache_audio = bool(payload.get("cache_audio", True))
 
         if not task_id:
@@ -1284,7 +1369,7 @@ class MusicService:
         request_payload = {
             "source": "manual_sunoapi_import",
             "task_id": task_id,
-            "task_type": task_type,
+            "task_type": requested_task_type,
             "title": payload.get("title") or None,
             "prompt": payload.get("prompt") or None,
             "style": payload.get("style") or None,
@@ -1295,7 +1380,8 @@ class MusicService:
 
         if existing is not None:
             try:
-                await self._refresh_existing_imported_task_details(existing, task_type=task_type, base_request_payload=request_payload)
+                refresh_type = existing.task_type if requested_task_type in {"auto", "detect"} and existing.task_type else requested_task_type
+                await self._refresh_existing_imported_task_details(existing, task_type=refresh_type, base_request_payload=request_payload)
             except Exception:
                 self._repair_imported_task_generation_options(existing)
             self._create_import_duplicate_notification(existing)
@@ -1308,7 +1394,10 @@ class MusicService:
                 import_message="Dieser Suno-Task ist bereits importiert. Es wurde nichts doppelt erstellt.",
             )
 
-        details = await self._fetch_external_task_details(task_id, task_type)
+        task_type, details = await self._fetch_external_task_details_with_type(task_id, requested_task_type)
+        request_payload["task_type"] = task_type
+        if requested_task_type in {"auto", "detect"}:
+            request_payload["auto_detected_task_type"] = True
 
         request_payload = _merge_generation_options_into_request(request_payload, details)
 

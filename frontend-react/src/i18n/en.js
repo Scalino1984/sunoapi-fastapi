@@ -277,7 +277,7 @@ export const en = {
     import: {
       eyebrow: 'Backfill / import',
       title: 'Import external SunoAPI.org task',
-      text: 'Enter a SunoAPI.org task ID, load it through the official task/record info and store it locally as task, song and AudioAsset.',
+      text: 'Enter a SunoAPI.org task ID. The app detects the task type automatically, loads the matching record info and stores task, song and AudioAsset locally.',
       cachingCovers: 'Caching covers…',
       cacheMissingCovers: 'Cache missing covers locally',
       taskType: 'Task type',
@@ -1359,6 +1359,53 @@ export const en = {
     checkPlan: 'Check plan',
     renderDirectly: 'Render directly',
     load: 'Load',
+    remoteSource: 'Source',
+    jumpStart: 'To start',
+    jumpEnd: 'To end',
+    timelinePlan: 'Timeline plan',
+    setStartFromPlayhead: 'Start = playhead',
+    setEndFromPlayhead: 'End = playhead',
+    markerFromPlayhead: 'Use marker time',
+    planNeedsCheck: 'Check plan',
+    planReady: 'Plan ready',
+    analysis: 'Analysis',
+    fades: 'Fades',
+    output: 'Output',
+    applyPlan: 'Apply plan',
+    noVersions: 'No versions yet.',
+    noMarkers: 'No markers set yet.',
+    deleteMarker: 'Delete marker',
+    preview: 'Preview',
+    previewReady: 'Preview ready',
+    inspector: {
+      plan: 'Plan',
+      tools: 'Tools',
+      ai: 'AI',
+      versions: 'Versions'
+    },
+    planRows: {
+      range: 'Range',
+      fadeIn: 'Fade-in',
+      fadeOut: 'Fade-out',
+      gain: 'Gain',
+      processing: 'Processing',
+      format: 'Format'
+    },
+    warnings: {
+      noAudio: 'No audio selected.',
+      invalidRange: 'End must be after start.',
+      endAfterDuration: 'End is beyond the audio duration.',
+      fadeOutTooLong: 'Fade-out is longer than the selected range.',
+      fadeInTooLong: 'Fade-in is longer than the selected range.',
+      noOperations: 'The plan contains no edit. Saving would only create a new copy.'
+    },
+    ai: {
+      usesAdminDefaults: 'Uses the AI configuration from admin settings.',
+      empty: 'Describe the audio edit in plain chat. The AI creates only a plan, no automatic change.',
+      planPrepared: 'Plan prepared',
+      noPlan: 'The AI did not detect a clear plan.',
+      noPlanTitle: 'No clear plan'
+    },
     tabs: {
       cut: 'Cut',
       volume: 'Volume',
@@ -1381,8 +1428,13 @@ export const en = {
       commandFailed: 'Audio command could not be executed.',
       markerSaved: 'Marker saved.',
       markerFailed: 'Marker could not be saved.',
+      markerDeleted: 'Marker deleted.',
+      markerDeleteFailed: 'Marker could not be deleted.',
       analysisCreated: 'Audio analysis created.',
-      analysisFailed: 'Analysis failed.'
+      analysisFailed: 'Analysis failed.',
+      planApplied: 'Plan was applied.',
+      previewCreated: 'DAW preview created.',
+      previewFailed: 'DAW preview failed.'
     }
   },
   playlists: {

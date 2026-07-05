@@ -5,7 +5,7 @@
 // Nicht auf interne snake_case-Namen zurueckbauen und nicht nur in buildAdvancedPayload()
 // pflegen; submit() ist der tatsaechliche Generate-Button-Pfad.
 import React, { useEffect, useMemo, useState } from 'react';
-import { ArrowLeft, ArrowRight, CheckCircle2, Copy, Loader2, Music2, RefreshCw, Search, Sparkles, Tag, Wand2 } from 'lucide-react';
+import { ArrowLeft, ArrowRight, CheckCircle2, Copy, Loader2, Music2, Redo2, RefreshCw, Search, Sparkles, Tag, Undo2, Wand2 } from 'lucide-react';
 import { api } from '../api/client.js';
 import { SectionHeader } from '../components/SectionHeader.jsx';
 import { Modal } from '../components/Modal.jsx';
@@ -227,6 +227,63 @@ function suggestionNegativeTags(suggestion) {
     ?? suggestion?.avoid
     ?? ''
   ).trim();
+}
+
+function parseStyleConsultationJson(value) {
+  if (!value) return null;
+  if (typeof value === 'object') return value;
+  const raw = String(value || '').trim();
+  if (!raw) return null;
+  const unfenced = raw
+    .replace(/^```(?:json)?\s*/i, '')
+    .replace(/\s*```$/i, '')
+    .trim();
+  const candidates = [unfenced];
+  const start = unfenced.indexOf('{');
+  const end = unfenced.lastIndexOf('}');
+  if (start >= 0 && end > start) candidates.push(unfenced.slice(start, end + 1));
+  for (const candidate of candidates) {
+    try {
+      const parsed = JSON.parse(candidate);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed;
+    } catch {
+      // Ignore non-JSON assistant text.
+    }
+  }
+  return null;
+}
+
+function normalizeStyleConsultationResponse(response) {
+  const nested = parseStyleConsultationJson(response?.assistant_message)
+    || parseStyleConsultationJson(response?.message)
+    || parseStyleConsultationJson(response?.raw_text);
+  const source = nested && (nested.assistant_message || nested.message || nested.updated_draft || nested.draft)
+    ? { ...response, ...nested, runtime_info: response?.runtime_info || nested.runtime_info }
+    : (response || {});
+  const assistantMessage = String(source.assistant_message || source.message || '').trim();
+  const updatedDraft = source.updated_draft || source.draft || null;
+  return {
+    assistantMessage,
+    updatedDraft,
+    changed: source.changed !== undefined ? Boolean(source.changed) : Boolean(updatedDraft),
+    runtimeInfo: source.runtime_info || null
+  };
+}
+
+function styleConsultationMessageText(message) {
+  const text = String(message?.content || '');
+  if (message?.role !== 'assistant') return text;
+  const parsed = parseStyleConsultationJson(text);
+  return String(parsed?.assistant_message || parsed?.message || text).trim();
+}
+
+function cloneStyleConsultationDraft(draft) {
+  if (!draft || typeof draft !== 'object') return null;
+  try {
+    return JSON.parse(JSON.stringify(draft));
+  } catch {
+    return { ...draft };
+  }
 }
 
 function normalizeVocalTagText(value) {
@@ -1216,7 +1273,7 @@ export function MusicPage({ styles, voices = [], uploadedFiles = [], assets = []
       scores: suggestion?.scores || null,
       role: suggestion?.role || ''
     };
-    setStyleConsultation({ open: true, suggestion, draft, messages: [], input: '', loading: false, error: '' });
+    setStyleConsultation({ open: true, suggestion, draft, past: [], future: [], messages: [], input: '', loading: false, error: '' });
   }
 
   function closeStyleConsultation() {
@@ -1237,12 +1294,15 @@ export function MusicPage({ styles, voices = [], uploadedFiles = [], assets = []
         history: nextMessages.slice(-10),
         mode: 'advise_or_update'
       });
-      const assistantMessage = response?.assistant_message || t('music.messages.styleConsultationChecked', 'Ich habe die Zusammenstellung geprüft.');
-      const updatedDraft = response?.updated_draft || null;
+      const normalizedResponse = normalizeStyleConsultationResponse(response);
+      const assistantMessage = normalizedResponse.assistantMessage || t('music.messages.styleConsultationChecked', 'Ich habe die Zusammenstellung geprüft.');
+      const updatedDraft = normalizedResponse.updatedDraft || null;
       setStyleConsultation((current) => ({
         ...current,
         draft: updatedDraft || current.draft,
-        messages: [...nextMessages, { role: 'assistant', content: assistantMessage }],
+        past: updatedDraft ? [...(current.past || []), cloneStyleConsultationDraft(current.draft)].filter(Boolean).slice(-25) : (current.past || []),
+        future: updatedDraft ? [] : (current.future || []),
+        messages: [...nextMessages, { role: 'assistant', content: assistantMessage, updatedDraft }],
         loading: false,
         error: ''
       }));
@@ -1251,6 +1311,36 @@ export function MusicPage({ styles, voices = [], uploadedFiles = [], assets = []
       setStyleConsultation((current) => ({ ...current, loading: false, error: messageText }));
       notify?.(messageText, 'error');
     }
+  }
+
+  function undoStyleConsultationDraft() {
+    setStyleConsultation((current) => {
+      const past = Array.isArray(current.past) ? current.past : [];
+      if (!past.length || !current.draft) return current;
+      const previousDraft = past[past.length - 1];
+      return {
+        ...current,
+        draft: cloneStyleConsultationDraft(previousDraft),
+        past: past.slice(0, -1),
+        future: [cloneStyleConsultationDraft(current.draft), ...(current.future || [])].filter(Boolean).slice(0, 25),
+        error: ''
+      };
+    });
+  }
+
+  function redoStyleConsultationDraft() {
+    setStyleConsultation((current) => {
+      const future = Array.isArray(current.future) ? current.future : [];
+      if (!future.length || !current.draft) return current;
+      const nextDraft = future[0];
+      return {
+        ...current,
+        draft: cloneStyleConsultationDraft(nextDraft),
+        past: [...(current.past || []), cloneStyleConsultationDraft(current.draft)].filter(Boolean).slice(-25),
+        future: future.slice(1),
+        error: ''
+      };
+    });
   }
 
   function applyStyleDraft(draft, includeNegative = true) {
@@ -2181,49 +2271,102 @@ export function MusicPage({ styles, voices = [], uploadedFiles = [], assets = []
 
   const styleConsultationModal = (
     <Modal open={styleConsultation.open} title={t('music.styleConsultation.title', 'Style mit KI verfeinern')} onClose={closeStyleConsultation} wide>
-      <div className="style-consultation-modal stack">
-        <section className="nested-panel">
-          <p className="eyebrow">{t('music.styleConsultation.workingVersion', 'Arbeitsversion')}</p>
-          <h3>{styleConsultation.draft?.title || t('music.aiStyleTitle', 'KI-Style')}</h3>
-          <p className="ai-style-text">{styleConsultation.draft?.style || t('music.styleConsultation.noStyleLine', 'Keine Style-Zeile vorhanden.')}</p>
-          {styleConsultation.draft?.negative_tags && <p className="ai-negative-tags"><strong>Negative:</strong> {styleConsultation.draft.negative_tags}</p>}
-          {suggestionLyricVocalTags(styleConsultation.draft).length > 0 && (
-            <section className="ai-vocal-tag-preview-card">
+      <div className="style-consultation-modal">
+        <div className="style-consultation-workspace">
+          <section className="nested-panel style-consultation-draft-card">
+            <div className="style-consultation-draft-header">
               <div>
-                <span className="eyebrow">{t('music.lyricTags.title', 'Songtext-Tags')}</span>
-                <strong>{t('music.styleConsultation.workingTagCount', '{{count}} Section-Tags in der Arbeitsversion', { count: suggestionLyricVocalTags(styleConsultation.draft).length })}</strong>
-                <small>{t('music.styleConsultation.tagModalHint', 'Im Modal als vollständigen Songtext prüfen, kopieren oder übernehmen.')}</small>
+                <p className="eyebrow">{t('music.styleConsultation.workingVersion', 'Arbeitsversion')}</p>
+                <h3>{styleConsultation.draft?.title || t('music.aiStyleTitle', 'KI-Style')}</h3>
               </div>
-              <button type="button" onClick={() => openLyricTagPreview(styleConsultation.draft)}>{t('music.actions.openPreview', 'Vorschau öffnen')}</button>
-            </section>
-          )}
-          <div className="button-row wrap">
-            <button type="button" className="primary" onClick={() => applyStyleDraft(styleConsultation.draft, true)}>{t('music.actions.applyMaster', 'Master übernehmen')}</button>
-            <button type="button" onClick={() => applyStyleDraft(styleConsultation.draft, false)}>{t('music.actions.applyStyleOnly', 'Nur Style übernehmen')}</button>
-            {suggestionLyricVocalTags(styleConsultation.draft).length > 0 && <button type="button" onClick={() => openLyricTagPreview(styleConsultation.draft)}>{t('music.actions.viewLyricTags', 'Songtext-Tags ansehen')}</button>}
-          </div>
-        </section>
-        <div className="style-consultation-chips">
-          {styleConsultationChips.map((chip) => (
-            <button key={chip} type="button" onClick={() => sendStyleConsultationMessage(chip)} disabled={styleConsultation.loading}>{chip}</button>
-          ))}
-        </div>
-        <div className="style-consultation-chat">
-          {(styleConsultation.messages || []).map((message, index) => (
-            <div key={`${message.role}-${index}`} className={`style-consultation-message ${message.role === 'assistant' ? 'assistant' : 'user'}`}>
-              <strong>{message.role === 'assistant' ? t('lyricsStudio.ai', 'KI') : t('lyricsStudio.you', 'Du')}</strong>
-              <p>{message.content}</p>
+              <span>{t('music.styleConsultation.localDraftHint', 'lokaler Entwurf')}</span>
             </div>
-          ))}
-          {!styleConsultation.messages?.length && <p className="muted">{t('music.styleConsultation.emptyHint', 'Frag z.B. „Mach die Hook größer, aber die Verse roher.“ Die App übernimmt nichts automatisch.')}</p>}
-        </div>
-        {styleConsultation.error && <p className="form-error">{styleConsultation.error}</p>}
-        <div className="style-consultation-input-row">
-          <textarea rows={3} value={styleConsultation.input || ''} onChange={(event) => setStyleConsultation((current) => ({ ...current, input: event.target.value }))} placeholder={t('music.styleConsultation.placeholder', 'Wunsch an die KI-Beratung…')} />
-          <button type="button" className="primary" disabled={styleConsultation.loading || !String(styleConsultation.input || '').trim()} onClick={() => sendStyleConsultationMessage()}>
-            {styleConsultation.loading ? <Loader2 size={16} className="spin-icon" /> : <Sparkles size={16} />}
-            {t('music.actions.send', 'Senden')}
-          </button>
+            <div className="style-consultation-draft-body">
+              <p className="ai-style-text">{styleConsultation.draft?.style || t('music.styleConsultation.noStyleLine', 'Keine Style-Zeile vorhanden.')}</p>
+              {styleConsultation.draft?.negative_tags && <p className="ai-negative-tags"><strong>Negative:</strong> {styleConsultation.draft.negative_tags}</p>}
+              {suggestionLyricVocalTags(styleConsultation.draft).length > 0 && (
+                <section className="ai-vocal-tag-preview-card">
+                  <div>
+                    <span className="eyebrow">{t('music.lyricTags.title', 'Songtext-Tags')}</span>
+                    <strong>{t('music.styleConsultation.workingTagCount', '{{count}} Section-Tags in der Arbeitsversion', { count: suggestionLyricVocalTags(styleConsultation.draft).length })}</strong>
+                    <small>{t('music.styleConsultation.tagModalHint', 'Im Modal als vollständigen Songtext prüfen, kopieren oder übernehmen.')}</small>
+                  </div>
+                  <button type="button" onClick={() => openLyricTagPreview(styleConsultation.draft)}>{t('music.actions.openPreview', 'Vorschau öffnen')}</button>
+                </section>
+              )}
+            </div>
+            <div className="style-consultation-action-bar">
+              <button
+                type="button"
+                className="style-consultation-history-button"
+                disabled={styleConsultation.loading || !(styleConsultation.past || []).length}
+                onClick={undoStyleConsultationDraft}
+                title={t('common.undo', 'Rückgängig')}
+              >
+                <Undo2 size={16} />
+                {t('common.undo', 'Rückgängig')}
+              </button>
+              <button
+                type="button"
+                className="style-consultation-history-button"
+                disabled={styleConsultation.loading || !(styleConsultation.future || []).length}
+                onClick={redoStyleConsultationDraft}
+                title={t('common.redo', 'Wiederholen')}
+              >
+                <Redo2 size={16} />
+                {t('common.redo', 'Wiederholen')}
+              </button>
+              <button type="button" className="primary" onClick={() => applyStyleDraft(styleConsultation.draft, true)}>{t('music.actions.applyMaster', 'Master übernehmen')}</button>
+              <button type="button" onClick={() => applyStyleDraft(styleConsultation.draft, false)}>{t('music.actions.applyStyleOnly', 'Nur Style übernehmen')}</button>
+              {suggestionLyricVocalTags(styleConsultation.draft).length > 0 && <button type="button" onClick={() => openLyricTagPreview(styleConsultation.draft)}>{t('music.actions.viewLyricTags', 'Songtext-Tags ansehen')}</button>}
+            </div>
+          </section>
+          <section className="style-consultation-chat-panel">
+            <div className="style-consultation-panel-header">
+              <div>
+                <p className="eyebrow">{t('music.styleConsultation.chatTitle', 'KI-Beratung')}</p>
+                <h3>{t('music.styleConsultation.chatSubtitle', 'Gezielt nachschärfen')}</h3>
+              </div>
+            </div>
+            <div className="style-consultation-chips">
+              {styleConsultationChips.map((chip) => (
+                <button key={chip} type="button" onClick={() => sendStyleConsultationMessage(chip)} disabled={styleConsultation.loading}>{chip}</button>
+              ))}
+            </div>
+            <div className="style-consultation-chat">
+              {(styleConsultation.messages || []).map((message, index) => (
+                <div key={`${message.role}-${index}`} className={`style-consultation-message ${message.role === 'assistant' ? 'assistant' : 'user'}`}>
+                  <strong>{message.role === 'assistant' ? t('lyricsStudio.ai', 'KI') : t('lyricsStudio.you', 'Du')}</strong>
+                  <p>{styleConsultationMessageText(message)}</p>
+                  {message.role === 'assistant' && message.updatedDraft && (
+                    <button type="button" className="style-consultation-apply-suggestion" onClick={() => applyStyleDraft(message.updatedDraft, true)}>
+                      {t('music.actions.applySuggestion', 'Vorschlag übernehmen')}
+                    </button>
+                  )}
+                </div>
+              ))}
+              {!styleConsultation.messages?.length && <p className="muted">{t('music.styleConsultation.emptyHint', 'Frag z.B. „Mach die Hook größer, aber die Verse roher.“ Die App übernimmt nichts automatisch.')}</p>}
+            </div>
+            {styleConsultation.error && <p className="form-error">{styleConsultation.error}</p>}
+            <div className="style-consultation-input-row">
+              <textarea
+                rows={3}
+                value={styleConsultation.input || ''}
+                onChange={(event) => setStyleConsultation((current) => ({ ...current, input: event.target.value }))}
+                onKeyDown={(event) => {
+                  if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
+                    event.preventDefault();
+                    sendStyleConsultationMessage();
+                  }
+                }}
+                placeholder={t('music.styleConsultation.placeholder', 'Wunsch an die KI-Beratung…')}
+              />
+              <button type="button" className="primary" disabled={styleConsultation.loading || !String(styleConsultation.input || '').trim()} onClick={() => sendStyleConsultationMessage()}>
+                {styleConsultation.loading ? <Loader2 size={16} className="spin-icon" /> : <Sparkles size={16} />}
+                {t('music.actions.send', 'Senden')}
+              </button>
+            </div>
+          </section>
         </div>
       </div>
     </Modal>

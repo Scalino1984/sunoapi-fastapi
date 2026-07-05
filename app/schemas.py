@@ -261,7 +261,7 @@ class VoiceRead(BaseModel):
 
 class ImportSunoTaskRequest(BaseModel):
     task_id: str = Field(min_length=1, max_length=255)
-    task_type: str = Field(default="generate_music", max_length=100)
+    task_type: str = Field(default="auto", max_length=100)
     title: str | None = Field(default=None, max_length=255)
     prompt: str | None = None
     style: str | None = None
@@ -274,6 +274,7 @@ class ImportSunoTaskRequest(BaseModel):
     def validate_supported_import_type(self):
         supported = {
             "generate_music",
+            "auto",
             "extend_music",
             "upload_and_cover",
             "upload_and_extend",
@@ -289,7 +290,7 @@ class ImportSunoTaskRequest(BaseModel):
             "create_video",
             "create_custom_voice",
         }
-        self.task_type = str(self.task_type or "generate_music").strip()
+        self.task_type = str(self.task_type or "auto").strip()
         if self.task_type not in supported:
             raise ValueError(f"Nicht unterstützter Import-Task-Typ: {self.task_type}")
         self.task_id = self.task_id.strip()
@@ -326,7 +327,7 @@ class ImportSunoSongResponse(BaseModel):
 
 class BatchImportSunoTaskRequest(BaseModel):
     task_ids: str = Field(min_length=1)
-    task_type: str = Field(default="generate_music", max_length=100)
+    task_type: str = Field(default="auto", max_length=100)
     cache_audio: bool = True
     title_prefix: str | None = Field(default=None, max_length=120)
     generate_srt: bool = False

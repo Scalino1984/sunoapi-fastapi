@@ -3665,7 +3665,7 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
         {wav.available && <a role="menuitem" className="button" href={api.archive.wavDownloadUrl(asset.id)} onClick={closeAudioMenu}><Download size={15} /> {t('library.actions.downloadWav', 'WAV herunterladen')}</a>}
         <button role="menuitem" type="button" onClick={() => { closeAudioMenu(); setTimestampAsset(asset); }}><Clock3 size={15} /> {t('library.timestamped.title', 'Timestamped Lyrics')}</button>
         <button role="menuitem" type="button" onClick={() => { closeAudioMenu(); openWorkflowWizard(asset); }}><FileText size={15} /> {t('library.workflow.audioWizard', 'Audio-Wizard')}</button>
-        <button role="menuitem" type="button" onClick={() => { closeAudioMenu(); onOpenDaw?.(asset); }}><Scissors size={15} /> {t('nav.daw', 'Mini-DAW')}</button>
+        <button role="menuitem" type="button" onClick={() => { closeAudioMenu(); onOpenDaw?.(asset); }}><Scissors size={15} /> {t('library.actions.openInMiniDaw', 'In Mini-DAW öffnen')}</button>
         <button role="menuitem" type="button" onClick={() => { closeAudioMenu(); setPlaylistAsset(asset); }}><Plus size={15} /> {t('nav.playlists', 'Playlists')}</button>
         <button role="menuitem" type="button" onClick={(event) => openLyricsEditor(asset, event)}><Edit3 size={15} /> {t('library.actions.editLyrics', 'Songtext bearbeiten')}</button>
         <button role="menuitem" type="button" onClick={() => { closeAudioMenu(); saveAssetLyricsToArchive(asset); }} disabled={!hasLyricsText}><FileText size={15} /> {t('library.actions.saveLyrics', 'Songtext speichern')}</button>
@@ -4668,7 +4668,7 @@ ${generationOptionsText(asset)}`,
                             <button type="button" onClick={() => generateSrt(asset)} disabled={srtLoadingIds.has(asset.id)}><FileText size={15} /> {srtLoadingIds.has(asset.id) ? t('library.bulk.srtRunning', 'SRT läuft…') : t('library.bulk.createSrt', 'SRT erzeugen')}</button>
                             <button type="button" onClick={() => generateAssetStems(asset)} disabled={stemLoadingIds.has(asset.id) || !isAudioLocal(asset)}><Headphones size={15} /> {stemLoadingIds.has(asset.id) ? t('library.bulk.stemsRunning', 'Stems laufen…') : t('library.content.stemFiles', 'Stem-Dateien')}</button>
                             <button type="button" onClick={() => generateLibraryAiTags(asset, Boolean(readLibraryAiTags(asset)))}><Tag size={15} /> {t('library.aiTags.title', 'KI-Tags')}</button>
-                            <button type="button" onClick={() => onOpenDaw?.(asset)}><Scissors size={15} /> {t('nav.daw', 'Mini-DAW')}</button>
+                            <button type="button" onClick={() => onOpenDaw?.(asset)}><Scissors size={15} /> {t('library.actions.openInMiniDaw', 'In Mini-DAW öffnen')}</button>
                             <button type="button" onClick={() => setPlaylistAsset(asset)}><Plus size={15} /> {t('nav.playlists', 'Playlists')}</button>
                             <a className="button primary" href={api.archive.assetBundleUrl(asset.id)}><Download size={15} /> {t('library.actions.audioPackageZip', 'Audio-Paket ZIP')}</a>
                             <a className="button" href={api.archive.downloadUrl(asset.id)}><Download size={15} /> {t('library.actions.downloadAudio', 'Audio herunterladen')}</a>
@@ -4886,7 +4886,7 @@ ${generationOptionsText(asset)}`,
                 </div>
                 <div className="project-action-buttons">
                   <button type="button" onClick={() => playProject(project)}><Headphones size={16} /> {projectPlaying ? t('player.pause', 'Pause') : t('player.play', 'Abspielen')}</button>
-                  <button type="button" onClick={() => onOpenDaw?.(project.playable[0] || project.assets[0])}>Mini-DAW</button>
+                  <button type="button" onClick={() => onOpenDaw?.(project.playable[0] || project.assets[0])}><Scissors size={16} /> {t('library.actions.openInMiniDaw', 'In Mini-DAW öffnen')}</button>
                 </div>
               </div>
             </article>

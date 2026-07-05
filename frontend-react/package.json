@@ -11,10 +11,14 @@
   },
   "dependencies": {
     "@vitejs/plugin-react": "latest",
-    "vite": "latest",
+    "@wavesurfer/react": "^1.0.12",
+    "interactjs": "^1.10.27",
+    "lucide-react": "latest",
     "react": "latest",
     "react-dom": "latest",
-    "lucide-react": "latest"
-  },
-  "devDependencies": {}
+    "react-hotkeys-hook": "^5.3.3",
+    "vite": "latest",
+    "wavesurfer.js": "^7.12.8",
+    "zustand": "^5.0.14"
+  }
 }

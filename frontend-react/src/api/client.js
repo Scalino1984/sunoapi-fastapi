@@ -357,8 +357,16 @@ export const api = {
   daw: {
     project: (id) => apiFetch(`/api/daw/assets/${id}`),
     render: (payload) => apiFetch('/api/daw/render', { method: 'POST', body: JSON.stringify(payload) }),
+    preview: (payload) => apiFetchBlob('/api/daw/preview', { method: 'POST', body: JSON.stringify(payload) }),
+    getArrangement: (id) => apiFetch(`/api/daw/assets/${id}/arrangement`),
+    saveArrangement: (id, arrangement) => apiFetch(`/api/daw/assets/${id}/arrangement`, { method: 'PUT', body: JSON.stringify({ arrangement }) }),
+    previewArrangement: (id, payload) => apiFetchBlob(`/api/daw/assets/${id}/arrangement/preview`, { method: 'POST', body: JSON.stringify(payload) }),
+    renderArrangement: (id, payload) => apiFetch(`/api/daw/assets/${id}/arrangement/render`, { method: 'POST', body: JSON.stringify(payload) }),
+    renderArrangementTask: (id, payload) => apiFetch(`/api/daw/assets/${id}/arrangement/render-task`, { method: 'POST', body: JSON.stringify(payload), timeoutMs: 12000 }),
     addMarker: (id, payload) => apiFetch(`/api/daw/assets/${id}/markers`, { method: 'POST', body: JSON.stringify(payload) }),
+    deleteMarker: (id, markerIndex) => apiFetch(`/api/daw/assets/${id}/markers/${encodeURIComponent(markerIndex)}`, { method: 'DELETE' }),
     analyze: (payload) => apiFetch('/api/daw/analyze', { method: 'POST', body: JSON.stringify(payload) }),
+    chat: (payload) => apiFetch('/api/daw/chat', { method: 'POST', body: JSON.stringify(payload) }),
     resolveCommand: (payload) => apiFetch('/api/daw/commands/resolve', { method: 'POST', body: JSON.stringify(payload) })
   },
   notifications: {

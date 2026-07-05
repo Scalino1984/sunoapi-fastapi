@@ -106,6 +106,27 @@ function tabPath(key, pathname = '', detailTitle = '') {
   return detailPart ? `${rootPath}/${detailPart}` : rootPath;
 }
 
+function dawAssetIdFromLocation() {
+  if (typeof window === 'undefined') return '';
+  try {
+    const params = new URLSearchParams(window.location.search || '');
+    return String(params.get('asset_id') || params.get('audio_asset_id') || '').trim();
+  } catch {
+    return '';
+  }
+}
+
+function dawPath(assetId = '', pathname = '') {
+  const base = reactRouteBase(pathname || (typeof window !== 'undefined' ? window.location.pathname : ''));
+  const normalized = String(assetId || '').trim();
+  return normalized ? `${base}/daw?asset_id=${encodeURIComponent(normalized)}` : `${base}/daw`;
+}
+
+function initialDawAssetId() {
+  if (typeof window === 'undefined') return '';
+  return tabFromPathname(window.location.pathname) === 'daw' ? dawAssetIdFromLocation() : '';
+}
+
 function initialActiveTab() {
   if (typeof window === 'undefined') return readStoredActiveTab();
   return tabFromPathname(window.location.pathname) || readStoredActiveTab();
@@ -129,7 +150,7 @@ const NOTIFICATION_STARTUP_GRACE_MS = 5000;
 const SIDEBAR_STORAGE_KEY = 'react-sidebar-mode';
 const WORKSPACE_FOCUS_STORAGE_KEY = 'react-workspace-focus';
 
-const directSidebarKeys = ['home', 'library', 'imports', 'lyrics', 'music'];
+const directSidebarKeys = ['home', 'library', 'music', 'lyrics', 'imports', 'status'];
 
 function getInitialSidebarMode() {
   try {
@@ -264,7 +285,7 @@ export default function App() {
   const [libraryOpenRequestKey, setLibraryOpenRequestKey] = useState(0);
   const [routePathname, setRoutePathname] = useState(() => (typeof window !== 'undefined' ? window.location.pathname : '/'));
   const [libraryRouteTitle, setLibraryRouteTitle] = useState(() => decodeRouteDetailSegment(routeDetailSegment(typeof window !== 'undefined' ? window.location.pathname : '', 'library')));
-  const [dawOpenAssetId, setDawOpenAssetId] = useState(null);
+  const [dawOpenAssetId, setDawOpenAssetId] = useState(initialDawAssetId);
   const [libraryResetSignal, setLibraryResetSignal] = useState(0);
   const [musicWizardSignal, setMusicWizardSignal] = useState(false);
   const [pollingUntil, setPollingUntil] = useState(0);
@@ -483,9 +504,11 @@ export default function App() {
     setMobileNavOpen(false);
     setOpenNavGroup(null);
     if (typeof window !== 'undefined') {
-      const targetPath = tabPath(activeTab, window.location.pathname, activeTab === 'library' ? libraryRouteTitle : '');
-      const currentPath = window.location.pathname.replace(/\/+$/, '') || '/';
-      const normalizedTarget = targetPath.replace(/\/+$/, '') || '/';
+      const targetPath = activeTab === 'daw'
+        ? dawPath(dawOpenAssetId || dawAssetIdFromLocation(), window.location.pathname)
+        : tabPath(activeTab, window.location.pathname, activeTab === 'library' ? libraryRouteTitle : '');
+      const currentPath = `${window.location.pathname.replace(/\/+$/, '') || '/'}${window.location.search || ''}`;
+      const normalizedTarget = targetPath;
       if (currentPath !== normalizedTarget) {
         if (routePopStateRef.current) {
           routePopStateRef.current = false;
@@ -497,7 +520,7 @@ export default function App() {
         routePopStateRef.current = false;
       }
     }
-  }, [activeTab, libraryRouteTitle]);
+  }, [activeTab, libraryRouteTitle, dawOpenAssetId]);
 
   useEffect(() => {
     if (activeTab !== 'library' && libraryRouteTitle) {
@@ -513,6 +536,8 @@ export default function App() {
       setRoutePathname(window.location.pathname);
       if (nextTab === 'library') {
         setLibraryRouteTitle(decodeRouteDetailSegment(routeDetailSegment(window.location.pathname, 'library')));
+      } else if (nextTab === 'daw') {
+        setDawOpenAssetId(dawAssetIdFromLocation());
       }
       setActiveTab(nextTab);
     };
@@ -1031,6 +1056,8 @@ export default function App() {
       if (isKeyboardInputTarget(event) || event.altKey || event.ctrlKey || event.metaKey) return;
       const key = event.key;
       const lower = String(key || '').toLowerCase();
+      const dawManagedKeys = new Set([' ', 'k', 'p', 's', 'm', 'delete', 'backspace', 'escape', 'arrowleft', 'arrowright']);
+      if (activeTab === 'daw' && dawManagedKeys.has(lower === ' ' ? ' ' : lower)) return;
       const hasQueue = Boolean(queue?.length);
       const hasLibraryDetails = activeTab === 'library' && Boolean(String(libraryRouteTitle || '').trim() || routeDetailSegment(routePathname, 'library'));
 
@@ -1169,6 +1196,35 @@ export default function App() {
     setActiveTab(safeKey);
   }
 
+  function openAssetInDaw(assetOrId) {
+    const rawId = typeof assetOrId === 'object' && assetOrId !== null
+      ? assetOrId.id || assetOrId.audio_asset_id || assetOrId.asset_id
+      : assetOrId;
+    const normalized = String(rawId || '').trim();
+    if (!normalized) {
+      notify?.('Kein gueltiges AudioAsset fuer die Mini-DAW gefunden.', 'error');
+      return;
+    }
+    setDawOpenAssetId(normalized);
+    try {
+      localStorage.setItem('react-daw-asset-id', normalized);
+    } catch {
+      // localStorage ist nur Komfortzustand; URL bleibt die Quelle.
+    }
+    setLibraryRouteTitle('');
+    setOpenNavGroup(null);
+    setMobileNavOpen(false);
+    setActiveTab('daw');
+    if (typeof window !== 'undefined') {
+      const targetPath = dawPath(normalized, window.location.pathname);
+      const currentPath = `${window.location.pathname.replace(/\/+$/, '') || '/'}${window.location.search || ''}`;
+      if (currentPath !== targetPath) {
+        window.history.pushState({ activeTab: 'daw', dawAssetId: normalized }, '', targetPath);
+        setRoutePathname(window.location.pathname);
+      }
+    }
+  }
+
   function tabHref(key, detailTitle = '') {
     return tabPath(key, typeof window !== 'undefined' ? window.location.pathname : '', detailTitle);
   }
@@ -1223,8 +1279,7 @@ export default function App() {
     const assetMatch = assets.find((asset) => assetSearchText(asset).includes(lower));
     if (assetMatch) {
       if (lower.includes('daw') || lower.includes('bearbeiten') || lower.includes('schneiden')) {
-        setDawOpenAssetId(assetMatch.id);
-        openMainTab('daw');
+        openAssetInDaw(assetMatch.id);
         notify(`${assetMatch.title || 'Song'} in Mini-DAW geöffnet.`, 'info');
       } else {
         openMainTab('library');
@@ -1575,16 +1630,14 @@ export default function App() {
     }
   }, [toast?.notification?.id, toastAutoMarkDone, refreshAll]);
 
-  const executeFrontendAction = useMemo(() => createAssistantActions({ openMainTab, play, assets, refreshAll, notify, setDawOpenAssetId, playerState }), [assets, refreshAll, notify, playerState.currentAssetId, playerState.isPlaying, playerState.duration]);
+  const executeFrontendAction = useMemo(() => createAssistantActions({ openMainTab, openAssetInDaw, play, assets, refreshAll, notify, playerState }), [assets, refreshAll, notify, playerState.currentAssetId, playerState.isPlaying, playerState.duration]);
   const localizedTabLabels = useMemo(
     () => Object.fromEntries(tabs.map(([key, label]) => [key, t(`nav.${key}`, label)])),
     [t]
   );
   const localizedSidebarSections = useMemo(() => ([
-    { label: t('nav.groups.production', 'Produktion'), keys: ['daw'] },
-    { label: t('nav.groups.collection', 'Sammlung'), keys: ['playlists', 'styles', 'texts'] },
-    { label: t('nav.groups.control', 'Kontrolle'), keys: ['status', 'system'] },
-    { label: t('nav.groups.administration', 'Verwaltung'), keys: ['admin'] }
+    { label: t('nav.groups.collection', 'Sammlung'), keys: ['playlists', 'styles', 'texts', 'daw'] },
+    { label: t('nav.groups.control', 'System'), keys: ['admin', 'system'] }
   ]), [t]);
   const toggleLanguage = useCallback(() => {
     setLanguage(language === 'en' ? 'de' : 'en');
@@ -1648,7 +1701,7 @@ export default function App() {
 
   const currentPage = useMemo(() => {
     if (activeTab === 'home') return <HomePage assets={assets} lyrics={lyrics} playlists={playlists} tasks={tasks} notifications={notifications} onNavigate={openMainTab} onPlay={play} onOpenAsset={requestLibraryAssetOpen} />;
-    if (activeTab === 'library') return <LibraryPage assets={assets} loadError={libraryLoadError} voices={voices} playlists={playlists} onReload={refreshAll} onPlay={play} notify={notify} onUseLyric={useLyricForMusic} onReusePrompt={reusePromptForMusic} openAssetId={libraryOpenAssetId} openAssetRequestKey={libraryOpenRequestKey} onOpenAssetHandled={handleLibraryOpenAssetHandled} resetSignal={libraryResetSignal} onOpenDaw={(asset) => { setDawOpenAssetId(asset?.id || asset); setActiveTab('daw'); }} playbackState={stablePlaybackState} onToggleCurrentPlayback={toggleCurrentPlayer} onDetailTitleChange={handleLibraryDetailRouteChange} routeDetailSlug={libraryRouteDetailSlug} searchQuery={commandQuery} onTrashChanged={markTrashHasItems} />;
+    if (activeTab === 'library') return <LibraryPage assets={assets} loadError={libraryLoadError} voices={voices} playlists={playlists} onReload={refreshAll} onPlay={play} notify={notify} onUseLyric={useLyricForMusic} onReusePrompt={reusePromptForMusic} openAssetId={libraryOpenAssetId} openAssetRequestKey={libraryOpenRequestKey} onOpenAssetHandled={handleLibraryOpenAssetHandled} resetSignal={libraryResetSignal} onOpenDaw={openAssetInDaw} playbackState={stablePlaybackState} onToggleCurrentPlayback={toggleCurrentPlayer} onDetailTitleChange={handleLibraryDetailRouteChange} routeDetailSlug={libraryRouteDetailSlug} searchQuery={commandQuery} onTrashChanged={markTrashHasItems} />;
     if (activeTab === 'imports') return <ImportPage notify={notify} onReload={refreshAll} onOpenAsset={requestLibraryAssetOpen} />;
     if (activeTab === 'music') return <MusicPage styles={styles} voices={voices} uploadedFiles={uploadedFiles} assets={assets} draft={musicDraft} notify={notify} onRefresh={refreshAll} onMusicStarted={handleMusicStarted} initialWizard={musicWizardSignal} taskRefreshState={taskRefreshState} onCheckStatus={() => refreshPendingAndReload({ manual: true })} />;
     if (activeTab === 'lyrics') return <LyricsStudioPage lyrics={lyrics} assets={assets} notify={notify} onRefresh={refreshAll} useForMusic={useLyricForMusic} />;
@@ -1656,7 +1709,7 @@ export default function App() {
     if (activeTab === 'playlists') return <PlaylistsPage playlists={playlists} assets={assets} notify={notify} onReload={refreshAll} onPlay={play} searchQuery={commandQuery} />;
     if (activeTab === 'trash') return <TrashPage notify={notify} onReload={refreshAll} onTrashChanged={setTrashHasItems} />;
     if (activeTab === 'styles') return <StylesPage styles={styles} notify={notify} onReload={refreshAll} searchQuery={commandQuery} />;
-    if (activeTab === 'daw') return <DawPage assets={assets} selectedAssetId={dawOpenAssetId} onSelectedHandled={() => setDawOpenAssetId(null)} onPlay={play} notify={notify} onReload={refreshAll} />;
+    if (activeTab === 'daw') return <DawPage assets={assets} selectedAssetId={dawOpenAssetId || dawAssetIdFromLocation()} onSelectedHandled={() => {}} onAssetChange={(id) => setDawOpenAssetId(String(id || '').trim())} onBackToLibrary={() => openMainTab('library')} onPlay={play} notify={notify} onReload={refreshAll} />;
     if (activeTab === 'admin') return <AdminPage notify={notify} />;
     if (activeTab === 'status') return <StatusPage notifications={notifications} tasks={tasks} onReload={refreshAll} onCheckStatus={() => refreshPendingAndReload({ manual: true })} taskRefreshState={taskRefreshState} onOpenNotification={openNotification} onOpenTaskDetails={openTaskDetails} notify={notify} />;
     if (activeTab === 'help') return <HelpPage onNavigate={openMainTab} notify={notify} />;
@@ -1724,12 +1777,6 @@ export default function App() {
         </header>
 
         <aside id="studioSidebar" className="studio-sidebar" aria-label={t('nav.mainNavigation', 'Hauptnavigation')}>
-          <div className="sidebar-head">
-            <div>
-              <strong>{t('nav.navigation', 'Navigation')}</strong>
-              <span>{localizedTabLabels[activeTab] || tabLabels[activeTab] || activeTab}</span>
-            </div>
-          </div>
           <nav className="studio-sidebar-nav">
             <div className="sidebar-direct-nav" aria-label={t('nav.directNavigation', 'Direktnavigation')}>
               {directSidebarKeys.map((key) => {

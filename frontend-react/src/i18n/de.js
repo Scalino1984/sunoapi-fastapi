@@ -277,7 +277,7 @@ export const de = {
     import: {
       eyebrow: 'Backfill / Import',
       title: 'Externen SunoAPI.org-Task importieren',
-      text: 'SunoAPI.org-Task-ID eintragen, über die offizielle Task-/Record-Info laden und lokal als Task, Song und AudioAsset ablegen.',
+      text: 'SunoAPI.org-Task-ID eintragen. Die App erkennt den Task-Typ automatisch, lädt die passende Record-Info und legt Task, Song und AudioAsset lokal ab.',
       cachingCovers: 'Sichere Cover…',
       cacheMissingCovers: 'Fehlende Cover lokal sichern',
       taskType: 'Task-Typ',
@@ -1359,6 +1359,53 @@ export const de = {
     checkPlan: 'Plan prüfen',
     renderDirectly: 'Direkt rendern',
     load: 'Laden',
+    remoteSource: 'Quelle',
+    jumpStart: 'Zum Start',
+    jumpEnd: 'Zum Ende',
+    timelinePlan: 'Timeline-Plan',
+    setStartFromPlayhead: 'Start = Playhead',
+    setEndFromPlayhead: 'Ende = Playhead',
+    markerFromPlayhead: 'Markerzeit übernehmen',
+    planNeedsCheck: 'Plan prüfen',
+    planReady: 'Plan bereit',
+    analysis: 'Analyse',
+    fades: 'Fades',
+    output: 'Ausgabe',
+    applyPlan: 'Plan übernehmen',
+    noVersions: 'Noch keine Versionen vorhanden.',
+    noMarkers: 'Noch keine Marker gesetzt.',
+    deleteMarker: 'Marker löschen',
+    preview: 'Vorschau',
+    previewReady: 'Vorschau bereit',
+    inspector: {
+      plan: 'Plan',
+      tools: 'Werkzeuge',
+      ai: 'KI',
+      versions: 'Versionen'
+    },
+    planRows: {
+      range: 'Bereich',
+      fadeIn: 'Fade-in',
+      fadeOut: 'Fade-out',
+      gain: 'Gain',
+      processing: 'Bearbeitung',
+      format: 'Format'
+    },
+    warnings: {
+      noAudio: 'Kein Audio ausgewählt.',
+      invalidRange: 'Ende muss nach Start liegen.',
+      endAfterDuration: 'Ende liegt hinter der Audiodauer.',
+      fadeOutTooLong: 'Fade-out ist länger als der Schnittbereich.',
+      fadeInTooLong: 'Fade-in ist länger als der Schnittbereich.',
+      noOperations: 'Der Plan enthält keine Bearbeitung. Speichern würde nur eine neue Kopie erzeugen.'
+    },
+    ai: {
+      usesAdminDefaults: 'Nutzt die KI-Konfiguration aus dem Adminbereich.',
+      empty: 'Beschreibe die Audiobearbeitung einfach im Chat. Die KI erstellt nur einen Plan, keine automatische Änderung.',
+      planPrepared: 'Plan vorbereitet',
+      noPlan: 'Die KI hat keinen eindeutigen Plan erkannt.',
+      noPlanTitle: 'Kein eindeutiger Plan'
+    },
     tabs: {
       cut: 'Schnitt',
       volume: 'Lautstärke',
@@ -1381,8 +1428,13 @@ export const de = {
       commandFailed: 'Audio-Befehl konnte nicht ausgeführt werden.',
       markerSaved: 'Marker gespeichert.',
       markerFailed: 'Marker konnte nicht gespeichert werden.',
+      markerDeleted: 'Marker gelöscht.',
+      markerDeleteFailed: 'Marker konnte nicht gelöscht werden.',
       analysisCreated: 'Audioanalyse erstellt.',
-      analysisFailed: 'Analyse fehlgeschlagen.'
+      analysisFailed: 'Analyse fehlgeschlagen.',
+      planApplied: 'Plan wurde übernommen.',
+      previewCreated: 'DAW-Vorschau erstellt.',
+      previewFailed: 'DAW-Vorschau fehlgeschlagen.'
     }
   },
   playlists: {

@@ -4,32 +4,14 @@ import { api } from '../api/client.js';
 import { SectionHeader } from '../components/SectionHeader.jsx';
 import { useI18n } from '../i18n/I18nContext.jsx';
 
-const SUNO_TASK_TYPES = [
-  ['generate_music', 'Generate Music'],
-  ['extend_music', 'Extend Music'],
-  ['upload_and_cover', 'Upload And Cover'],
-  ['upload_and_extend', 'Upload And Extend'],
-  ['add_vocals', 'Add Vocals'],
-  ['add_instrumental', 'Add Instrumental'],
-  ['generate_mashup', 'Generate Mashup'],
-  ['generate_sounds', 'Generate Sounds'],
-  ['create_cover', 'Generate Music Cover'],
-  ['generate_lyrics', 'Generate Lyrics'],
-  ['separate', 'Stem Separation'],
-  ['convert_to_wav', 'Convert to WAV'],
-  ['generate_midi', 'Generate MIDI'],
-  ['create_video', 'Create Music Video'],
-  ['create_custom_voice', 'Custom Voice']
-];
-
 export function ImportPage({ notify, onReload, onOpenAsset }) {
   const { t } = useI18n();
   const [importingTask, setImportingTask] = useState(false);
   const [cachingCovers, setCachingCovers] = useState(false);
   const [manualImportBusy, setManualImportBusy] = useState(false);
-  const [importPayload, setImportPayload] = useState({ task_id: '', task_type: 'generate_music', title: '', prompt: '', style: '', model: '', cache_audio: true, generate_srt: false, generate_stems: false });
+  const [importPayload, setImportPayload] = useState({ task_id: '', title: '', prompt: '', style: '', model: '', cache_audio: true, generate_srt: false, generate_stems: false });
   const [batchImporting, setBatchImporting] = useState(false);
-  const [batchImportPayload, setBatchImportPayload] = useState({ task_ids: '', task_type: 'generate_music', cache_audio: true, title_prefix: '', generate_srt: false, generate_stems: false });
+  const [batchImportPayload, setBatchImportPayload] = useState({ task_ids: '', cache_audio: true, title_prefix: '', generate_srt: false, generate_stems: false });
   const [songImporting, setSongImporting] = useState(false);
   const [songImportPayload, setSongImportPayload] = useState({ song_id: '', cache_audio: true, cache_cover: true, import_video_url: true, overwrite_existing: false, generate_srt: false, generate_stems: false });
   const [songBatchImporting, setSongBatchImporting] = useState(false);
@@ -73,7 +55,6 @@ export function ImportPage({ notify, onReload, onOpenAsset }) {
     try {
       const payload = {
         task_id: taskId,
-        task_type: importPayload.task_type || 'generate_music',
         title: importPayload.title.trim() || undefined,
         prompt: importPayload.prompt.trim() || undefined,
         style: importPayload.style.trim() || undefined,
@@ -212,16 +193,11 @@ export function ImportPage({ notify, onReload, onOpenAsset }) {
         <div>
           <p className="eyebrow"><RefreshCw size={14} /> {t('status.import.eyebrow', 'Backfill / Import')}</p>
           <h2>{t('status.import.title', 'Externen SunoAPI.org-Task importieren')}</h2>
-          <p className="muted">{t('status.import.text', 'SunoAPI.org-Task-ID eintragen, über die offizielle Task-/Record-Info laden und lokal als Task, Song und AudioAsset ablegen.')}</p>
+          <p className="muted">{t('status.import.text', 'SunoAPI.org-Task-ID eintragen. Die App erkennt den Task-Typ automatisch, lädt die passende Record-Info und legt Task, Song und AudioAsset lokal ab.')}</p>
         </div>
         <form className="form-grid" onSubmit={importExternalTask}>
-          <label>Task-ID
+          <label className="wide">Task-ID
             <input value={importPayload.task_id} onChange={(event) => updateImportPayload('task_id', event.target.value)} placeholder={t('status.import.taskIdPlaceholder', 'z. B. b762e25da0e27d420535ae1068504ecd')} />
-          </label>
-          <label>{t('status.import.taskType', 'Task-Typ')}
-            <select value={importPayload.task_type} onChange={(event) => updateImportPayload('task_type', event.target.value)}>
-              {SUNO_TASK_TYPES.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-            </select>
           </label>
           <label>{t('status.import.titleOptional', 'Titel optional')}
             <input value={importPayload.title} onChange={(event) => updateImportPayload('title', event.target.value)} placeholder={t('status.import.localDisplayName', 'Lokaler Anzeigename')} />
@@ -248,11 +224,6 @@ export function ImportPage({ notify, onReload, onOpenAsset }) {
           <form className="form-grid" onSubmit={importExternalTasksBatch}>
             <label className="wide">{t('status.import.taskIdsOnePerLine', 'Task-IDs, eine pro Zeile')}
               <textarea rows={5} value={batchImportPayload.task_ids} onChange={(event) => updateBatchImportPayload('task_ids', event.target.value)} placeholder={t('status.import.taskIdsPlaceholder', 'Task-ID 1\nTask-ID 2\nTask-ID 3')} />
-            </label>
-            <label>{t('status.import.taskType', 'Task-Typ')}
-              <select value={batchImportPayload.task_type} onChange={(event) => updateBatchImportPayload('task_type', event.target.value)}>
-                {SUNO_TASK_TYPES.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-              </select>
             </label>
             <label>{t('status.import.titlePrefixOptional', 'Titel-Präfix optional')}
               <input value={batchImportPayload.title_prefix} onChange={(event) => updateBatchImportPayload('title_prefix', event.target.value)} placeholder={t('status.import.titlePrefixPlaceholder', 'z. B. Backfill')} />

@@ -5,21 +5,27 @@ import math
 import re
 import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
+from starlette.background import BackgroundTask
 
 from app.config import get_settings
 from app.services.portable_path_service import to_portable_path
-from app.database import get_db
-from app.models import AudioAsset, StatusNotification
+from app.database import SessionLocal, get_db
+from app.models import AudioAsset, StatusNotification, SunoTask
 from app.schemas import AudioAssetRead
 from app.services.audio_metadata_service import normalize_audio_content_type, read_audio_duration_seconds
 from app.services.waveform_service import get_or_create_waveform
+from app.services.background_task_runner import run_detached_process
+from app.services.task_lifecycle_service import heartbeat_task, mark_task_finished
+from app.utils.time_utils import utc_now_naive
 from app.services.ai_chat_service import AiChatService, AiProviderError
 
 router = APIRouter(prefix="/api/daw", tags=["daw"])
@@ -56,6 +62,84 @@ class DawCommandRequest(BaseModel):
     execute: bool = False
     preview_only: bool = False
     use_ai: bool = True
+
+
+class DawChatRequest(BaseModel):
+    source_audio_id: int
+    message: str = Field(min_length=1)
+    current_time: float | None = None
+    duration_seconds: float | None = None
+    current_plan: dict[str, Any] | None = None
+    markers: list[dict[str, Any]] = Field(default_factory=list)
+    history: list[dict[str, Any]] = Field(default_factory=list)
+    output_format: Literal["mp3", "wav", "m4a"] = "mp3"
+    execute: bool = False
+
+
+class DawArrangementMarker(BaseModel):
+    id: str | None = None
+    label: str = Field(default="Marker", min_length=1, max_length=120)
+    time: float = Field(default=0, ge=0)
+    type: str | None = Field(default="marker", max_length=80)
+    note: str | None = None
+
+
+class DawArrangementClip(BaseModel):
+    id: str | None = None
+    track_id: str = Field(default="track-1", max_length=40)
+    source_audio_id: int | None = None
+    timeline_start: float = Field(default=0, ge=0)
+    source_start: float = Field(default=0, ge=0)
+    source_end: float | None = None
+    gain_db: float = Field(default=0, ge=-24, le=24)
+    fade_in: float = Field(default=0, ge=0, le=60)
+    fade_out: float = Field(default=0, ge=0, le=60)
+    label: str | None = Field(default=None, max_length=140)
+    muted: bool = False
+    locked: bool = False
+    color: str | None = Field(default=None, max_length=40)
+
+
+class DawArrangementTrack(BaseModel):
+    id: str = Field(max_length=40)
+    name: str = Field(max_length=120)
+    muted: bool = False
+    solo: bool = False
+    volume_db: float = Field(default=0, ge=-24, le=24)
+
+
+class DawArrangementState(BaseModel):
+    version: int = 1
+    source_audio_id: int
+    duration_seconds: float = Field(default=0, ge=0)
+    bpm: float | None = Field(default=None, ge=20, le=300)
+    time_signature: str = Field(default="4/4", max_length=12)
+    snap_enabled: bool = False
+    snap_unit: Literal["bar", "beat", "half", "quarter"] = "beat"
+    tracks: list[DawArrangementTrack] = Field(default_factory=list)
+    clips: list[DawArrangementClip] = Field(default_factory=list)
+    markers: list[DawArrangementMarker] = Field(default_factory=list)
+
+
+class DawArrangementSaveRequest(BaseModel):
+    arrangement: DawArrangementState
+
+
+class DawArrangementRenderRequest(BaseModel):
+    arrangement: DawArrangementState | None = None
+    output_format: Literal["mp3", "wav", "m4a"] = "mp3"
+    version_label: str | None = None
+    create_notification: bool = True
+
+
+class DawArrangementRenderTaskResponse(BaseModel):
+    ok: bool = True
+    queued: bool = True
+    task_local_id: int
+    task_type: str = "daw_arrangement_render"
+    status: str = "RUNNING"
+    message: str
+
 
 
 TIME_RE = re.compile(r"(?:(\d+)\s*[:.]\s*)?(\d{1,2})(?:\s*(?:min|minute|minuten|m))?", re.I)
@@ -112,6 +196,34 @@ def _sanitize_filename(value: str) -> str:
     cleaned = re.sub(r"[^A-Za-z0-9ÄÖÜäöüß._ -]+", "_", value or "")
     cleaned = re.sub(r"\s+", " ", cleaned).strip(" ._- ")
     return (cleaned or "daw_edit")[:140]
+
+
+def _edited_display_title(value: str | None) -> str:
+    """Return the library-facing title for a DAW-created version.
+
+    Library and song-detail views primarily use title/display_title from
+    audio_assets.  DAW renders must therefore be visibly distinguishable from
+    the untouched source asset without requiring special frontend branching.
+    """
+    base = re.sub(r"\s+", " ", str(value or "Audio")).strip() or "Audio"
+    if re.search(r"\(\s*Editiert\s*\)\s*$", base, re.I):
+        return base[:255]
+    return f"{base} (Editiert)"[:255]
+
+
+def _preview_media_type(output_format: str) -> str:
+    if output_format == "wav":
+        return "audio/wav"
+    if output_format == "m4a":
+        return "audio/mp4"
+    return "audio/mpeg"
+
+
+def _unlink_path(path: Path) -> None:
+    try:
+        path.unlink(missing_ok=True)
+    except Exception:
+        pass
 
 
 def _time_to_seconds(text: str) -> float | None:
@@ -229,6 +341,90 @@ def _normalize_ai_operations(operations: Any, duration_seconds: float | None = N
                 op["preset"] = preset
         normalized.append(op)
     return normalized
+
+
+def _normalize_daw_output_format(value: Any) -> Literal["mp3", "wav", "m4a"]:
+    normalized = str(value or "mp3").strip().lower()
+    if normalized in {"mp3", "wav", "m4a"}:
+        return normalized  # type: ignore[return-value]
+    return "mp3"
+
+
+def _fallback_plan_for_asset(message: str, asset: AudioAsset, duration: float, current_time: float, output_format: str) -> dict[str, Any] | None:
+    lowered = message.lower()
+    operations: list[dict[str, Any]] = []
+    start = 0.0
+    end: float | None = None
+
+    if "playhead" in lowered or "aktuelle" in lowered or "current" in lowered:
+        start = max(0.0, float(current_time or 0))
+
+    short_match = re.search(r"(\d+(?:[,.]\d+)?)\s*(?:sek|sekunden|s|seconds?)", message, re.I)
+    if "short" in lowered or "tiktok" in lowered or "clip" in lowered:
+        length = float(short_match.group(1).replace(",", ".")) if short_match else 30.0
+        end = min(duration or start + length, start + max(1.0, length))
+
+    explicit_range = re.search(r"(?:von|from|ab)\s+([^,;]+?)\s+(?:bis|to|-)\s+([^,;]+)", message, re.I)
+    if explicit_range:
+        parsed_start = _time_to_seconds(explicit_range.group(1))
+        parsed_end = _time_to_seconds(explicit_range.group(2))
+        if parsed_start is not None:
+            start = parsed_start
+        if parsed_end is not None:
+            end = parsed_end
+
+    cut_match = re.search(r"(?:bei|bis|auf|to|at)\s+([^,.;]+)", message, re.I)
+    if cut_match and ("schneide" in lowered or "trim" in lowered or "cut" in lowered or "kürz" in lowered or "kuerz" in lowered):
+        parsed_end = _time_to_seconds(cut_match.group(1))
+        if parsed_end is not None:
+            end = parsed_end
+
+    remove_intro_match = re.search(r"(?:anfang|intro|start).*?(?:weg|entfern|remove|cut).*?(\d+(?:[,.]\d+)?)\s*(?:sek|sekunden|s|seconds?)", message, re.I)
+    if remove_intro_match:
+        start = float(remove_intro_match.group(1).replace(",", "."))
+        end = duration or end
+
+    if end is not None and end > start:
+        operations.append({"type": "trim", "start": start, "end": end})
+
+    fade_match = re.search(r"(\d+(?:[,.]\d+)?)\s*(?:sek|sekunden|s|seconds?)?\s*fade\s*-?\s*out", message, re.I)
+    if not fade_match:
+        fade_match = re.search(r"fade\s*-?\s*out.*?(\d+(?:[,.]\d+)?)\s*(?:sek|sekunden|s|seconds?)", message, re.I)
+    if fade_match or "fade out" in lowered or "fade-out" in lowered:
+        fade_duration = float(fade_match.group(1).replace(",", ".")) if fade_match else 2.0
+        operations.append({"type": "fade_out", "duration": max(0.05, min(30.0, fade_duration))})
+
+    fade_in_match = re.search(r"(\d+(?:[,.]\d+)?)\s*(?:sek|sekunden|s|seconds?)?\s*fade\s*-?\s*in", message, re.I)
+    if fade_in_match or "fade in" in lowered or "fade-in" in lowered:
+        fade_duration = float(fade_in_match.group(1).replace(",", ".")) if fade_in_match else 1.0
+        operations.append({"type": "fade_in", "duration": max(0.05, min(30.0, fade_duration))})
+
+    gain_match = re.search(r"([+-]?\d+(?:[,.]\d+)?)\s*dB", message, re.I)
+    if gain_match or "lauter" in lowered or "leiser" in lowered:
+        gain = float(gain_match.group(1).replace(",", ".")) if gain_match else (2.0 if "lauter" in lowered else -2.0)
+        operations.append({"type": "gain", "gain_db": max(-12.0, min(12.0, gain))})
+
+    if "youtube" in lowered or "normalis" in lowered or "master" in lowered:
+        operations.append({"type": "normalize", "target_lufs": -14})
+    if "klar" in lowered or "clear" in lowered:
+        operations.append({"type": "preset", "preset": "klarer"})
+    if "druck" in lowered or "punch" in lowered or "club" in lowered:
+        operations.append({"type": "preset", "preset": "mehr_druck"})
+    if "bass" in lowered:
+        operations.append({"type": "preset", "preset": "bass"})
+
+    normalized = _normalize_ai_operations(operations, duration)
+    if not normalized:
+        return None
+
+    title = asset.display_title or asset.title or f"Audio {asset.id}"
+    return {
+        "source_audio_id": asset.id,
+        "operations": normalized,
+        "version_label": f"DAW Chat Edit {title}"[:80],
+        "output_format": _normalize_daw_output_format(output_format),
+        "create_notification": True,
+    }
 
 
 async def _resolve_daw_command_with_ai(db: Session, message: str) -> dict[str, Any] | None:
@@ -431,7 +627,8 @@ def _render_plan(db: Session, payload: DawRenderRequest) -> AudioAsset:
     output_format = payload.output_format or "mp3"
     extension = f".{output_format}"
     base_title = source.display_title or source.title or f"Audio {source.id}"
-    version_label = payload.version_label or payload.title_suffix or "DAW Edit"
+    edited_title = _edited_display_title(base_title)
+    version_label = payload.version_label or payload.title_suffix or "Editiert"
     temp_name = _sanitize_filename(f"daw_{source.id}_{version_label}")
     target_path = settings.audio_storage_path / f"{temp_name}_{abs(hash(json.dumps([op.model_dump() for op in payload.operations], sort_keys=True))) % 100000000}{extension}"
     args = _build_ffmpeg_args(source_path, target_path, payload.operations, output_format)
@@ -449,8 +646,8 @@ def _render_plan(db: Session, payload: DawRenderRequest) -> AudioAsset:
         song_id=source.song_id,
         suno_task_id=source.suno_task_id,
         audio_id=f"daw-{source.id}-{target_path.stem[-8:]}",
-        title=source.title,
-        display_title=base_title,
+        title=edited_title,
+        display_title=edited_title,
         image_url=source.image_url,
         source_url=f"{settings.suno_audio_public_route.rstrip('/')}/{target_path.name}",
         local_path=to_portable_path(target_path, storage_root=settings.audio_storage_path),
@@ -460,12 +657,14 @@ def _render_plan(db: Session, payload: DawRenderRequest) -> AudioAsset:
         file_size_bytes=target_path.stat().st_size,
         duration_seconds=duration,
         status="cached",
-        operation_label="DAW Edit",
+        operation_label="Editiert",
         parent_audio_id=str(source.id),
         parent_task_id=source.suno_task_id,
         version_label=version_label,
         metadata_json={
             "operation": "DAW Edit",
+            "is_edited_version": True,
+            "original_display_title": base_title,
             "daw_edit_plan": payload.model_dump(),
             "source_audio_asset_id": source.id,
             "source_filename": source.filename,
@@ -485,6 +684,512 @@ def _render_plan(db: Session, payload: DawRenderRequest) -> AudioAsset:
     db.commit()
     db.refresh(new_asset)
     return new_asset
+
+
+
+
+def _track_defaults() -> list[dict[str, Any]]:
+    return [
+        {"id": "track-1", "name": "Spur 1", "muted": False, "solo": False, "volume_db": 0},
+        {"id": "track-2", "name": "Spur 2", "muted": False, "solo": False, "volume_db": 0},
+        {"id": "track-3", "name": "Spur 3", "muted": False, "solo": False, "volume_db": 0},
+    ]
+
+
+def _clip_duration(clip: dict[str, Any]) -> float:
+    return max(0.0, float(clip.get("source_end") or 0) - float(clip.get("source_start") or 0))
+
+
+def _default_arrangement(asset: AudioAsset, duration: float | None = None) -> dict[str, Any]:
+    safe_duration = float(duration or asset.duration_seconds or 0 or 0)
+    title = asset.display_title or asset.title or asset.filename or f"Audio {asset.id}"
+    return {
+        "version": 1,
+        "source_audio_id": asset.id,
+        "duration_seconds": safe_duration,
+        "bpm": None,
+        "time_signature": "4/4",
+        "snap_enabled": False,
+        "snap_unit": "beat",
+        "tracks": _track_defaults(),
+        "clips": [
+            {
+                "id": f"clip-{asset.id}-1",
+                "track_id": "track-1",
+                "source_audio_id": asset.id,
+                "timeline_start": 0,
+                "source_start": 0,
+                "source_end": safe_duration,
+                "gain_db": 0,
+                "fade_in": 0,
+                "fade_out": 0,
+                "label": title,
+                "muted": False,
+                "locked": False,
+                "color": "cyan",
+            }
+        ],
+        "markers": [],
+    }
+
+
+def _sanitize_arrangement(asset: AudioAsset, payload: dict[str, Any] | DawArrangementState | None) -> dict[str, Any]:
+    if isinstance(payload, DawArrangementState):
+        raw = payload.model_dump()
+    elif isinstance(payload, dict):
+        raw = dict(payload)
+    else:
+        raw = {}
+    fallback_duration = float(asset.duration_seconds or raw.get("duration_seconds") or 0 or 0)
+    default = _default_arrangement(asset, fallback_duration)
+    tracks_raw = raw.get("tracks") if isinstance(raw.get("tracks"), list) else default["tracks"]
+    tracks: list[dict[str, Any]] = []
+    seen_tracks: set[str] = set()
+    for index, item in enumerate(tracks_raw[:3]):
+        if not isinstance(item, dict):
+            continue
+        track_id = str(item.get("id") or f"track-{index + 1}")[:40]
+        if track_id in seen_tracks:
+            track_id = f"track-{index + 1}"
+        seen_tracks.add(track_id)
+        tracks.append({
+            "id": track_id,
+            "name": str(item.get("name") or f"Spur {index + 1}")[:120],
+            "muted": bool(item.get("muted", False)),
+            "solo": bool(item.get("solo", False)),
+            "volume_db": max(-24.0, min(24.0, _safe_float(item.get("volume_db"), 0.0) or 0.0)),
+        })
+    if not tracks:
+        tracks = default["tracks"]
+    valid_track_ids = {track["id"] for track in tracks}
+
+    duration = max(0.0, _safe_float(raw.get("duration_seconds"), fallback_duration) or fallback_duration)
+    clips: list[dict[str, Any]] = []
+    for index, item in enumerate((raw.get("clips") if isinstance(raw.get("clips"), list) else default["clips"])[:120]):
+        if not isinstance(item, dict):
+            continue
+        source_audio_id = int(item.get("source_audio_id") or asset.id)
+        source_start = max(0.0, _safe_float(item.get("source_start"), 0.0) or 0.0)
+        source_end = _safe_float(item.get("source_end"), duration)
+        if source_end is None or source_end <= source_start:
+            source_end = source_start + 0.1
+        source_end = min(max(source_end, source_start + 0.1), 60 * 60 * 4)
+        track_id = str(item.get("track_id") or "track-1")[:40]
+        if track_id not in valid_track_ids:
+            track_id = tracks[0]["id"]
+        clip = {
+            "id": str(item.get("id") or f"clip-{asset.id}-{index + 1}")[:80],
+            "track_id": track_id,
+            "source_audio_id": source_audio_id,
+            "timeline_start": max(0.0, _safe_float(item.get("timeline_start"), 0.0) or 0.0),
+            "source_start": source_start,
+            "source_end": source_end,
+            "gain_db": max(-24.0, min(24.0, _safe_float(item.get("gain_db"), 0.0) or 0.0)),
+            "fade_in": max(0.0, min(60.0, _safe_float(item.get("fade_in"), 0.0) or 0.0)),
+            "fade_out": max(0.0, min(60.0, _safe_float(item.get("fade_out"), 0.0) or 0.0)),
+            "label": str(item.get("label") or asset.display_title or asset.title or f"Clip {index + 1}")[:140],
+            "muted": bool(item.get("muted", False)),
+            "locked": bool(item.get("locked", False)),
+            "color": str(item.get("color") or "cyan")[:40],
+        }
+        duration = max(duration, clip["timeline_start"] + _clip_duration(clip))
+        clips.append(clip)
+    if not clips:
+        clips = default["clips"]
+
+    markers: list[dict[str, Any]] = []
+    raw_markers = raw.get("markers") if isinstance(raw.get("markers"), list) else []
+    legacy_metadata = asset.metadata_json if isinstance(asset.metadata_json, dict) else {}
+    if not raw_markers and isinstance(legacy_metadata.get("daw_markers"), list):
+        raw_markers = legacy_metadata.get("daw_markers")
+    for index, item in enumerate(raw_markers[:200]):
+        if not isinstance(item, dict):
+            continue
+        markers.append({
+            "id": str(item.get("id") or f"marker-{index + 1}")[:80],
+            "label": str(item.get("label") or "Marker")[:120],
+            "time": max(0.0, _safe_float(item.get("time"), 0.0) or 0.0),
+            "type": str(item.get("type") or "marker")[:80],
+            "note": item.get("note") if item.get("note") is None else str(item.get("note"))[:500],
+        })
+    markers = sorted(markers, key=lambda item: float(item.get("time") or 0))
+
+    bpm_value = _safe_float(raw.get("bpm"), None)
+    if bpm_value is not None:
+        bpm_value = max(20.0, min(300.0, bpm_value))
+    snap_unit = str(raw.get("snap_unit") or "beat")
+    if snap_unit not in {"bar", "beat", "half", "quarter"}:
+        snap_unit = "beat"
+    return {
+        "version": 1,
+        "source_audio_id": asset.id,
+        "duration_seconds": duration,
+        "bpm": bpm_value,
+        "time_signature": str(raw.get("time_signature") or "4/4")[:12],
+        "snap_enabled": bool(raw.get("snap_enabled", False)),
+        "snap_unit": snap_unit,
+        "tracks": tracks,
+        "clips": sorted(clips, key=lambda item: (str(item.get("track_id")), float(item.get("timeline_start") or 0))),
+        "markers": markers,
+    }
+
+
+def _get_saved_arrangement(asset: AudioAsset) -> dict[str, Any]:
+    metadata = asset.metadata_json if isinstance(asset.metadata_json, dict) else {}
+    return _sanitize_arrangement(asset, metadata.get("daw_arrangement"))
+
+
+def _save_arrangement_to_asset(db: Session, asset: AudioAsset, arrangement: dict[str, Any]) -> dict[str, Any]:
+    sanitized = _sanitize_arrangement(asset, arrangement)
+    metadata = dict(asset.metadata_json or {}) if isinstance(asset.metadata_json, dict) else {}
+    metadata["daw_arrangement"] = sanitized
+    metadata["daw_markers"] = sanitized.get("markers") or []
+    asset.metadata_json = metadata
+    db.add(asset)
+    db.commit()
+    db.refresh(asset)
+    return sanitized
+
+
+def _arrangement_source_assets(db: Session, asset: AudioAsset, arrangement: dict[str, Any]) -> dict[int, AudioAsset]:
+    ids = {int(asset.id)}
+    for clip in arrangement.get("clips") or []:
+        try:
+            ids.add(int(clip.get("source_audio_id") or asset.id))
+        except Exception:
+            ids.add(int(asset.id))
+    rows = db.query(AudioAsset).filter(AudioAsset.id.in_(list(ids)), AudioAsset.is_deleted.is_(False)).all()
+    assets = {row.id: row for row in rows}
+    if asset.id not in assets:
+        assets[asset.id] = asset
+    missing = [source_id for source_id in ids if source_id not in assets]
+    if missing:
+        raise HTTPException(status_code=404, detail=f"Quell-Audio für Clip nicht gefunden: {missing[0]}")
+    return assets
+
+
+def _build_arrangement_ffmpeg_args(db: Session, source_asset: AudioAsset, arrangement: dict[str, Any], target: Path, output_format: str) -> list[str]:
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        raise HTTPException(status_code=500, detail="ffmpeg ist auf dem Server nicht verfügbar.")
+    arrangement = _sanitize_arrangement(source_asset, arrangement)
+    source_assets = _arrangement_source_assets(db, source_asset, arrangement)
+    paths_by_id = {asset_id: _resolve_audio_path(row) for asset_id, row in source_assets.items()}
+    source_duration_by_id = {asset_id: max(0.0, _duration_seconds(path)) for asset_id, path in paths_by_id.items()}
+    source_ids = sorted(paths_by_id.keys())
+    input_index = {asset_id: index for index, asset_id in enumerate(source_ids)}
+    args = [ffmpeg, "-y"]
+    for asset_id in source_ids:
+        args += ["-i", str(paths_by_id[asset_id])]
+
+    clips = [clip for clip in arrangement.get("clips") or [] if not clip.get("muted")]
+    if not clips:
+        raise HTTPException(status_code=400, detail="Arrangement enthält keine aktiven Clips.")
+    filters: list[str] = []
+    labels: list[str] = []
+    active_index = 0
+    for clip in sorted(clips, key=lambda item: float(item.get("timeline_start") or 0)):
+        requested_duration = _clip_duration(clip)
+        asset_id = int(clip.get("source_audio_id") or source_asset.id)
+        idx = input_index[asset_id]
+        source_limit = source_duration_by_id.get(asset_id, 0.0)
+        label = f"c{active_index}"
+        source_start = max(0.0, float(clip.get("source_start") or 0))
+        if source_limit > 0:
+            source_start = min(source_start, max(0.0, source_limit - 0.05))
+        raw_source_end = float(clip.get("source_end") or (source_start + requested_duration))
+        source_end = max(source_start + 0.05, raw_source_end)
+        if source_limit > 0:
+            source_end = min(source_end, source_limit)
+        duration = max(0.0, source_end - source_start)
+        if duration <= 0.05:
+            continue
+        timeline_start = max(0.0, float(clip.get("timeline_start") or 0))
+        fade_in = min(max(0.0, float(clip.get("fade_in") or 0)), duration)
+        fade_out = min(max(0.0, float(clip.get("fade_out") or 0)), duration)
+        if fade_in + fade_out > max(0.0, duration - 0.05):
+            ratio = max(0.0, duration - 0.05) / max(0.001, fade_in + fade_out)
+            fade_in *= ratio
+            fade_out *= ratio
+        gain_db = max(-24.0, min(24.0, float(clip.get("gain_db") or 0)))
+        chain = f"[{idx}:a]atrim=start={source_start:.3f}:end={source_end:.3f},asetpts=PTS-STARTPTS"
+        if fade_in > 0:
+            chain += f",afade=t=in:st=0:d={fade_in:.3f}"
+        if fade_out > 0:
+            chain += f",afade=t=out:st={max(0.0, duration - fade_out):.3f}:d={fade_out:.3f}"
+        if abs(gain_db) > 0.01:
+            chain += f",volume={gain_db:.3f}dB"
+        delay_ms = max(0, int(round(timeline_start * 1000)))
+        if delay_ms:
+            chain += f",adelay={delay_ms}:all=1"
+        chain += f"[{label}]"
+        filters.append(chain)
+        labels.append(f"[{label}]")
+        active_index += 1
+    if not labels:
+        raise HTTPException(status_code=400, detail="Arrangement enthält keine renderbaren Clips.")
+    if len(labels) == 1:
+        filters.append(f"{labels[0]}anull[aout]")
+    else:
+        filters.append(f"{''.join(labels)}amix=inputs={len(labels)}:duration=longest:dropout_transition=0:normalize=0[aout]")
+    args += ["-filter_complex", ";".join(filters), "-map", "[aout]"]
+    if output_format == "wav":
+        args += ["-c:a", "pcm_s16le"]
+    elif output_format == "m4a":
+        args += ["-c:a", "aac", "-b:a", "192k"]
+    else:
+        args += ["-c:a", "libmp3lame", "-b:a", "192k"]
+    args.append(str(target))
+    return args
+
+
+def _render_arrangement(db: Session, source_asset: AudioAsset, arrangement: dict[str, Any], output_format: str, version_label: str | None, create_notification: bool = True, task_local_id: int | None = None) -> AudioAsset:
+    settings = get_settings()
+    settings.audio_storage_path.mkdir(parents=True, exist_ok=True)
+    output_format = _normalize_daw_output_format(output_format)
+    base_title = source_asset.display_title or source_asset.title or f"Audio {source_asset.id}"
+    edited_title = _edited_display_title(base_title)
+    label = (version_label or "Editiert").strip()[:80] or "Editiert"
+    temp_name = _sanitize_filename(f"arrangement_{source_asset.id}_{label}")
+    hash_source = json.dumps(arrangement, sort_keys=True, ensure_ascii=False)
+    target_path = settings.audio_storage_path / f"{temp_name}_{abs(hash(hash_source)) % 100000000}.{output_format}"
+    args = _build_arrangement_ffmpeg_args(db, source_asset, arrangement, target_path, output_format)
+    try:
+        subprocess.run(args, text=True, capture_output=True, check=True, timeout=900)
+    except subprocess.CalledProcessError as exc:
+        raise HTTPException(status_code=500, detail=f"DAW-Arrangement-Render fehlgeschlagen: {exc.stderr[-1200:] if exc.stderr else exc}") from exc
+    if not target_path.exists() or target_path.stat().st_size <= 0:
+        raise HTTPException(status_code=500, detail="DAW-Arrangement hat keine Ausgabedatei erzeugt.")
+    duration = read_audio_duration_seconds(target_path)
+    new_asset = AudioAsset(
+        task_local_id=task_local_id or source_asset.task_local_id,
+        song_id=source_asset.song_id,
+        suno_task_id=source_asset.suno_task_id,
+        audio_id=f"daw-arr-{source_asset.id}-{target_path.stem[-8:]}",
+        title=edited_title,
+        display_title=edited_title,
+        image_url=source_asset.image_url,
+        source_url=f"{settings.suno_audio_public_route.rstrip('/')}/{target_path.name}",
+        local_path=to_portable_path(target_path, storage_root=settings.audio_storage_path),
+        public_url=f"{settings.suno_audio_public_route.rstrip('/')}/{target_path.name}",
+        filename=target_path.name,
+        content_type=normalize_audio_content_type(None, target_path),
+        file_size_bytes=target_path.stat().st_size,
+        duration_seconds=duration,
+        status="cached",
+        operation_label="Editiert",
+        parent_audio_id=str(source_asset.id),
+        parent_task_id=source_asset.suno_task_id,
+        version_label=label,
+        metadata_json={
+            "operation": "DAW Arrangement",
+            "is_edited_version": True,
+            "original_display_title": base_title,
+            "daw_arrangement": arrangement,
+            "source_audio_asset_id": source_asset.id,
+            "source_filename": source_asset.filename,
+        },
+    )
+    db.add(new_asset)
+    db.commit()
+    db.refresh(new_asset)
+    try:
+        waveform = get_or_create_waveform(new_asset, target_path, db, points=180, rebuild=True)
+        new_asset.waveform_json = waveform.model_dump() if hasattr(waveform, "model_dump") else dict(waveform)
+        db.add(new_asset)
+    except Exception:
+        pass
+    if create_notification:
+        _make_notification(db, "DAW-Arrangement erstellt", f"{base_title} wurde als neue Arrangement-Version „{label}“ gespeichert.", new_asset)
+    db.commit()
+    db.refresh(new_asset)
+    return new_asset
+
+
+
+
+def _create_daw_arrangement_render_task(db: Session, asset: AudioAsset, arrangement: dict[str, Any], output_format: str, version_label: str | None) -> SunoTask:
+    now = utc_now_naive()
+    title = asset.display_title or asset.title or f"Audio {asset.id}"
+    task = SunoTask(
+        task_type="daw_arrangement_render",
+        status="RUNNING",
+        request_payload={
+            "background": True,
+            "local_task": True,
+            "source": "mini_daw",
+            "audio_asset_id": asset.id,
+            "output_format": _normalize_daw_output_format(output_format),
+            "version_label": version_label or "Editiert",
+            "arrangement": arrangement,
+        },
+        response_payload={
+            "background": True,
+            "local_task": True,
+            "status": "RUNNING",
+            "progress": {"percent": 0, "phase": "queued", "updated_at": now.isoformat()},
+        },
+        progress=0,
+        started_at=now,
+        heartbeat_at=now,
+    )
+    db.add(task)
+    db.commit()
+    db.refresh(task)
+    db.add(StatusNotification(
+        event_type="daw_arrangement_render_started",
+        title=f"DAW-Version wird gespeichert: {title}",
+        message="Das Arrangement wird im Hintergrund gerendert. Der Status wird wie bei anderen lokalen Tasks live aktualisiert.",
+        severity="info",
+        status="unread",
+        task_local_id=task.id,
+        content_type="audio_asset",
+        content_id=asset.id,
+        target_tab="status",
+        target_payload={"audio_asset_id": asset.id, "task_local_id": task.id, "task_type": task.task_type, "status": "RUNNING"},
+    ))
+    db.commit()
+    db.refresh(task)
+    return task
+
+
+def _run_daw_arrangement_render_background(task_id: int, asset_id: int, arrangement_payload: dict[str, Any], output_format: str, version_label: str | None, create_notification: bool = True) -> None:
+    db = SessionLocal()
+    try:
+        task = db.query(SunoTask).filter(SunoTask.id == int(task_id), SunoTask.is_deleted.is_(False)).first()
+        asset = db.query(AudioAsset).filter(AudioAsset.id == int(asset_id), AudioAsset.is_deleted.is_(False)).first()
+        if not task or not asset:
+            return
+        title = asset.display_title or asset.title or f"Audio {asset.id}"
+        heartbeat_task(db, task, progress={"percent": 5, "phase": "prepare", "message": "Arrangement wird vorbereitet."})
+        arrangement = _sanitize_arrangement(asset, arrangement_payload)
+        _save_arrangement_to_asset(db, asset, arrangement)
+        heartbeat_task(db, task.id, progress={"percent": 20, "phase": "render", "message": "Audio wird mit ffmpeg gerendert."})
+        created = _render_arrangement(db, asset, arrangement, output_format, version_label or "Editiert", create_notification=False, task_local_id=task.id)
+        heartbeat_task(db, task.id, progress={"percent": 92, "phase": "waveform", "message": "Version wird in die Library übernommen."})
+        mark_task_finished(
+            db,
+            task.id,
+            status="SUCCESS",
+            message=f"DAW-Version gespeichert: {created.display_title or created.title}",
+            result_payload={"audio_asset_id": created.id, "source_audio_asset_id": asset.id, "status": "SUCCESS"},
+            response_payload={"audio_asset_id": created.id, "source_audio_asset_id": asset.id, "progress": {"percent": 100, "phase": "done"}},
+            notify=False,
+        )
+        if create_notification:
+            db.add(StatusNotification(
+                event_type="daw_arrangement_render_completed",
+                title=f"DAW-Version gespeichert: {created.display_title or created.title}",
+                message=f"{title} wurde als neue editierte Version gespeichert.",
+                severity="success",
+                status="unread",
+                task_local_id=task.id,
+                content_type="audio_asset",
+                content_id=created.id,
+                target_tab="library",
+                target_payload={"audio_asset_id": created.id, "source_audio_asset_id": asset.id, "task_local_id": task.id, "task_type": task.task_type, "status": "SUCCESS"},
+                completed_at=utc_now_naive(),
+            ))
+            db.commit()
+    except Exception as exc:
+        try:
+            mark_task_finished(
+                db,
+                task_id,
+                status="FAILED",
+                message=str(exc),
+                result_payload={"audio_asset_id": asset_id, "status": "FAILED", "error": str(exc)},
+                response_payload={"progress": {"percent": 100, "phase": "failed", "error": str(exc)}},
+                notify=False,
+            )
+            db.add(StatusNotification(
+                event_type="daw_arrangement_render_failed",
+                title="DAW-Version konnte nicht gespeichert werden",
+                message=str(exc),
+                severity="error",
+                status="unread",
+                task_local_id=task_id,
+                content_type="audio_asset",
+                content_id=asset_id,
+                target_tab="status",
+                target_payload={"audio_asset_id": asset_id, "task_local_id": task_id, "task_type": "daw_arrangement_render", "status": "FAILED"},
+                completed_at=utc_now_naive(),
+            ))
+            db.commit()
+        except Exception:
+            db.rollback()
+    finally:
+        db.close()
+
+
+@router.get("/assets/{asset_id}/arrangement", response_model=dict)
+def get_daw_arrangement(asset_id: int, db: Session = Depends(get_db)):
+    asset = _asset_or_404(db, asset_id)
+    arrangement = _get_saved_arrangement(asset)
+    return {"asset": AudioAssetRead.model_validate(asset), "arrangement": arrangement}
+
+
+@router.put("/assets/{asset_id}/arrangement", response_model=dict)
+def save_daw_arrangement(asset_id: int, payload: DawArrangementSaveRequest, db: Session = Depends(get_db)):
+    asset = _asset_or_404(db, asset_id)
+    arrangement = _save_arrangement_to_asset(db, asset, payload.arrangement.model_dump())
+    return {"ok": True, "asset": AudioAssetRead.model_validate(asset), "arrangement": arrangement}
+
+
+@router.post("/assets/{asset_id}/arrangement/preview")
+def preview_daw_arrangement(asset_id: int, payload: DawArrangementRenderRequest, db: Session = Depends(get_db)):
+    asset = _asset_or_404(db, asset_id)
+    arrangement = _sanitize_arrangement(asset, payload.arrangement.model_dump() if payload.arrangement else _get_saved_arrangement(asset))
+    output_format = _normalize_daw_output_format(payload.output_format)
+    suffix = f".{output_format}"
+    temp_file = tempfile.NamedTemporaryFile(prefix="songstudio_daw_arrangement_preview_", suffix=suffix, delete=False)
+    target_path = Path(temp_file.name)
+    temp_file.close()
+    args = _build_arrangement_ffmpeg_args(db, asset, arrangement, target_path, output_format)
+    try:
+        subprocess.run(args, text=True, capture_output=True, check=True, timeout=300)
+    except subprocess.CalledProcessError as exc:
+        _unlink_path(target_path)
+        raise HTTPException(status_code=500, detail=f"DAW-Arrangement-Vorschau fehlgeschlagen: {exc.stderr[-1200:] if exc.stderr else exc}") from exc
+    except Exception as exc:
+        _unlink_path(target_path)
+        raise HTTPException(status_code=500, detail=f"DAW-Arrangement-Vorschau fehlgeschlagen: {exc}") from exc
+    if not target_path.exists() or target_path.stat().st_size <= 0:
+        _unlink_path(target_path)
+        raise HTTPException(status_code=500, detail="DAW-Arrangement-Vorschau hat keine Audiodatei erzeugt.")
+    title = _sanitize_filename(payload.version_label or "daw_arrangement_preview")
+    return FileResponse(target_path, media_type=_preview_media_type(output_format), filename=f"{title}{suffix}", background=BackgroundTask(_unlink_path, target_path))
+
+
+
+@router.post("/assets/{asset_id}/arrangement/render-task", response_model=DawArrangementRenderTaskResponse)
+def render_daw_arrangement_task(asset_id: int, payload: DawArrangementRenderRequest, db: Session = Depends(get_db)):
+    asset = _asset_or_404(db, asset_id)
+    arrangement = _sanitize_arrangement(asset, payload.arrangement.model_dump() if payload.arrangement else _get_saved_arrangement(asset))
+    _save_arrangement_to_asset(db, asset, arrangement)
+    task = _create_daw_arrangement_render_task(db, asset, arrangement, payload.output_format, payload.version_label)
+    run_detached_process(
+        f"daw-arrangement-render-{task.id}",
+        _run_daw_arrangement_render_background,
+        task.id,
+        asset.id,
+        arrangement,
+        payload.output_format,
+        payload.version_label,
+        payload.create_notification,
+    )
+    return DawArrangementRenderTaskResponse(
+        task_local_id=task.id,
+        message="DAW-Render wurde als lokaler Hintergrund-Task gestartet.",
+    )
+
+
+@router.post("/assets/{asset_id}/arrangement/render", response_model=AudioAssetRead)
+def render_daw_arrangement(asset_id: int, payload: DawArrangementRenderRequest, db: Session = Depends(get_db)):
+    asset = _asset_or_404(db, asset_id)
+    arrangement = _sanitize_arrangement(asset, payload.arrangement.model_dump() if payload.arrangement else _get_saved_arrangement(asset))
+    _save_arrangement_to_asset(db, asset, arrangement)
+    return _render_arrangement(db, asset, arrangement, payload.output_format, payload.version_label, payload.create_notification)
 
 
 @router.get("/assets/{asset_id}", response_model=dict)
@@ -508,6 +1213,38 @@ def render_daw_edit(payload: DawRenderRequest, db: Session = Depends(get_db)):
     return _render_plan(db, payload)
 
 
+@router.post("/preview")
+def preview_daw_edit(payload: DawRenderRequest, db: Session = Depends(get_db)):
+    source = _asset_or_404(db, payload.source_audio_id)
+    source_path = _resolve_audio_path(source)
+    output_format = _normalize_daw_output_format(payload.output_format)
+    suffix = f".{output_format}"
+    temp_file = tempfile.NamedTemporaryFile(prefix="songstudio_daw_preview_", suffix=suffix, delete=False)
+    target_path = Path(temp_file.name)
+    temp_file.close()
+    args = _build_ffmpeg_args(source_path, target_path, payload.operations, output_format)
+    try:
+        subprocess.run(args, text=True, capture_output=True, check=True, timeout=240)
+    except subprocess.CalledProcessError as exc:
+        _unlink_path(target_path)
+        raise HTTPException(status_code=500, detail=f"DAW-Vorschau fehlgeschlagen: {exc.stderr[-1200:] if exc.stderr else exc}") from exc
+    except Exception as exc:
+        _unlink_path(target_path)
+        raise HTTPException(status_code=500, detail=f"DAW-Vorschau fehlgeschlagen: {exc}") from exc
+
+    if not target_path.exists() or target_path.stat().st_size <= 0:
+        _unlink_path(target_path)
+        raise HTTPException(status_code=500, detail="DAW-Vorschau hat keine Audiodatei erzeugt.")
+
+    title = _sanitize_filename(payload.version_label or payload.title_suffix or "daw_preview")
+    return FileResponse(
+        target_path,
+        media_type=_preview_media_type(output_format),
+        filename=f"{title}{suffix}",
+        background=BackgroundTask(_unlink_path, target_path),
+    )
+
+
 @router.post("/assets/{asset_id}/markers", response_model=dict)
 def add_marker(asset_id: int, payload: DawMarkerRequest, db: Session = Depends(get_db)):
     asset = _asset_or_404(db, asset_id)
@@ -515,6 +1252,22 @@ def add_marker(asset_id: int, payload: DawMarkerRequest, db: Session = Depends(g
     markers = list(metadata.get("daw_markers") or [])
     marker = payload.model_dump()
     markers.append(marker)
+    metadata["daw_markers"] = sorted(markers, key=lambda item: float(item.get("time") or 0))
+    asset.metadata_json = metadata
+    db.add(asset)
+    db.commit()
+    db.refresh(asset)
+    return {"ok": True, "markers": metadata["daw_markers"]}
+
+
+@router.delete("/assets/{asset_id}/markers/{marker_index}", response_model=dict)
+def delete_marker(asset_id: int, marker_index: int, db: Session = Depends(get_db)):
+    asset = _asset_or_404(db, asset_id)
+    metadata = asset.metadata_json if isinstance(asset.metadata_json, dict) else {}
+    markers = list(metadata.get("daw_markers") or [])
+    if marker_index < 0 or marker_index >= len(markers):
+        raise HTTPException(status_code=404, detail="Marker wurde nicht gefunden.")
+    markers.pop(marker_index)
     metadata["daw_markers"] = sorted(markers, key=lambda item: float(item.get("time") or 0))
     asset.metadata_json = metadata
     db.add(asset)
@@ -542,6 +1295,162 @@ def analyze_audio(payload: dict[str, Any], db: Session = Depends(get_db)):
             "Für YouTube-Master zuerst Normalisieren auf ca. -14 LUFS testen.",
             "Original bleibt unverändert; Render erzeugt immer eine neue Version.",
         ],
+    }
+
+
+@router.post("/chat", response_model=dict)
+async def chat_daw_edit(payload: DawChatRequest, db: Session = Depends(get_db)):
+    asset = _asset_or_404(db, payload.source_audio_id)
+    duration = float(payload.duration_seconds or asset.duration_seconds or 0)
+    current_time = max(0.0, min(float(payload.current_time or 0), duration or float(payload.current_time or 0)))
+    output_format = _normalize_daw_output_format(payload.output_format)
+    provider = None
+    model = None
+
+    try:
+        from app.routers.admin import get_ai_admin_settings
+
+        settings = get_settings()
+        admin_settings = get_ai_admin_settings(db)
+        provider = admin_settings.get("default_provider") or settings.ai_default_provider
+        model = admin_settings.get("default_model") or settings.ai_default_model
+        instruction_payload = {
+            "task": "resolve_current_daw_chat_command",
+            "user_message": payload.message,
+            "current_audio_asset": {
+                "id": asset.id,
+                "title": asset.display_title or asset.title or asset.filename or f"Audio {asset.id}",
+                "version_label": asset.version_label,
+                "operation_label": asset.operation_label,
+                "duration_seconds": duration,
+                "current_time": current_time,
+            },
+            "current_plan": payload.current_plan or {},
+            "markers": payload.markers[:40],
+            "chat_history": payload.history[-12:],
+            "output_format": output_format,
+            "allowed_operations": [
+                {"type": "trim", "fields": ["start", "end"], "bounds": f"0 <= start < end <= {duration or 'duration'}"},
+                {"type": "fade_in", "fields": ["duration"], "bounds": "0.05 <= duration <= 30"},
+                {"type": "fade_out", "fields": ["duration"], "bounds": "0.05 <= duration <= 30"},
+                {"type": "gain", "fields": ["gain_db"], "bounds": "-12 <= gain_db <= 12"},
+                {"type": "normalize", "fields": ["target_lufs"], "bounds": "-24 <= target_lufs <= -8"},
+                {"type": "preset", "fields": ["preset"], "allowed_presets": ["youtube", "klarer", "mehr_druck", "bass", "hoehen"]},
+            ],
+            "rules": [
+                "Plane ausschließlich für current_audio_asset. Suche keinen anderen Song.",
+                "Gib Zeitangaben immer als Sekunden aus.",
+                "Wenn der Nutzer 'aktuelle Stelle', 'Playhead' oder 'hier' sagt, nutze current_time.",
+                "Das Original bleibt unverändert; es wird immer eine neue Version erzeugt.",
+                "Wenn eine Anweisung unklar ist, setze needs_confirmation true und operations leer.",
+                "Keine Shell-Befehle, keine Dateipfade, keine Secrets.",
+            ],
+            "expected_output": {
+                "is_audio_command": True,
+                "needs_confirmation": True,
+                "operations": [],
+                "version_label": "kurzes Label fuer neue Version",
+                "message": "kurze deutsche Erklaerung",
+                "warnings": [],
+                "suggestions": [],
+            },
+        }
+        system_prompt = (
+            "Du bist der fokussierte KI-Planer einer Mini-DAW. "
+            "Du erzeugst ausschließlich ein valides JSON-Objekt. "
+            "Du darfst nur erlaubte Audio-Operationen planen und niemals automatisch rendern. "
+            "Der Nutzer entscheidet im Frontend, ob ein Plan uebernommen oder als neue Version gespeichert wird."
+        )
+        result = await AiChatService().run_json_task(
+            provider=provider,
+            model=model,
+            system_prompt=system_prompt,
+            instruction_payload=instruction_payload,
+            profile_options={"max_output_tokens": 1400, "temperature": 0.1},
+        )
+        data = result.data if isinstance(result.data, dict) else {}
+        operations = _normalize_ai_operations(data.get("operations") or (data.get("plan") or {}).get("operations"), duration)
+        if operations:
+            version_label = str(data.get("version_label") or (data.get("plan") or {}).get("version_label") or "DAW Chat Edit").strip()[:80] or "DAW Chat Edit"
+            plan = {
+                "source_audio_id": asset.id,
+                "operations": operations,
+                "version_label": version_label,
+                "output_format": output_format,
+                "create_notification": True,
+            }
+            response = {
+                "ok": True,
+                "is_audio_command": True,
+                "needs_confirmation": True,
+                "asset": AudioAssetRead.model_validate(asset),
+                "plan": plan,
+                "message": data.get("message") or f"Plan vorbereitet: {version_label}.",
+                "warnings": data.get("warnings") if isinstance(data.get("warnings"), list) else [],
+                "suggestions": data.get("suggestions") if isinstance(data.get("suggestions"), list) else [],
+                "provider": provider,
+                "model": model,
+                "source": "daw_chat_ai",
+            }
+            if payload.execute:
+                rendered = _render_plan(db, DawRenderRequest(**plan))
+                response["rendered_asset"] = AudioAssetRead.model_validate(rendered)
+                response["needs_confirmation"] = False
+                response["message"] = f"Erledigt: Neue DAW-Version „{rendered.version_label}“ wurde gespeichert."
+            return response
+        return {
+            "ok": True,
+            "is_audio_command": True,
+            "needs_confirmation": True,
+            "asset": AudioAssetRead.model_validate(asset),
+            "message": data.get("message") or "Ich habe keinen eindeutigen DAW-Plan erkannt.",
+            "warnings": data.get("warnings") if isinstance(data.get("warnings"), list) else [],
+            "suggestions": data.get("suggestions") if isinstance(data.get("suggestions"), list) else [],
+            "provider": provider,
+            "model": model,
+            "source": "daw_chat_ai",
+        }
+    except AiProviderError:
+        pass
+    except Exception:
+        pass
+
+    fallback_plan = _fallback_plan_for_asset(payload.message, asset, duration, current_time, output_format)
+    if fallback_plan:
+        response = {
+            "ok": True,
+            "is_audio_command": True,
+            "needs_confirmation": True,
+            "asset": AudioAssetRead.model_validate(asset),
+            "plan": fallback_plan,
+            "message": f"Fallback-Plan vorbereitet: {fallback_plan['version_label']}.",
+            "warnings": ["KI-Provider war nicht verfügbar oder lieferte keinen verwertbaren Plan."],
+            "suggestions": ["Prüfe den Plan vor dem Speichern."],
+            "provider": provider or "fallback",
+            "model": model or "deterministic",
+            "source": "daw_chat_fallback",
+        }
+        if payload.execute:
+            rendered = _render_plan(db, DawRenderRequest(**fallback_plan))
+            response["rendered_asset"] = AudioAssetRead.model_validate(rendered)
+            response["needs_confirmation"] = False
+            response["message"] = f"Erledigt: Neue DAW-Version „{rendered.version_label}“ wurde gespeichert."
+        return response
+
+    return {
+        "ok": True,
+        "is_audio_command": True,
+        "needs_confirmation": True,
+        "asset": AudioAssetRead.model_validate(asset),
+        "message": "Ich habe keinen eindeutigen DAW-Plan erkannt. Nenne bitte Schnittzeit, Fade, Lautstärke, Preset oder Short-Länge konkreter.",
+        "warnings": [],
+        "suggestions": [
+            "Beispiel: Schneide ab aktueller Stelle 30 Sekunden.",
+            "Beispiel: Fade-out 2 Sekunden und YouTube Master.",
+        ],
+        "provider": provider or "fallback",
+        "model": model or "deterministic",
+        "source": "daw_chat_fallback",
     }
 
 

@@ -115,7 +115,7 @@ function emitAssistantEvent(name, detail = {}) {
   window.dispatchEvent(new CustomEvent(name, { detail }));
 }
 
-export function createAssistantActions({ openMainTab, play, assets, refreshAll, notify, setDawOpenAssetId, playerState }) {
+export function createAssistantActions({ openMainTab, openAssetInDaw, play, assets, refreshAll, notify, playerState }) {
   return async function executeFrontendAction(actionId, payload = {}) {
     const id = String(actionId || '');
     if (id === 'navigate_home') {
@@ -168,9 +168,12 @@ export function createAssistantActions({ openMainTab, play, assets, refreshAll, 
       return true;
     }
     if (id === 'navigate_daw') {
-      const assetId = payload?.audio_asset_id || payload?.asset_id || payload?.id || null;
-      if (assetId) setDawOpenAssetId?.(assetId);
-      openMainTab('daw');
+      const assetId = payload?.audio_asset_id || payload?.asset_id || payload?.id || playerState?.currentAssetId || null;
+      if (assetId) {
+        openAssetInDaw?.(assetId);
+      } else {
+        openMainTab('daw');
+      }
       return true;
     }
     if (id === 'play_latest_audio') {

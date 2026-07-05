@@ -1866,10 +1866,10 @@ class GlobalAssistantService:
             instruction_payload=instruction_payload,
             profile_options=profile_options,
         )
-        data = result.data if isinstance(result.data, dict) else {}
+        data = self._normalize_style_consultation_data(result.data if isinstance(result.data, dict) else {}, result.raw_text)
         assistant_message = self._limit_text(data.get("assistant_message") or data.get("message") or result.raw_text, 1800) or "Ich habe die Zusammenstellung geprüft."
         updated_source = data.get("updated_draft") or data.get("draft") or None
-        changed = bool(data.get("changed"))
+        changed = self._coerce_consultation_changed(data.get("changed"), default=bool(updated_source))
         updated_draft = None
         if isinstance(updated_source, dict):
             updated_draft = self._normalize_style_item(updated_source, index=1, fallback=current_draft)
@@ -1881,6 +1881,67 @@ class GlobalAssistantService:
             "changed": bool(changed and updated_draft),
             "runtime_info": runtime_info,
         }
+
+    def _normalize_style_consultation_data(self, data: dict[str, Any], raw_text: Any = "") -> dict[str, Any]:
+        """Keep the style-consultation contract stable even if a provider nests JSON inside assistant_message."""
+        normalized = dict(data or {})
+        candidates = [
+            normalized.get("assistant_message"),
+            normalized.get("message"),
+            normalized.get("raw_text"),
+            raw_text,
+        ]
+        for candidate in candidates:
+            parsed = self._parse_json_object_text(candidate)
+            if not parsed:
+                continue
+            if not any(key in parsed for key in ("assistant_message", "message", "updated_draft", "draft", "changed")):
+                continue
+            if parsed.get("assistant_message") or parsed.get("message"):
+                normalized["assistant_message"] = parsed.get("assistant_message") or parsed.get("message")
+            if parsed.get("updated_draft") is not None:
+                normalized["updated_draft"] = parsed.get("updated_draft")
+            elif parsed.get("draft") is not None:
+                normalized["draft"] = parsed.get("draft")
+            if "changed" in parsed:
+                normalized["changed"] = parsed.get("changed")
+            break
+        return normalized
+
+    def _coerce_consultation_changed(self, value: Any, *, default: bool = False) -> bool:
+        if value is None:
+            return default
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return bool(value)
+        text = str(value or "").strip().lower()
+        if text in {"true", "1", "yes", "ja", "changed"}:
+            return True
+        if text in {"false", "0", "no", "nein", "unchanged", "none", "null"}:
+            return False
+        return default
+
+    def _parse_json_object_text(self, value: Any) -> dict[str, Any] | None:
+        text = str(value or "").strip()
+        if not text:
+            return None
+        if text.startswith("```"):
+            text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.I).strip()
+            text = re.sub(r"\s*```$", "", text).strip()
+        candidates = [text]
+        start = text.find("{")
+        end = text.rfind("}")
+        if start >= 0 and end > start:
+            candidates.append(text[start:end + 1])
+        for candidate in candidates:
+            try:
+                parsed = json.loads(candidate)
+            except (TypeError, ValueError):
+                continue
+            if isinstance(parsed, dict):
+                return parsed
+        return None
 
     def _build_intelligent_instruction(self, *, message: str, app_context: dict[str, Any], detected: str | None = None, allow_canvas_changes: bool = False, work_mode: str = "lyrics") -> str:
         context_summary = self.build_context_summary(app_context)
