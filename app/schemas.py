@@ -136,6 +136,34 @@ class SongRead(BaseModel):
     updated_at: Any | None = None
 
 
+class VideoAssetRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    audio_asset_id: int
+    song_id: int | None = None
+    task_local_id: int | None = None
+    suno_task_id: str | None = None
+    audio_id: str | None = None
+    title: str | None = None
+    source_url: str
+    local_path: str | None = None
+    public_url: str | None = None
+    filename: str | None = None
+    content_type: str | None = None
+    file_size_bytes: int | None = None
+    duration_seconds: int | None = None
+    checksum_sha256: str | None = None
+    status: str
+    error_message: str | None = None
+    metadata_json: dict[str, Any] | None = None
+    video_local: bool | None = False
+    stream_url: str | None = None
+    download_url: str | None = None
+    created_at: Any | None = None
+    updated_at: Any | None = None
+
+
 class AudioAssetRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -192,6 +220,9 @@ class AudioAssetRead(BaseModel):
     half_srt_cached: bool | None = False
     latest_srt_status: str | None = None
     latest_srt_generated_at: Any | None = None
+    video_count: int | None = 0
+    has_video: bool | None = False
+    latest_video: VideoAssetRead | None = None
     # Externe/originale Sortierdaten aus Suno/SunoAPI.
     # Diese Felder sind bewusst read-only API-Kontext und brauchen keine DB-Migration.
     source_created_at: Any | None = None
@@ -260,6 +291,8 @@ class VoiceRead(BaseModel):
 
 
 class ImportSunoTaskRequest(BaseModel):
+    # Import-Vertrag: SunoAPI.org-MP4-Tasks werden nicht als AudioAsset importiert,
+    # sondern nach erfolgreichem successFlag als video_assets an vorhandene AudioAssets gebunden.
     task_id: str = Field(min_length=1, max_length=255)
     task_type: str = Field(default="auto", max_length=100)
     title: str | None = Field(default=None, max_length=255)
@@ -267,6 +300,7 @@ class ImportSunoTaskRequest(BaseModel):
     style: str | None = None
     model: str | None = Field(default=None, max_length=80)
     cache_audio: bool = True
+    cache_video: bool = True
     generate_srt: bool = False
     generate_stems: bool = False
 
@@ -326,9 +360,12 @@ class ImportSunoSongResponse(BaseModel):
 
 
 class BatchImportSunoTaskRequest(BaseModel):
+    # Batch nutzt denselben Medienvertrag wie der Einzelimport: Audio bleibt audio_assets,
+    # MP4 bleibt video_assets. cache_video muss bis MusicService durchgereicht werden.
     task_ids: str = Field(min_length=1)
     task_type: str = Field(default="auto", max_length=100)
     cache_audio: bool = True
+    cache_video: bool = True
     title_prefix: str | None = Field(default=None, max_length=120)
     generate_srt: bool = False
     generate_stems: bool = False

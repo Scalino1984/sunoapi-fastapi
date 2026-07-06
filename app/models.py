@@ -422,6 +422,49 @@ class Persona(Base, TimestampMixin, SoftDeleteMixin):
 
 
 
+class VideoAsset(Base, TimestampMixin, SoftDeleteMixin):
+    __tablename__ = "video_assets"
+
+    # MP4 ist bewusst ein eigenes Modell. audio_assets bleibt die zentrale
+    # Wahrheit fuer Audio; Video darf SRT, Stems, Waveform und Player-Logik
+    # niemals als vermeintliches AudioAsset unterlaufen.
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    audio_asset_id: Mapped[int] = mapped_column(Integer, index=True, nullable=False)
+    song_id: Mapped[int | None] = mapped_column(Integer, index=True, nullable=True)
+    task_local_id: Mapped[int | None] = mapped_column(Integer, index=True, nullable=True)
+    suno_task_id: Mapped[str | None] = mapped_column(String(255), index=True, nullable=True)
+    audio_id: Mapped[str | None] = mapped_column(String(255), index=True, nullable=True)
+    title: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    source_url: Mapped[str] = mapped_column(Text, nullable=False)
+    local_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    public_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    filename: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    content_type: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    file_size_bytes: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    duration_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    checksum_sha256: Mapped[str | None] = mapped_column(String(64), index=True, nullable=True)
+    status: Mapped[str] = mapped_column(String(50), index=True, default="created", nullable=False)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    metadata_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
+    @property
+    def video_local(self) -> bool:
+        status = str(self.status or "").strip().lower()
+        return status == "cached" and bool(self.local_path or self.public_url or self.filename)
+
+    @property
+    def stream_url(self) -> str | None:
+        if not self.id or not self.audio_asset_id:
+            return None
+        return f"/api/audio-assets/{self.audio_asset_id}/videos/{self.id}/stream"
+
+    @property
+    def download_url(self) -> str | None:
+        if not self.id or not self.audio_asset_id:
+            return None
+        return f"/api/audio-assets/{self.audio_asset_id}/videos/{self.id}/download"
+
+
 class AudioTranscript(Base, TimestampMixin):
     __tablename__ = "audio_transcripts"
 

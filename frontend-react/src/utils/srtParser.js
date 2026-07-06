@@ -54,8 +54,10 @@ export function exportSrtText(segments = []) {
 }
 
 export function segmentsFromSrtState(state = {}) {
+  const fileSegments = parseSrtText(state?.srt_text || '');
+  if (fileSegments.length) return fileSegments;
   if (Array.isArray(state?.segments) && state.segments.length) return renumberSegments(state.segments);
-  return parseSrtText(state?.srt_text || '');
+  return [];
 }
 
 export function activeSegmentAt(segments = [], currentTime = 0) {

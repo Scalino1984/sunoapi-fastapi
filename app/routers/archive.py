@@ -34,6 +34,7 @@ from app.services.audio_cache_service import AudioCacheService, AudioCandidate, 
 from app.services.audio_asset_materialization_service import AudioAssetMaterializationService
 from app.services.replicate_cover_service import MODELS as REPLICATE_COVER_MODELS, ReplicateCoverService
 from app.services.library_content_cache_service import cache_missing_library_content_once
+from app.services.video_asset_service import attach_video_summaries_to_assets
 from app.services.extend_continue_at_analysis_service import analyze_continue_at_for_asset, load_extend_continue_at_settings
 from app.services.system_status_notification_service import create_system_status_notification
 from app.suno_client import SunoAPIClient, SunoAPIError
@@ -103,6 +104,7 @@ def _get_audio_asset_or_404(asset_id: int, db: Session) -> AudioAsset:
         raise HTTPException(status_code=404, detail="Audio-Datei wurde nicht gefunden oder ist kein gültiges AudioAsset.")
     _repair_audio_asset_file_metadata(asset, db)
     attach_audio_asset_identity_context(db, [asset])
+    attach_video_summaries_to_assets(db, [asset])
     return asset
 
 

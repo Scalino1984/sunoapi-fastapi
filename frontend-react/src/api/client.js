@@ -212,6 +212,11 @@ export const api = {
     bulkGenerateAiTags: (ids = [], payload = {}) => apiFetch('/api/audio-assets/bulk/ai-tags/generate', { method: 'POST', body: JSON.stringify({ ...payload, ids }) }),
     srtDownloadUrl: (id) => `/api/audio-assets/${id}/srt/download`,
     srtHalfDownloadUrl: (id) => `/api/audio-assets/${id}/srt/half/download`,
+    videos: (id) => apiFetch(`/api/audio-assets/${id}/videos?v=${Date.now()}`, { cache: 'no-store' }),
+    video: (id, videoId) => apiFetch(`/api/audio-assets/${id}/videos/${videoId}?v=${Date.now()}`, { cache: 'no-store' }),
+    cacheVideo: (id, videoId) => apiFetch(`/api/audio-assets/${id}/videos/${videoId}/cache`, { method: 'POST', timeoutMs: 300000 }),
+    videoStreamUrl: (id, videoId) => `/api/audio-assets/${id}/videos/${videoId}/stream`,
+    videoDownloadUrl: (id, videoId) => `/api/audio-assets/${id}/videos/${videoId}/download`,
     assetBundleUrl: (id, include = null) => {
       const selected = Array.isArray(include) ? include.filter(Boolean).join(',') : String(include || '').trim();
       return `/api/audio-assets/${id}/bundle/download${selected ? `?include=${encodeURIComponent(selected)}` : ''}`;
@@ -304,6 +309,32 @@ export const api = {
     createStyle: (payload) => apiFetch('/api/library/styles', { method: 'POST', body: JSON.stringify(payload) }),
     updateStyle: (id, payload) => apiFetch(`/api/library/styles/${id}`, { method: 'PUT', body: JSON.stringify(payload) }),
     vocalTags: () => apiFetch('/api/library/vocal-tags'),
+    // Aktive Library-Import/Export-Kette: diese Wrapper spiegeln app/routers/library.py.
+    // Nicht über alte Direktrouten oder lokale CSV-Helfer umgehen, sonst laufen aktive Seiten ins Leere.
+    exportLyrics: (format = 'csv', mode = 'extended') => apiFetchBlob(`/api/library/export/lyrics?format=${encodeURIComponent(format)}&mode=${encodeURIComponent(mode)}`, { method: 'GET' }),
+    importLyrics: (file, format = 'auto') => {
+      const formData = new FormData();
+      formData.append('file', file);
+      return apiFetch(`/api/library/import/lyrics?format=${encodeURIComponent(format)}`, { method: 'POST', body: formData });
+    },
+    exportPlaylists: (format = 'csv', mode = 'extended') => apiFetchBlob(`/api/library/export/playlists?format=${encodeURIComponent(format)}&mode=${encodeURIComponent(mode)}`, { method: 'GET' }),
+    importPlaylists: (file, format = 'auto') => {
+      const formData = new FormData();
+      formData.append('file', file);
+      return apiFetch(`/api/library/import/playlists?format=${encodeURIComponent(format)}`, { method: 'POST', body: formData });
+    },
+    exportStyles: (format = 'csv', mode = 'extended') => apiFetchBlob(`/api/library/export/styles?format=${encodeURIComponent(format)}&mode=${encodeURIComponent(mode)}`, { method: 'GET' }),
+    importStyles: (file, format = 'auto') => {
+      const formData = new FormData();
+      formData.append('file', file);
+      return apiFetch(`/api/library/import/styles?format=${encodeURIComponent(format)}`, { method: 'POST', body: formData });
+    },
+    exportVocalTags: (format = 'csv', mode = 'extended') => apiFetchBlob(`/api/library/export/vocal-tags?format=${encodeURIComponent(format)}&mode=${encodeURIComponent(mode)}`, { method: 'GET' }),
+    importVocalTags: (file, format = 'auto') => {
+      const formData = new FormData();
+      formData.append('file', file);
+      return apiFetch(`/api/library/import/vocal-tags?format=${encodeURIComponent(format)}`, { method: 'POST', body: formData });
+    },
     updateTitle: (type, id, title) => apiFetch(`/api/library/content/${type}/${id}/title`, { method: 'PATCH', body: JSON.stringify({ title }) }),
     updateCover: (type, id, formData) => apiFetch(`/api/library/content/${type}/${id}/cover`, { method: 'POST', body: formData }),
     deleteContent: (type, id) => apiFetch(`/api/library/content/${type}/${id}`, { method: 'DELETE' }),
@@ -438,6 +469,9 @@ export const api = {
       };
       xhr.onerror = () => reject(new ApiError('Upload des Portable Backups fehlgeschlagen.', 0, null));
       xhr.send(formData);
-    })
+    }),
+    // System-Cover-Cache ist bewusst getrennt von api.archive.cacheMissingCovers():
+    // Dry-Run, Limit und Ergebnisformat folgen app/routers/system.py.
+    cacheExternalCovers: (payload = {}) => apiFetch('/api/system/maintenance/cache-external-covers', { method: 'POST', body: JSON.stringify(payload || {}), timeoutMs: 120000 })
   }
 };

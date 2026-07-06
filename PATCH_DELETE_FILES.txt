@@ -1,0 +1,3 @@
+# Dateien nach dem Einspielen dieses Patches löschen, falls sie noch existieren.
+# Grund: veraltete Duplikate dürfen keine alte Playback-/SRT-Eventkette konservieren.
+frontend-react/src/pages/MiniPlayer.jsx

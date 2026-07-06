@@ -12,6 +12,7 @@ from app.config import get_settings
 from app.services.portable_path_service import to_portable_path
 from app.database import SessionLocal
 from app.models import ActivityLog, AudioAsset, AudioProject, Song, StatusNotification, SunoTask
+from app.services.task_lifecycle_service import append_task_debug_event, append_task_step_log
 from app.utils.time_utils import utc_now_naive
 
 MODELS: dict[str, dict[str, str]] = {
@@ -202,6 +203,23 @@ class ReplicateCoverService:
         self.db.add(task)
         self.db.commit()
         self.db.refresh(task)
+        append_task_debug_event(
+            self.db,
+            task,
+            event="cover_generation_started",
+            detail="Cover-Erstellung wurde gestartet.",
+            data={"audio_asset_id": asset.id, "song_id": song.id if song else None, "model": model, "has_reference": bool(has_reference)},
+            commit=False,
+        )
+        append_task_step_log(
+            self.db,
+            task,
+            phase="started",
+            phase_label="Cover-Erstellung gestartet",
+            detail="Replicate erzeugt ein Titel-Cover fuer diesen Song.",
+            data={"audio_asset_id": asset.id, "model": model},
+            commit=False,
+        )
         self.db.add(StatusNotification(
             event_type="cover_generation_started",
             title=f"Cover-Erstellung läuft: {title}",
@@ -293,6 +311,31 @@ class ReplicateCoverService:
             task.completed_at = task.heartbeat_at
             task.error_message = None
             task.result_payload = {"audio_asset_id": asset.id, "song_id": song.id if song else None, "cover_url": public_url, "replicate_source_url": remote_url, "model": model, "title": title, "note": note or None, "genre": genre, "safety_retry": safety_retry}
+            append_task_debug_event(
+                self.db,
+                task,
+                event="cover_generation_finished",
+                detail="Cover-Erstellung wurde abgeschlossen.",
+                data={
+                    "audio_asset_id": asset.id,
+                    "song_id": song.id if song else None,
+                    "model": model,
+                    "genre": genre,
+                    "safety_retry": safety_retry,
+                    "cover_url": public_url,
+                    "replicate_source_url": remote_url,
+                },
+                commit=False,
+            )
+            append_task_step_log(
+                self.db,
+                task,
+                phase="completed",
+                phase_label="Cover-Erstellung abgeschlossen",
+                detail="Das neue Titel-Cover wurde lokal gespeichert.",
+                data={"audio_asset_id": asset.id, "safety_retry": safety_retry},
+                commit=False,
+            )
             self._finish_started_notification(task.id, "SUCCESS")
             self.db.add(task)
             self.db.add(ActivityLog(action="generate_ai_cover", content_type="audio", content_id=asset.id, new_value={"cover_url": public_url, "replicate_source_url": remote_url, "model": model, "title": title, "safety_retry": safety_retry}, metadata_json={"task_local_id": task.id, "song_id": song.id if song else None, "prompt_length": len(final_prompt), "note": note or None}))
@@ -307,6 +350,24 @@ class ReplicateCoverService:
             task.completed_at = task.heartbeat_at
             task.error_message = str(exc)
             task.result_payload = {"audio_asset_id": asset.id, "status": "FAILED", "error": str(exc), "safety_error": _is_replicate_safety_error(exc)}
+            append_task_debug_event(
+                self.db,
+                task,
+                event="cover_generation_failed",
+                detail=str(exc),
+                level="error",
+                data={"audio_asset_id": asset.id, "model": model, "exception_type": type(exc).__name__, "safety_error": _is_replicate_safety_error(exc)},
+                commit=False,
+            )
+            append_task_step_log(
+                self.db,
+                task,
+                phase="failed",
+                phase_label="Cover-Erstellung fehlgeschlagen",
+                detail=str(exc),
+                data={"audio_asset_id": asset.id, "model": model},
+                commit=False,
+            )
             self._finish_started_notification(task.id, "FAILED")
             self.db.add(task)
             self.db.add(StatusNotification(event_type="cover_generation_failed", title=f"Cover fehlgeschlagen: {title}", message=str(exc), severity="error", status="unread", task_local_id=task.id, content_type="audio", content_id=asset.id, target_tab="status", target_payload={"audio_asset_id": asset.id, "task_local_id": task.id, "task_type": "generate_cover_art", "status": "FAILED", "safety_error": _is_replicate_safety_error(exc)}, completed_at=utc_now_naive()))

@@ -93,6 +93,8 @@ settings.audio_storage_path.mkdir(parents=True, exist_ok=True)
 app.mount(settings.suno_audio_public_route, StaticFiles(directory=settings.audio_storage_path), name="audio_media")
 settings.cover_storage_path.mkdir(parents=True, exist_ok=True)
 app.mount(settings.suno_cover_public_route, StaticFiles(directory=settings.cover_storage_path), name="cover_media")
+settings.video_storage_path.mkdir(parents=True, exist_ok=True)
+app.mount(settings.suno_video_public_route, StaticFiles(directory=settings.video_storage_path), name="video_media")
 settings.transcript_storage_path.mkdir(parents=True, exist_ok=True)
 
 react_dist_dir = Path(__file__).resolve().parents[1] / "frontend-react" / "dist"

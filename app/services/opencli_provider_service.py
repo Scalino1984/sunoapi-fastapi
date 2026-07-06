@@ -18,6 +18,7 @@ from app.models import ActivityLog, AudioAsset, AudioProject, Song, StatusNotifi
 from app.services.audio_metadata_service import normalize_audio_content_type, read_audio_duration_seconds
 from app.services.portable_path_service import to_portable_path
 from app.services.asset_capabilities import local_only_capabilities, mark_opencli_generation
+from app.services.task_lifecycle_service import append_task_debug_event, append_task_step_log
 from app.utils.time_utils import utc_now_naive
 
 
@@ -96,6 +97,23 @@ class OpenCliProviderService:
         self.db.add(task)
         self.db.flush()
         task.task_id = f"opencli-{task.id}"
+        append_task_debug_event(
+            self.db,
+            task,
+            event="opencli_generation_queued",
+            detail="OpenCLI-Generierung wurde eingereiht.",
+            data={"task_id": task.task_id, "request_keys": sorted(request_payload.keys())},
+            commit=False,
+        )
+        append_task_step_log(
+            self.db,
+            task,
+            phase="queued",
+            phase_label="OpenCLI eingereiht",
+            detail="Generierung wartet auf lokale OpenCLI-Ausfuehrung.",
+            data={"task_id": task.task_id},
+            commit=False,
+        )
         self.db.add(ActivityLog(
             action="opencli_generate_queued",
             content_type="task",
@@ -131,6 +149,23 @@ class OpenCliProviderService:
         request_payload = task.request_payload if isinstance(task.request_payload, dict) else {}
         output_dir = self._output_dir_for_task(task)
         output_dir.mkdir(parents=True, exist_ok=True)
+        append_task_debug_event(
+            self.db,
+            task,
+            event="opencli_generation_started",
+            detail="OpenCLI-Generierung wurde gestartet.",
+            data={"task_id": task.task_id, "output_dir": str(output_dir), "request_keys": sorted(request_payload.keys())},
+            commit=False,
+        )
+        append_task_step_log(
+            self.db,
+            task,
+            phase="started",
+            phase_label="OpenCLI gestartet",
+            detail="Lokale OpenCLI-Generierung laeuft.",
+            data={"task_id": task.task_id},
+            commit=False,
+        )
 
         try:
             self._assert_provider_ready()
@@ -159,6 +194,29 @@ class OpenCliProviderService:
             task.completed_at = utc_now_naive()
             task.heartbeat_at = task.completed_at
             task.error_message = None
+            append_task_debug_event(
+                self.db,
+                task,
+                event="opencli_generation_finished",
+                detail="OpenCLI-Generierung wurde abgeschlossen.",
+                data={
+                    "task_id": task.task_id,
+                    "status": task.status,
+                    "song_id": song.id if song else None,
+                    "audio_asset_ids": [asset.id for asset in assets],
+                    "output_dir": str(output_dir),
+                },
+                commit=False,
+            )
+            append_task_step_log(
+                self.db,
+                task,
+                phase="completed",
+                phase_label="OpenCLI abgeschlossen",
+                detail="Song und lokale Audiodateien wurden erzeugt und importiert.",
+                data={"task_id": task.task_id, "audio_asset_count": len(assets)},
+                commit=False,
+            )
             self._mark_notification_done(started_notification)
             self._create_completed_notification(task, song, assets)
             self.db.add(ActivityLog(
@@ -182,6 +240,24 @@ class OpenCliProviderService:
                 "error": str(exc),
                 "output_dir": str(output_dir),
             }
+            append_task_debug_event(
+                self.db,
+                task,
+                event="opencli_generation_failed",
+                detail=str(exc),
+                level="error",
+                data={"task_id": task.task_id, "exception_type": type(exc).__name__, "output_dir": str(output_dir)},
+                commit=False,
+            )
+            append_task_step_log(
+                self.db,
+                task,
+                phase="failed",
+                phase_label="OpenCLI fehlgeschlagen",
+                detail=str(exc),
+                data={"task_id": task.task_id},
+                commit=False,
+            )
             self._mark_notification_done(started_notification)
             self._create_failed_notification(task, str(exc))
             self.db.add(ActivityLog(

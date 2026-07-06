@@ -90,6 +90,9 @@ code { color: #c7f9ff; background: rgba(255,255,255,0.06); border: 1px solid var
 .variant-card { display: grid; grid-template-columns: 150px 1fr; gap: 18px; }
 .variant-card.horizontal { grid-template-columns: auto 118px 1fr; align-items: start; }
 .variant-cover-button { width: 118px; height: 118px; border-radius: 17px; }
+.variant-cover-column { display: grid; gap: 8px; width: 118px; align-self: start; }
+.variant-cover-column .variant-cover-button { width: 100%; }
+.variant-cover-mp4-button { width: 100%; min-height: 36px; justify-content: center; padding: 8px 10px; font-size: .86rem; }
 .select-box { padding-top: 12px; }
 .select-box input { width: auto; }
 .variant-body { display: grid; gap: 10px; }
@@ -269,7 +272,12 @@ code { color: #c7f9ff; background: rgba(255,255,255,0.06); border: 1px solid var
 .variant-meta-grid .meta-card { border: 1px solid var(--line); border-radius: 14px; padding: 12px; background: rgba(255,255,255,0.035); }
 .variant-meta-grid .meta-card.wide { grid-column: 1 / -1; }
 .variant-meta-grid h4 { margin: 0 0 8px; color: var(--accent-2); }
-.variant-meta-grid p, .variant-meta-grid pre { color: var(--muted); max-height: 260px; overflow: auto; }
+/* Scroll-Vertrag: Read-only-Metadatenkarten duerfen keine eigenen Wheel-Scrollcontainer sein.
+   Sonst blockieren lange Style-/Prompt-Felder das Scrollen der Songdetails, sobald
+   der Mauszeiger darueber steht. Nur explizite keyboard-scroll-region-Elemente
+   behalten internes Scrollen. */
+.variant-meta-grid p, .variant-meta-grid pre { color: var(--muted); max-height: none; overflow: visible; }
+.variant-meta-grid .keyboard-scroll-region { max-height: 420px; overflow: auto; }
 @media (max-width: 1050px) { .variant-meta-grid { grid-template-columns: 1fr; } }
 .admin-table-row { grid-template-columns: 1fr auto auto auto; }
 @media (max-width: 760px) { .admin-table-row { grid-template-columns: 1fr; } }
@@ -2352,6 +2360,18 @@ button.danger.ghost {
 .status-detail-item span { color: var(--muted); font-size: 12px; }
 .status-detail-item strong { overflow-wrap: anywhere; }
 .mono-value { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; color: #c7f9ff; }
+.status-debug-export-box {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 14px;
+  align-items: center;
+  padding: 13px 14px;
+  border: 1px solid rgba(55,213,255,.28);
+  border-radius: 16px;
+  background: linear-gradient(135deg, rgba(55,213,255,.09), rgba(124,58,237,.07));
+}
+.status-debug-export-box strong { display: block; margin: 2px 0 4px; }
+.status-debug-export-box p { margin: 0; }
 .status-json-stack { display: grid; gap: 8px; }
 .status-json-details { border: 1px solid var(--line); border-radius: 14px; background: rgba(0,0,0,.18); overflow: hidden; }
 .status-json-details summary { cursor: pointer; padding: 11px 12px; color: var(--accent-2); font-weight: 800; }
@@ -2362,6 +2382,7 @@ button.danger.ghost {
 .toast-main:hover { color: var(--accent-2); }
 @media (max-width: 760px) {
   .live-status-grid, .status-detail-grid, .status-step-line, .status-detail-hero { grid-template-columns: 1fr; }
+  .status-debug-export-box { grid-template-columns: 1fr; }
   .status-detail-badge { justify-self: start; }
 }
 
@@ -7875,12 +7896,22 @@ body.audio-player-open {
     justify-self: center;
   }
 
-  .library-detail-page .variant-card.horizontal > .variant-cover-button {
+  .library-detail-page .variant-card.horizontal > .variant-cover-column {
     grid-column: 2;
     grid-row: 1;
     width: 62px;
-    height: 62px;
     align-self: center;
+  }
+
+  .library-detail-page .variant-card.horizontal > .variant-cover-column .variant-cover-button {
+    width: 62px;
+    height: 62px;
+  }
+
+  .library-detail-page .variant-card.horizontal > .variant-cover-column .variant-cover-mp4-button {
+    min-height: 30px;
+    padding: 6px;
+    font-size: 11px;
   }
 
   .library-detail-page .variant-card.horizontal > .variant-body {
@@ -8053,7 +8084,11 @@ body.audio-player-open {
     gap: 8px;
   }
 
-  .library-detail-page .variant-card.horizontal > .variant-cover-button {
+  .library-detail-page .variant-card.horizontal > .variant-cover-column {
+    width: 56px;
+  }
+
+  .library-detail-page .variant-card.horizontal > .variant-cover-column .variant-cover-button {
     width: 56px;
     height: 56px;
   }
@@ -15314,4 +15349,142 @@ body[data-theme="light"] .daw-timeline-stage {
 @media (max-width: 820px) {
   .daw-render-task-strip { grid-template-columns: 1fr; }
   .daw-render-task-progress { width: 100%; }
+}
+
+/* MP4-Library-Integration: Video bleibt eigenes Asset und wird nur als Anzeige-/Download-Funktion an AudioAsset gebunden. */
+.library-video-player {
+  width: 100%;
+  max-height: 70vh;
+  border-radius: 16px;
+  background: #000;
+}
+.video-player-modal .meta-card {
+  overflow-wrap: anywhere;
+}
+
+/* MP4-UI-Fix 2026-07-06: MP4-Aktion sichtbar und klar vom SRT-Status-Probing getrennt halten. */
+.video-summary-card {
+  border-color: rgba(34, 211, 238, .28);
+  background: linear-gradient(135deg, rgba(34, 211, 238, .10), rgba(99, 102, 241, .08));
+}
+.video-summary-card h4 {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.mp4-watch-button {
+  box-shadow: 0 0 0 1px rgba(34, 211, 238, .25), 0 14px 34px rgba(34, 211, 238, .14);
+  font-weight: 800;
+}
+.action-grid .mp4-watch-button {
+  grid-column: 1 / -1;
+}
+.variant-card .mp4-watch-button {
+  min-height: 40px;
+  padding-inline: 14px;
+}
+
+
+/* Patch 2026-07-06: MP4-Aktion in Songdetails gehoert direkt zum Cover. */
+.variant-cover-column { display: grid; gap: 8px; width: 118px; align-self: start; }
+.variant-cover-column .variant-cover-button { width: 100%; }
+.variant-cover-mp4-button { width: 100%; justify-content: center; }
+@media (max-width: 760px) {
+  .library-detail-page .variant-card.horizontal > .variant-cover-column { grid-column: 2; grid-row: 1; align-self: center; }
+}
+
+/* /texts view isolation: card/list switcher only affects the songtext archive, not global Library playback state. */
+.texts-page .texts-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.texts-page .text-count-summary span {
+  min-width: 86px;
+}
+
+.text-search-hint {
+  margin: 0;
+}
+
+.texts-list-view {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+}
+
+.texts-list-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 14px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.texts-list-main {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+}
+
+.texts-list-title-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.texts-list-title-row h3 {
+  margin: 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.texts-list-meta,
+.texts-list-preview {
+  margin: 0;
+}
+
+.texts-list-preview {
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.text-list-actions {
+  justify-content: flex-end;
+  flex-wrap: nowrap;
+}
+
+.compact-pill {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  padding: 5px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.055);
+  border: 1px solid var(--line);
+}
+
+@media (max-width: 860px) {
+  .texts-list-row {
+    grid-template-columns: 1fr;
+    align-items: stretch;
+  }
+
+  .text-list-actions {
+    justify-content: flex-start;
+    flex-wrap: wrap;
+  }
 }

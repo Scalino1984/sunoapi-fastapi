@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.models import AudioAsset, Song, SunoTask
+from app.services.audio_metadata_service import normalize_audio_content_type, read_audio_duration_seconds
 from app.services.id3_tag_service import sync_audio_asset_id3_cover
 from app.services.portable_path_service import to_portable_path
 from app.utils.time_utils import utc_now_naive
@@ -297,6 +298,65 @@ class AudioCacheService:
         self.db = db
         self.settings = get_settings()
 
+    def _candidate_download_urls(self, candidate: AudioCandidate) -> list[str]:
+        """Liefert Download-URLs in sicherer SunoAPI-Reihenfolge.
+
+        Fuer Generate-Music ist audio_url/audioUrl die fertige MP3-Datei.
+        source_audio_url/sourceAudioUrl und stream_* sind Fallbacks und duerfen
+        den lokalen Cache nicht vor der offiziellen Download-Datei dominieren.
+        """
+        from app.services.audio_asset_repair_service import AUDIO_URL_PREFERENCE, is_audio_url
+
+        urls: list[str] = []
+        seen: set[str] = set()
+
+        def add(value: Any) -> None:
+            if not isinstance(value, str):
+                return
+            text = value.strip()
+            if not text or text in seen or not is_audio_url(text):
+                return
+            seen.add(text)
+            urls.append(text)
+
+        for item in _walk(candidate.metadata or {}):
+            if not isinstance(item, dict):
+                continue
+            for key in AUDIO_URL_PREFERENCE:
+                add(item.get(key))
+            for key, value in item.items():
+                normalized = _normalize_key(str(key))
+                if normalized in {"url", "src", "href"}:
+                    add(value)
+
+        add(candidate.source_url)
+        return urls
+
+    def _best_download_url(self, candidate: AudioCandidate) -> str:
+        urls = self._candidate_download_urls(candidate)
+        if not urls:
+            raise ValueError("Keine Audio-Quelle vorhanden.")
+        return urls[0]
+
+    def _duration_mismatch(self, expected_seconds: int | float | None, actual_seconds: int | float | None) -> bool:
+        if not expected_seconds or not actual_seconds:
+            return False
+        try:
+            expected = float(expected_seconds)
+            actual = float(actual_seconds)
+        except (TypeError, ValueError):
+            return False
+        if expected <= 0 or actual <= 0:
+            return False
+        tolerance = max(4.0, expected * 0.05)
+        return abs(expected - actual) > tolerance
+
+    def _cached_file_matches_candidate_duration(self, path: Path | None, candidate: AudioCandidate) -> bool:
+        if not path:
+            return False
+        actual = read_audio_duration_seconds(path)
+        return not self._duration_mismatch(candidate.duration_seconds, actual)
+
     def should_cache_task(self, task: SunoTask) -> bool:
         mode = self.settings.suno_audio_cache_mode.strip().lower()
         if not getattr(self.settings, "local_content_storage_enabled", True):
@@ -530,15 +590,17 @@ class AudioCacheService:
         Codepfad rief diese Methode bereits auf, sie fehlte aber im Service. Ein
         fehlender lokaler Cache führte dadurch zu Fehlern statt zu einem Download.
         """
-        if not candidate.source_url:
-            raise ValueError("Keine Audio-Quelle vorhanden.")
+        source_url = self._best_download_url(candidate)
 
         cached_path = self._resolve_cached_file_path(asset.local_path or asset.filename, storage_root=self.settings.audio_storage_path)
-        if asset.status == "cached" and cached_path:
+        if asset.status == "cached" and cached_path and self._cached_file_matches_candidate_duration(cached_path, candidate):
             return asset
+        if asset.status == "cached" and cached_path:
+            asset.status = "stale"
+            asset.error_message = "Lokaler Cache weicht von der SunoAPI-Dauer ab; erneuter Download der offiziellen audio_url."
 
-        if not asset.source_url:
-            asset.source_url = candidate.source_url
+        if not asset.source_url or asset.source_url != source_url:
+            asset.source_url = source_url
         if candidate.audio_id and not asset.audio_id:
             asset.audio_id = candidate.audio_id
         if candidate.title and not asset.title:
@@ -563,7 +625,7 @@ class AudioCacheService:
             if asset.created_at and asset.created_at > candidate.created_at:
                 asset.created_at = candidate.created_at
 
-        self._validate_public_url(candidate.source_url)
+        self._validate_public_url(source_url)
         storage_dir = self.settings.audio_storage_path
         storage_dir.mkdir(parents=True, exist_ok=True)
 
@@ -572,10 +634,10 @@ class AudioCacheService:
         total_size = 0
         content_type = None
 
-        response, client = await self._open_validated_response(candidate.source_url)
+        response, client = await self._open_validated_response(source_url)
         try:
             content_type = response.headers.get("content-type", "").split(";", 1)[0].strip().lower() or None
-            self._validate_content_type_or_extension(candidate.source_url, content_type)
+            self._validate_content_type_or_extension(source_url, content_type)
             content_length = response.headers.get("content-length")
             if content_length and int(content_length) > self.settings.audio_max_download_bytes:
                 raise ValueError(f"Audiodatei ist zu groß: {content_length} Bytes.")
@@ -599,7 +661,7 @@ class AudioCacheService:
 
         digest = sha256.hexdigest()
         duplicate = self.db.query(AudioAsset).filter(AudioAsset.checksum_sha256 == digest, AudioAsset.status == "cached", AudioAsset.is_deleted.is_(False)).first()
-        extension = self._extension_from_url_or_content_type(candidate.source_url, content_type)
+        extension = self._extension_from_url_or_content_type(source_url, content_type)
         final_name = f"audio_{asset.id}_{digest[:16]}{extension}"
         final_path = storage_dir / final_name
 
@@ -620,7 +682,6 @@ class AudioCacheService:
             asset.local_path = to_portable_path(final_path, storage_root=self.settings.audio_storage_path)
             asset.public_url = f"{self.settings.suno_audio_public_route.rstrip('/')}/{final_name}"
             asset.filename = final_name
-            from app.services.audio_metadata_service import normalize_audio_content_type
             asset.content_type = normalize_audio_content_type(content_type, final_path)
             asset.file_size_bytes = total_size
             asset.checksum_sha256 = digest
@@ -628,16 +689,36 @@ class AudioCacheService:
             asset.error_message = None
             asset.image_url = candidate.image_url or asset.image_url
 
+        actual_duration = read_audio_duration_seconds(self._resolve_cached_file_path(asset.local_path or asset.filename, storage_root=self.settings.audio_storage_path) or final_path)
+        if actual_duration:
+            asset.duration_seconds = actual_duration
+
         self.db.commit()
         self.db.refresh(asset)
         return asset
 
     async def cache_candidate(self, candidate: AudioCandidate, task: SunoTask | None = None, song: Song | None = None) -> AudioAsset:
-        asset = self._get_or_create_asset(candidate, task=task, song=song)
-        if asset.status == "cached" and asset.local_path and Path(asset.local_path).exists():
-            return asset
+        source_url = self._best_download_url(candidate)
+        if candidate.source_url != source_url:
+            candidate = AudioCandidate(
+                source_url=source_url,
+                audio_id=candidate.audio_id,
+                title=candidate.title,
+                image_url=candidate.image_url,
+                duration_seconds=candidate.duration_seconds,
+                created_at=candidate.created_at,
+                metadata=candidate.metadata,
+            )
 
-        self._validate_public_url(candidate.source_url)
+        asset = self._get_or_create_asset(candidate, task=task, song=song)
+        cached_path = self._resolve_cached_file_path(asset.local_path or asset.filename, storage_root=self.settings.audio_storage_path)
+        if asset.status == "cached" and cached_path and self._cached_file_matches_candidate_duration(cached_path, candidate):
+            return asset
+        if asset.status == "cached" and cached_path:
+            asset.status = "stale"
+            asset.error_message = "Lokaler Cache weicht von der SunoAPI-Dauer ab; erneuter Download der offiziellen audio_url."
+
+        self._validate_public_url(source_url)
         storage_dir = self.settings.audio_storage_path
         storage_dir.mkdir(parents=True, exist_ok=True)
 
@@ -646,10 +727,10 @@ class AudioCacheService:
         total_size = 0
         content_type = None
 
-        response, client = await self._open_validated_response(candidate.source_url)
+        response, client = await self._open_validated_response(source_url)
         try:
             content_type = response.headers.get("content-type", "").split(";")[0].strip().lower() or None
-            self._validate_content_type_or_extension(candidate.source_url, content_type)
+            self._validate_content_type_or_extension(source_url, content_type)
             content_length = response.headers.get("content-length")
             if content_length and int(content_length) > self.settings.audio_max_download_bytes:
                 raise ValueError(f"Audiodatei ist zu groß: {content_length} Bytes.")
@@ -672,7 +753,7 @@ class AudioCacheService:
 
         digest = sha256.hexdigest()
         duplicate = self.db.query(AudioAsset).filter(AudioAsset.checksum_sha256 == digest, AudioAsset.status == "cached", AudioAsset.is_deleted.is_(False)).first()
-        extension = self._extension_from_url_or_content_type(candidate.source_url, content_type)
+        extension = self._extension_from_url_or_content_type(source_url, content_type)
         final_name = f"audio_{asset.id}_{digest[:16]}{extension}"
         final_path = storage_dir / final_name
 
@@ -692,13 +773,16 @@ class AudioCacheService:
             asset.local_path = to_portable_path(final_path, storage_root=self.settings.audio_storage_path)
             asset.public_url = f"{self.settings.suno_audio_public_route.rstrip('/')}/{final_name}"
             asset.filename = final_name
-            from app.services.audio_metadata_service import normalize_audio_content_type
             asset.content_type = normalize_audio_content_type(content_type, final_path)
             asset.file_size_bytes = total_size
             asset.checksum_sha256 = digest
             asset.status = "cached"
             asset.error_message = None
             asset.image_url = candidate.image_url or asset.image_url
+
+        actual_duration = read_audio_duration_seconds(self._resolve_cached_file_path(asset.local_path or asset.filename, storage_root=self.settings.audio_storage_path) or final_path)
+        if actual_duration:
+            asset.duration_seconds = actual_duration
 
         self.db.commit()
         self.db.refresh(asset)

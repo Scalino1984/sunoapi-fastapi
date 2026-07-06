@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.database import SessionLocal, get_db
-from app.models import ActivityLog, AudioAsset, Persona, Song, StatusNotification, SunoTask
+from app.models import ActivityLog, AudioAsset, Persona, Song, StatusNotification, SunoTask, VideoAsset
 from app.schemas import (
     AddInstrumentalRequest,
     AddVocalsRequest,
@@ -54,6 +54,8 @@ from app.services.song_library_sync_service import SongLibrarySyncService
 from app.services.system_status_notification_service import create_system_status_notification
 from app.services.background_task_runner import run_detached_process
 from app.services.task_lifecycle_service import (
+    append_task_debug_event,
+    append_task_step_log,
     heartbeat_task,
     is_cancel_requested,
     mark_task_finished,
@@ -107,6 +109,22 @@ def _collect_imported_audio_asset_ids(db: Session, *, task: SunoTask | None = No
             song_ids = [row.id for row in db.query(Song.id).filter(Song.task_id == task.task_id, Song.is_deleted.is_(False)).all()]
             if song_ids:
                 values.extend([row.id for row in db.query(AudioAsset.id).filter(AudioAsset.song_id.in_(song_ids), AudioAsset.is_deleted.is_(False)).all()])
+    return _dedupe_ints(values)
+
+
+
+def _collect_imported_video_asset_ids(db: Session, *, task: SunoTask | None = None) -> list[int]:
+    # /imports-MP4-Vertrag: Videos werden als video_assets an AudioAssets gebunden.
+    # Batch-Status darf sie nicht als AudioAssets zaehlen, muss sie aber sichtbar machen.
+    values: list[int | None] = []
+    if task:
+        attached_video_id = getattr(task, "import_video_asset_id", None)
+        if attached_video_id:
+            values.append(attached_video_id)
+        if task.id:
+            values.extend([row.id for row in db.query(VideoAsset.id).filter(VideoAsset.task_local_id == task.id, VideoAsset.is_deleted.is_(False)).all()])
+        if task.task_id:
+            values.extend([row.id for row in db.query(VideoAsset.id).filter(VideoAsset.suno_task_id == task.task_id, VideoAsset.is_deleted.is_(False)).all()])
     return _dedupe_ints(values)
 
 
@@ -179,6 +197,34 @@ def _finish_import_status_task(
             "completed_at": now.isoformat(),
         }
         task.response_payload = {**(task.response_payload or {}), "status": status, "completed_at": now.isoformat()}
+        final_phase = "completed" if status == "SUCCESS" else ("partial_success" if status == "PARTIAL_SUCCESS" else "failed")
+        append_task_debug_event(
+            db,
+            task,
+            event="import_status_finished",
+            detail=message,
+            level="info" if status == "SUCCESS" else ("warning" if status == "PARTIAL_SUCCESS" else "error"),
+            data={
+                "task_type": task_type,
+                "status": status,
+                "summary": summary,
+                "imported_count": len(imported),
+                "already_imported_count": len(already_imported),
+                "failed_count": len(failed),
+                "post_actions_count": len(post_actions),
+                "failed_preview": failed[:10],
+            },
+            commit=False,
+        )
+        append_task_step_log(
+            db,
+            task,
+            phase=final_phase,
+            phase_label="Import abgeschlossen" if status == "SUCCESS" else ("Import teilweise abgeschlossen" if status == "PARTIAL_SUCCESS" else "Import fehlgeschlagen"),
+            detail=message,
+            data={"task_type": task_type, "status": status, "summary": summary},
+            commit=False,
+        )
         db.add(task)
         running_rows = (
             db.query(StatusNotification)
@@ -354,6 +400,7 @@ async def _run_sunoapi_task_batch_import_background(master_task_id: int, payload
     already_imported: list[dict] = []
     failed: list[dict] = []
     all_asset_ids: list[int] = []
+    all_video_ids: list[int] = []
     try:
         payload = BatchImportSunoTaskRequest(**payload_data)
         timeout_seconds = max(5, int(get_settings().suno_task_import_item_timeout_seconds))
@@ -373,14 +420,17 @@ async def _run_sunoapi_task_batch_import_background(master_task_id: int, payload
                         "task_type": payload.task_type,
                         "title": title,
                         "cache_audio": payload.cache_audio,
+                        "cache_video": payload.cache_video,
                     }), timeout=timeout_seconds)
                     asset_ids = _collect_imported_audio_asset_ids(item_db, task=result)
+                    video_ids = _collect_imported_video_asset_ids(item_db, task=result)
                     attached = getattr(result, "__dict__", {})
-                    row = {"task_id": task_id, "local_task_id": result.id, "status": result.status, "audio_asset_ids": asset_ids}
+                    row = {"task_id": task_id, "local_task_id": result.id, "status": result.status, "task_type": result.task_type, "audio_asset_ids": asset_ids, "video_asset_ids": video_ids}
                     was_already_imported = bool(attached.get("already_imported") or attached.get("import_status") == "already_imported")
                 finally:
                     item_db.close()
                 all_asset_ids.extend(asset_ids)
+                all_video_ids.extend(video_ids)
                 if was_already_imported:
                     already_imported.append(row)
                 else:
@@ -394,6 +444,9 @@ async def _run_sunoapi_task_batch_import_background(master_task_id: int, payload
             generate_stems=bool(payload.generate_stems),
         )
         message = f"{len(imported)} importiert, {len(already_imported)} bereits vorhanden, {len(failed)} Fehler."
+        video_count = len(_dedupe_ints(all_video_ids))
+        if video_count:
+            message += f" MP4-Videos: {video_count}."
         if post_actions:
             message += " Zusatzaufgaben gestartet: " + ", ".join(action["type"].upper() for action in post_actions) + "."
         summary = {
@@ -402,6 +455,7 @@ async def _run_sunoapi_task_batch_import_background(master_task_id: int, payload
             "already_imported": len(already_imported),
             "failed": len(failed),
             "post_action_assets": len(_dedupe_ints(all_asset_ids)),
+            "video_assets": len(_dedupe_ints(all_video_ids)),
         }
         _finish_import_status_task(
             db,
@@ -424,7 +478,7 @@ async def _run_sunoapi_task_batch_import_background(master_task_id: int, payload
             title="SunoAPI.org Task-Batchimport fehlgeschlagen",
             message=str(exc),
             severity="error",
-            summary={"total": 0, "imported": 0, "already_imported": 0, "failed": 1, "post_action_assets": 0},
+            summary={"total": 0, "imported": 0, "already_imported": 0, "failed": 1, "post_action_assets": 0, "video_assets": 0},
             imported=imported,
             already_imported=already_imported,
             failed=failed or [{"error": str(exc)}],
@@ -921,6 +975,7 @@ async def import_tasks_from_suno_batch(payload: BatchImportSunoTaskRequest, back
             "count": len(task_ids),
             "task_type": payload.task_type,
             "cache_audio": bool(payload.cache_audio),
+            "cache_video": bool(payload.cache_video),
             "title_prefix": payload.title_prefix,
             "generate_srt": bool(payload.generate_srt),
             "generate_stems": bool(payload.generate_stems),
@@ -932,7 +987,7 @@ async def import_tasks_from_suno_batch(payload: BatchImportSunoTaskRequest, back
         "queued": True,
         "task_local_id": task.id,
         "status": "RUNNING",
-        "summary": {"total": len(task_ids), "imported": 0, "already_imported": 0, "failed": 0, "post_action_assets": 0},
+        "summary": {"total": len(task_ids), "imported": 0, "already_imported": 0, "failed": 0, "post_action_assets": 0, "video_assets": 0},
         "post_actions": [],
         "message": f"SunoAPI.org Task-Batchimport wurde gestartet ({len(task_ids)} Einträge). Status und Ergebnis erscheinen unter Benachrichtigungen & Tasks.",
     }

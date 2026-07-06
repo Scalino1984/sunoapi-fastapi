@@ -187,6 +187,10 @@ _PERFORMANCE_INDEXES: list[tuple[str, str]] = [
     ("ix_status_notifications_task_local", "status_notifications (task_local_id, is_deleted)"),
     # Transkripte
     ("ix_audio_transcripts_asset_status_updated", "audio_transcripts (audio_asset_id, status, updated_at, id)"),
+    # MP4-Videos bleiben getrennte Assets, werden aber im Library-Listenpfad pro AudioAsset zusammengefasst.
+    ("ix_video_assets_audio_deleted_created", "video_assets (audio_asset_id, is_deleted, created_at, id)"),
+    ("ix_video_assets_audio_id_deleted", "video_assets (audio_id, is_deleted)"),
+    ("ix_video_assets_task_deleted", "video_assets (suno_task_id, is_deleted)"),
     # Playlists / Activity
     ("ix_playlist_items_playlist_position", "playlist_items (playlist_id, position, id)"),
     ("ix_activity_log_content_created", "activity_log (content_type, content_id, created_at)"),

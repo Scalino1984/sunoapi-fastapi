@@ -4,14 +4,33 @@ import { api } from '../api/client.js';
 import { SectionHeader } from '../components/SectionHeader.jsx';
 import { useI18n } from '../i18n/I18nContext.jsx';
 
+const SUNO_TASK_TYPE_OPTIONS = [
+  ['auto', 'Auto erkennen'],
+  ['generate_music', 'Musik / Audio'],
+  ['extend_music', 'Musik erweitern'],
+  ['upload_and_cover', 'Cover Song'],
+  ['upload_and_extend', 'Upload erweitern'],
+  ['add_instrumental', 'Instrumental hinzufügen'],
+  ['add_vocals', 'Vocals hinzufügen'],
+  ['generate_mashup', 'Mashup'],
+  ['generate_sounds', 'Sounds'],
+  ['create_cover', 'Cover-Bild'],
+  ['create_video', 'Music Video / MP4'],
+  ['separate', 'Stems / Separate'],
+  ['convert_to_wav', 'WAV-Konvertierung'],
+  ['generate_midi', 'MIDI'],
+  ['generate_lyrics', 'Lyrics'],
+  ['create_custom_voice', 'Custom Voice']
+];
+
 export function ImportPage({ notify, onReload, onOpenAsset }) {
   const { t } = useI18n();
   const [importingTask, setImportingTask] = useState(false);
   const [cachingCovers, setCachingCovers] = useState(false);
   const [manualImportBusy, setManualImportBusy] = useState(false);
-  const [importPayload, setImportPayload] = useState({ task_id: '', title: '', prompt: '', style: '', model: '', cache_audio: true, generate_srt: false, generate_stems: false });
+  const [importPayload, setImportPayload] = useState({ task_id: '', task_type: 'auto', title: '', prompt: '', style: '', model: '', cache_audio: true, cache_video: true, generate_srt: false, generate_stems: false });
   const [batchImporting, setBatchImporting] = useState(false);
-  const [batchImportPayload, setBatchImportPayload] = useState({ task_ids: '', cache_audio: true, title_prefix: '', generate_srt: false, generate_stems: false });
+  const [batchImportPayload, setBatchImportPayload] = useState({ task_ids: '', task_type: 'auto', cache_audio: true, cache_video: true, title_prefix: '', generate_srt: false, generate_stems: false });
   const [songImporting, setSongImporting] = useState(false);
   const [songImportPayload, setSongImportPayload] = useState({ song_id: '', cache_audio: true, cache_cover: true, import_video_url: true, overwrite_existing: false, generate_srt: false, generate_stems: false });
   const [songBatchImporting, setSongBatchImporting] = useState(false);
@@ -55,11 +74,13 @@ export function ImportPage({ notify, onReload, onOpenAsset }) {
     try {
       const payload = {
         task_id: taskId,
+        task_type: importPayload.task_type || 'auto',
         title: importPayload.title.trim() || undefined,
         prompt: importPayload.prompt.trim() || undefined,
         style: importPayload.style.trim() || undefined,
         model: importPayload.model.trim() || undefined,
         cache_audio: Boolean(importPayload.cache_audio),
+        cache_video: Boolean(importPayload.cache_video),
         generate_srt: Boolean(importPayload.generate_srt),
         generate_stems: Boolean(importPayload.generate_stems)
       };
@@ -83,7 +104,14 @@ export function ImportPage({ notify, onReload, onOpenAsset }) {
     if (!batchImportPayload.task_ids.trim()) return notify?.(t('status.messages.batchTaskIdsMissing', 'Bitte mindestens eine Task-ID eintragen.'), 'error');
     setBatchImporting(true);
     try {
-      const result = await api.music.importBatchFromSuno(batchImportPayload);
+      const result = await api.music.importBatchFromSuno({
+        ...batchImportPayload,
+        task_type: batchImportPayload.task_type || 'auto',
+        cache_audio: Boolean(batchImportPayload.cache_audio),
+        cache_video: Boolean(batchImportPayload.cache_video),
+        generate_srt: Boolean(batchImportPayload.generate_srt),
+        generate_stems: Boolean(batchImportPayload.generate_stems)
+      });
       const summary = result?.summary || {};
       if (result?.queued) {
         notify?.(result?.message || t('status.messages.batchImportStarted', 'SunoAPI.org Task-Batchimport wurde gestartet ({{count}} Einträge).', { count: summary.total || 0 }), 'info');
@@ -193,11 +221,16 @@ export function ImportPage({ notify, onReload, onOpenAsset }) {
         <div>
           <p className="eyebrow"><RefreshCw size={14} /> {t('status.import.eyebrow', 'Backfill / Import')}</p>
           <h2>{t('status.import.title', 'Externen SunoAPI.org-Task importieren')}</h2>
-          <p className="muted">{t('status.import.text', 'SunoAPI.org-Task-ID eintragen. Die App erkennt den Task-Typ automatisch, lädt die passende Record-Info und legt Task, Song und AudioAsset lokal ab.')}</p>
+          <p className="muted">{t('status.import.text', 'SunoAPI.org-Task-ID eintragen. Die App erkennt den Task-Typ automatisch oder nutzt die Auswahl. Audio wird als AudioAsset importiert, MP4-Videos werden separat als VideoAsset an vorhandene AudioAssets gebunden.')}</p>
         </div>
         <form className="form-grid" onSubmit={importExternalTask}>
           <label className="wide">Task-ID
             <input value={importPayload.task_id} onChange={(event) => updateImportPayload('task_id', event.target.value)} placeholder={t('status.import.taskIdPlaceholder', 'z. B. b762e25da0e27d420535ae1068504ecd')} />
+          </label>
+          <label>{t('status.import.taskType', 'Task-Typ')}
+            <select value={importPayload.task_type} onChange={(event) => updateImportPayload('task_type', event.target.value)}>
+              {SUNO_TASK_TYPE_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+            </select>
           </label>
           <label>{t('status.import.titleOptional', 'Titel optional')}
             <input value={importPayload.title} onChange={(event) => updateImportPayload('title', event.target.value)} placeholder={t('status.import.localDisplayName', 'Lokaler Anzeigename')} />
@@ -211,7 +244,8 @@ export function ImportPage({ notify, onReload, onOpenAsset }) {
           <label>{t('status.import.styleOptional', 'Style optional')}
             <textarea rows={3} value={importPayload.style} onChange={(event) => updateImportPayload('style', event.target.value)} placeholder={t('status.import.stylePlaceholder', 'Style lokal ergänzen…')} />
           </label>
-          <label className="check-row"><input type="checkbox" checked={importPayload.cache_audio} onChange={(event) => updateImportPayload('cache_audio', event.target.checked)} /> {t('status.import.cacheAudioIfAvailable', 'Audio lokal cachen, falls URL verfügbar')}</label>
+          <label className="check-row"><input type="checkbox" checked={importPayload.cache_audio} onChange={(event) => updateImportPayload('cache_audio', event.target.checked)} /> {t('status.import.cacheAudioIfAvailable', 'Audio lokal speichern, falls URL verfügbar')}</label>
+          <label className="check-row"><input type="checkbox" checked={importPayload.cache_video} onChange={(event) => updateImportPayload('cache_video', event.target.checked)} /> {t('status.import.cacheVideoIfAvailable', 'MP4 lokal speichern, falls videoUrl verfügbar')}</label>
           <label className="check-row"><input type="checkbox" checked={importPayload.generate_srt} onChange={(event) => updateImportPayload('generate_srt', event.target.checked)} /> {t('status.import.generateSrtAfterImport', 'Nach Import SRT erzeugen')}</label>
           <label className="check-row"><input type="checkbox" checked={importPayload.generate_stems} onChange={(event) => updateImportPayload('generate_stems', event.target.checked)} /> {t('status.import.generateStemsAfterImport', 'Nach Import Stems erzeugen')}</label>
           <div className="form-actions">
@@ -225,10 +259,16 @@ export function ImportPage({ notify, onReload, onOpenAsset }) {
             <label className="wide">{t('status.import.taskIdsOnePerLine', 'Task-IDs, eine pro Zeile')}
               <textarea rows={5} value={batchImportPayload.task_ids} onChange={(event) => updateBatchImportPayload('task_ids', event.target.value)} placeholder={t('status.import.taskIdsPlaceholder', 'Task-ID 1\nTask-ID 2\nTask-ID 3')} />
             </label>
+            <label>{t('status.import.taskType', 'Task-Typ')}
+              <select value={batchImportPayload.task_type} onChange={(event) => updateBatchImportPayload('task_type', event.target.value)}>
+                {SUNO_TASK_TYPE_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+              </select>
+            </label>
             <label>{t('status.import.titlePrefixOptional', 'Titel-Präfix optional')}
               <input value={batchImportPayload.title_prefix} onChange={(event) => updateBatchImportPayload('title_prefix', event.target.value)} placeholder={t('status.import.titlePrefixPlaceholder', 'z. B. Backfill')} />
             </label>
-            <label className="check-row"><input type="checkbox" checked={batchImportPayload.cache_audio} onChange={(event) => updateBatchImportPayload('cache_audio', event.target.checked)} /> {t('status.import.cacheAudio', 'Audio lokal cachen')}</label>
+            <label className="check-row"><input type="checkbox" checked={batchImportPayload.cache_audio} onChange={(event) => updateBatchImportPayload('cache_audio', event.target.checked)} /> {t('status.import.cacheAudio', 'Audio lokal speichern')}</label>
+            <label className="check-row"><input type="checkbox" checked={batchImportPayload.cache_video} onChange={(event) => updateBatchImportPayload('cache_video', event.target.checked)} /> {t('status.import.cacheVideo', 'MP4 lokal speichern')}</label>
             <label className="check-row"><input type="checkbox" checked={batchImportPayload.generate_srt} onChange={(event) => updateBatchImportPayload('generate_srt', event.target.checked)} /> {t('status.import.generateSrtAfterImport', 'Nach Import SRT erzeugen')}</label>
             <label className="check-row"><input type="checkbox" checked={batchImportPayload.generate_stems} onChange={(event) => updateBatchImportPayload('generate_stems', event.target.checked)} /> {t('status.import.generateStemsAfterImport', 'Nach Import Stems erzeugen')}</label>
             <div className="form-actions"><button className="primary" type="submit" disabled={batchImporting}><RefreshCw size={16} className={batchImporting ? 'spin-icon' : ''} /> {batchImporting ? t('status.import.importing', 'Importiere…') : t('status.import.importBatch', 'Batch importieren')}</button></div>

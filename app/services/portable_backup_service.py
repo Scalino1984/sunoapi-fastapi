@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.database import SessionLocal, engine, init_db
-from app.models import AudioAsset, AudioTranscript, Song
+from app.models import AudioAsset, AudioTranscript, Song, VideoAsset
 from app.services.system_status_notification_service import create_system_status_notification
 from app.services.portable_path_service import project_root, resolve_portable_path, to_portable_path
 from app.utils.time_utils import utc_now_naive
@@ -143,6 +143,7 @@ def _storage_specs() -> list[dict[str, Any]]:
     return [
         {"key": "audio", "root": settings.audio_storage_path, "archive": "files/audio"},
         {"key": "covers", "root": settings.cover_storage_path, "archive": "files/covers"},
+        {"key": "videos", "root": settings.video_storage_path, "archive": "files/videos"},
         {"key": "transcripts", "root": settings.transcript_storage_path, "archive": "files/transcripts"},
         {"key": "stems", "root": (project_root() / "storage" / "stems").resolve(), "archive": "files/stems"},
         {"key": "exports", "root": (project_root() / "storage" / "exports").resolve(), "archive": "files/exports"},
@@ -279,10 +280,12 @@ def normalize_portable_paths(db: Session, *, dry_run: bool = False) -> dict[str,
         "songs": PortablePathStats(),
         "transcripts": PortablePathStats(),
         "cover_cache": PortablePathStats(),
+        "videos": PortablePathStats(),
     }
 
     audio_roots = [settings.audio_storage_path]
     cover_roots = [settings.cover_storage_path]
+    video_roots = [settings.video_storage_path]
     transcript_roots = [settings.transcript_storage_path]
 
     for asset in db.query(AudioAsset).all():
@@ -338,6 +341,20 @@ def normalize_portable_paths(db: Session, *, dry_run: bool = False) -> dict[str,
                     cover_cache["local_path"] = portable
                     metadata["cover_cache"] = cover_cache
                     song.metadata_json = metadata
+
+    for video in db.query(VideoAsset).all():
+        stats["videos"].checked += 1
+        if video.local_path:
+            if Path(str(video.local_path)).is_absolute():
+                stats["videos"].absolute_before += 1
+            resolved = resolve_portable_path(video.local_path, video_roots)
+            portable = to_portable_path(resolved or video.local_path, storage_root=settings.video_storage_path)
+            if resolved is None:
+                stats["videos"].missing_files += 1
+            if portable and portable != video.local_path:
+                stats["videos"].changed += 1
+                if not dry_run:
+                    video.local_path = portable
 
     for transcript in db.query(AudioTranscript).all():
         stats["transcripts"].checked += 1

@@ -7,6 +7,14 @@ from __future__ import annotations
 # Kritische Logik: Lyrics-Cleanup, Transkriptionsprovider, Alignment, Task-Finalisierung.
 # Tasks duerfen nie dauerhaft RUNNING bleiben; Providerfehler muessen FAILED setzen.
 # SRT-Zeiten bauen structure_segments_json fuer Waveform-Abschnitte.
+# Stand 2026-07-05: Wiederholte Suno-Abschnittsbloecke werden generisch per
+# ASR-Wortzeiten verankert; unbelegte 0,3s-Wiederholungsquetschungen werden
+# ausgelassen statt kuenstlich angezeigt. Diese Regeln sind nicht songspezifisch
+# und duerfen nur mit Regressionstest gegen doppelte Hook/Bridge-Zeilen geaendert werden.
+# Stand 2026-07-05: ASR-Zeilenkandidaten werden vor den Fallback-Heuristiken
+# sequenziell und fuzzy gegen die Lyrics gemappt. Das schuetzt die Songtext-
+# Reihenfolge bei ASR-Luecken/Fehlhoerungen und ersetzt wortspezifische Fixes
+# durch generische Token-Aehnlichkeit plus monotone Skip-Kosten.
 # Groq-Sonderfall: Der Groq-Upload nutzt bei Bedarf eine temporaere, klein
 # kodierte Mono-Kopie der Audiodatei. Diese Kopie existiert nur fuer den
 # Provider-POST und darf nicht die Originaldatei, Lyrics-Bereinigung, Alignment-
@@ -18,6 +26,7 @@ from __future__ import annotations
 import asyncio
 import difflib
 import json
+import logging
 import os
 import re
 import shutil
@@ -53,6 +62,9 @@ TRANSCRIPTION_MATCH_MODE = "lenient"
 SUPPORTED_BACKENDS = {"voxtral", "openai_whisper_api", "whisperx", "groq"}
 SUPPORTED_LANGUAGES = {"auto", "de", "en"}
 STRUCTURE_SEGMENT_LEAD_IN_SECONDS = 2.0
+SRT_DEBUG_LOG_LIMIT = 120
+
+logger = logging.getLogger("songstudio.srt")
 
 ENGLISH_LANGUAGE_HINTS = {
     "the", "and", "you", "your", "yours", "we", "they", "them", "that", "this", "with", "from", "when",
@@ -231,6 +243,9 @@ class LyricLine:
     end: float | None = None
     wstart: list[float] | None = None
     wend: list[float] | None = None
+    section_label: str | None = None
+    section_type: str | None = None
+    starts_section: bool = False
 
 
 @dataclass
@@ -238,6 +253,25 @@ class HypWord:
     norm: str
     start: float
     end: float
+
+
+@dataclass
+class _AsrLineCandidate:
+    index: int
+    tokens: list[str]
+    start: float
+    end: float
+    text: str
+
+
+@dataclass
+class _AsrLyricsLineMatch:
+    candidate_index: int
+    line_index: int
+    score: float
+    start: float
+    end: float
+    text: str
 
 
 def _script_syllable_weight(text: str) -> float:
@@ -262,6 +296,93 @@ def _script_tokenize_match(text: str) -> list[str]:
     return [w for w in (tok.strip("'") for tok in normalized.split()) if w]
 
 
+_COLOGNE_TRANSLATE = str.maketrans({"ä": "a", "ö": "o", "ü": "u", "ß": "s"})
+
+
+def _cologne_phonetics(word: str) -> str:
+    """Kölner Phonetik für generische deutsche Lautgleichheit.
+
+    Ersetzt songspezifische Schreibvarianten-Hardcodes (z. B. gehn/gehen) durch
+    einen generischen phonetischen Vergleich. Reine Stdlib, deterministisch.
+    """
+    text = str(word or "").lower().translate(_COLOGNE_TRANSLATE)
+    text = re.sub(r"[^a-z]", "", text)
+    if not text:
+        return ""
+    codes: list[str] = []
+    n = len(text)
+    for i, ch in enumerate(text):
+        prev = text[i - 1] if i > 0 else ""
+        nxt = text[i + 1] if i + 1 < n else ""
+        if ch in "aeijouy":
+            codes.append("0")
+        elif ch == "h":
+            codes.append("-")
+        elif ch == "b":
+            codes.append("1")
+        elif ch == "p":
+            codes.append("3" if nxt == "h" else "1")
+        elif ch in "dt":
+            codes.append("8" if nxt in "csz" else "2")
+        elif ch in "fvw":
+            codes.append("3")
+        elif ch in "gkq":
+            codes.append("4")
+        elif ch == "c":
+            if i == 0:
+                codes.append("4" if nxt in "ahkloqrux" else "8")
+            elif prev in "sz":
+                codes.append("8")
+            else:
+                codes.append("4" if nxt in "ahkoqux" else "8")
+        elif ch == "x":
+            codes.append("8" if prev in "ckq" else "48")
+        elif ch == "l":
+            codes.append("5")
+        elif ch in "mn":
+            codes.append("6")
+        elif ch == "r":
+            codes.append("7")
+        elif ch in "sz":
+            codes.append("8")
+    raw = "".join(codes).replace("-", "")
+    collapsed: list[str] = []
+    for ch in raw:
+        if collapsed and collapsed[-1] == ch:
+            continue
+        collapsed.append(ch)
+    result = "".join(collapsed)
+    if not result:
+        return ""
+    return result[0] + result[1:].replace("0", "")
+
+
+def _script_word_similarity(a: str, b: str) -> float:
+    """Generische Token-Ähnlichkeit für ASR-Fehlhörungen.
+
+    Kombiniert String-Ratio, Präfix-Beziehung und Kölner Phonetik. Damit werden
+    Fälle wie gehn/gehen, Flut/Blut oder leicht abweichende Endungen generisch
+    behandelt, ohne wortspezifische Sonderfälle im Code zu pflegen.
+    """
+    left = str(a or "")
+    right = str(b or "")
+    if not left or not right:
+        return 0.0
+    if left == right:
+        return 1.0
+    if min(len(left), len(right)) < 3:
+        return 0.0
+    ratio = difflib.SequenceMatcher(a=left, b=right, autojunk=False).ratio()
+    if left.startswith(right) or right.startswith(left):
+        ratio = max(ratio, min(len(left), len(right)) / max(len(left), len(right)) + 0.12)
+    if len(left) >= 4 and len(right) >= 4 and _cologne_phonetics(left) == _cologne_phonetics(right):
+        ratio = max(ratio, 0.86)
+    return min(ratio, 1.0)
+
+
+SCRIPT_FUZZY_WORD_THRESHOLD = 0.72
+
+
 def _script_is_skippable(raw: str, skip_prefixes: tuple[str, ...] = ("#", "/", ";"), skip_parens: bool = False) -> bool:
     value = str(raw or "").strip()
     if not value:
@@ -275,8 +396,42 @@ def _script_is_skippable(raw: str, skip_prefixes: tuple[str, ...] = ("#", "/", "
     return False
 
 
-def _script_parse_lyrics_text(lyrics: str, skip_prefixes: tuple[str, ...] = ("#", "/", ";"), skip_parens: bool = False) -> list[LyricLine]:
+def _script_parse_lyrics_text(
+    lyrics: str,
+    skip_prefixes: tuple[str, ...] = ("#", "/", ";"),
+    skip_parens: bool = False,
+    source_lyrics: str | None = None,
+) -> list[LyricLine]:
+    """Parse sichtbare Lyrics-Zeilen für das Alignment.
+
+    Wenn der originale Songtext mit Suno-Abschnittstags verfügbar ist, werden die
+    Abschnittsinformationen zusätzlich an die bereinigten Zeilen gehängt. Die
+    sichtbare SRT bleibt tagfrei, aber das Alignment kann frühe Intro-/Verse-
+    Übergänge dadurch stabiler bewerten.
+    """
     parsed: list[LyricLine] = []
+    source_entries = _source_structure_lyrics_lines(source_lyrics or "") if source_lyrics else []
+    previous_section_key: str | None = None
+
+    def marker_for_line(line_index: int, visible_text: str) -> dict[str, str] | None:
+        if not source_entries or line_index >= len(source_entries):
+            return None
+        entry = source_entries[line_index]
+        marker = entry.get("marker") if isinstance(entry, dict) else None
+        if not isinstance(marker, dict):
+            return None
+        # Defensive Prüfung: Die deterministische SRT-Bereinigung und der
+        # Struktur-Parser sollten dieselbe Zeilenreihenfolge erzeugen. Falls die
+        # KI später minimal anders normalisiert hat, akzeptieren wir den Marker
+        # trotzdem nur, wenn die Textähnlichkeit noch plausibel ist.
+        source_text = str(entry.get("text") or "")
+        if source_text and visible_text:
+            left = " ".join(_script_tokenize_match(source_text))
+            right = " ".join(_script_tokenize_match(visible_text))
+            if left and right and difflib.SequenceMatcher(a=left, b=right, autojunk=False).ratio() < 0.52:
+                return None
+        return {"label": str(marker.get("label") or ""), "type": str(marker.get("type") or "")}
+
     for raw in str(lyrics or "").replace("\r\n", "\n").replace("\r", "\n").splitlines():
         if _script_is_skippable(raw, skip_prefixes, skip_parens):
             continue
@@ -290,6 +445,15 @@ def _script_parse_lyrics_text(lyrics: str, skip_prefixes: tuple[str, ...] = ("#"
             tokens.extend(word_tokens)
         if not display or not tokens:
             continue
+
+        marker = marker_for_line(len(parsed), display)
+        section_label = marker.get("label") if marker else None
+        section_type = marker.get("type") if marker else None
+        section_key = f"{section_type}:{section_label}" if section_type or section_label else None
+        starts_section = bool(section_key and section_key != previous_section_key)
+        if section_key:
+            previous_section_key = section_key
+
         parsed.append(
             LyricLine(
                 index=len(parsed),
@@ -300,10 +464,12 @@ def _script_parse_lyrics_text(lyrics: str, skip_prefixes: tuple[str, ...] = ("#"
                 weight=_script_syllable_weight(display),
                 wstart=[],
                 wend=[],
+                section_label=section_label,
+                section_type=section_type,
+                starts_section=starts_section,
             )
         )
     return parsed
-
 
 def _script_expand_word(word: str, start: float | None, end: float | None) -> list[tuple[str, float | None, float | None]]:
     toks = _script_tokenize_match(word)
@@ -383,10 +549,877 @@ def _script_flatten_words_from_payload(payload: dict[str, Any]) -> list[HypWord]
     return _script_finalize_hyp(raw)
 
 
+@dataclass
+class _EffectiveLyricsEntry:
+    text: str
+    marker: dict[str, str] | None = None
+    derived: bool = False
+    reason: str | None = None
+    confidence: float = 1.0
+    time_hint: float | None = None
+    original_index: int | None = None
+
+
+def _effective_line_tokens(text: str) -> list[str]:
+    return _script_tokenize_match(_clean_srt_text_tags_from_line(str(text or "")))
+
+
+def _effective_line_match_threshold(tokens: list[str]) -> float:
+    if len(tokens) <= 1:
+        return 0.96
+    if len(tokens) <= 3:
+        return 0.92
+    if len(tokens) <= 6:
+        return 0.86
+    return 0.80
+
+
+SRT_EFFECTIVE_TRAILING_ADLIB_TOKENS = {
+    "ah", "aha", "ahaa", "ahaaa", "oh", "ohh", "ohhh", "ey", "hey",
+    "yeah", "yeahh", "yeahhh", "yo", "uh", "uhh", "mhm", "hm", "hmm",
+}
+
+
+def _effective_line_token_variants(tokens: list[str]) -> list[list[str]]:
+    """Liefert konservative Match-Varianten fuer wiederholte Suno-Zeilen.
+
+    Suno und ASR behandeln Adlibs/gezogene Silben am Zeilenende nicht immer
+    identisch. Eine Intro-Zeile wie "Es ist Zeit zu gehn ahaaa" kann im ASR
+    beim zweiten Vorkommen z. B. ohne "ahaaa" oder mit "gehen" statt "gehn"
+    auftauchen. Fuer die Erkennung von Zusatzzeilen duerfen wir deshalb eine
+    gekuerzte Match-Variante verwenden, ohne den sichtbaren SRT-Text zu aendern.
+    """
+    base = [str(token or "").strip() for token in tokens if str(token or "").strip()]
+    if not base:
+        return []
+    variants: list[list[str]] = [base]
+
+    # Parenthetical echoes in the source lyrics, e.g.
+    # "Es ist Zeit (es ist zeit), meine Wege neu zu gehen", are cleaned to
+    # "es ist zeit es ist zeit meine ...". Suno/Groq often sings/transcribes
+    # only one prefix before the rest of the line. Collapse that immediate
+    # repeated prefix only for matching so repeated intro lines can still find
+    # the following Verse/Hook anchor. The visible SRT text remains unchanged.
+    max_repeat_len = min(5, len(base) // 2)
+    for repeat_len in range(max_repeat_len, 1, -1):
+        if base[:repeat_len] == base[repeat_len:repeat_len * 2]:
+            variants.append([*base[:repeat_len], *base[repeat_len * 2:]])
+            break
+
+    last = base[-1]
+    repeated_tail = bool(re.search(r"([aeiouyäöü])\1{2,}$", last, re.IGNORECASE))
+    if len(base) >= 4 and (last in SRT_EFFECTIVE_TRAILING_ADLIB_TOKENS or repeated_tail):
+        variants.append(base[:-1])
+
+    # Echo-/Adlib-Zusätze am Zeilenende werden in Suno oft nur bei einer
+    # Wiederholung wirklich gesungen oder von ASR nur einmal erkannt.
+    # Für Timing-Matches darf ein unmittelbar wiederholter Suffix kollabieren;
+    # der sichtbare SRT-Text bleibt unverändert.
+    max_suffix_len = min(5, len(base) // 2)
+    for repeat_len in range(max_suffix_len, 1, -1):
+        if base[-repeat_len:] == base[-repeat_len * 2:-repeat_len]:
+            variants.append(base[:-repeat_len])
+            break
+
+    # Schreibvarianten (gehn/gehen), Fehlhoerungen und von ASR zerhackte Silben
+    # ("Flehn" -> "fl hen") werden nicht mehr ueber wortspezifische Hardcodes
+    # behandelt, sondern generisch: _effective_ngram_score vergleicht Tokens
+    # fuzzy (String-Ratio + Koelner Phonetik) und _effective_find_occurrences
+    # prueft flexible Fenstergroessen (Split/Merge-tolerant). Dadurch bleiben
+    # diese Faelle songunabhaengig abgedeckt.
+    unique: list[list[str]] = []
+    seen: set[tuple[str, ...]] = set()
+    for variant in variants:
+        # Kurze Einwort-Adlibs bleiben zu schwach fuer robuste Wiederholungs-
+        # erkennung. Markante Intro-Calls wie "Skalinooo" duerfen aber als
+        # einzelne Anchor-Zeile erhalten bleiben; sonst kann ein kompletter
+        # Suno-Intro-Block A-B-A-B nicht erkannt werden und wird zu A-B-B.
+        if len(variant) < 2 and (not variant or len(variant[0]) < 5):
+            continue
+        key = tuple(variant)
+        if key not in seen:
+            unique.append(variant)
+            seen.add(key)
+    return unique
+
+
+def _effective_ngram_score(tokens: list[str], candidate: list[str]) -> float:
+    if not tokens or not candidate:
+        return 0.0
+    if tokens == candidate:
+        return 1.0
+    # Ein Kandidatenfenster darf nicht mitten in einer vorherigen Zeile beginnen.
+    # Sonst kann z. B. "ahaaa Es ist Zeit ..." faelschlich als Verse-Zeile
+    # "Es ist Zeit es ist zeit ..." gewertet werden und Wiederholungen blockieren.
+    first_close = tokens[0] == candidate[0]
+    if not first_close and len(tokens[0]) >= 4 and len(candidate[0]) >= 4:
+        first_close = _script_word_similarity(tokens[0], candidate[0]) >= 0.78
+    if (
+        not first_close
+        and min(len(tokens[0]), len(candidate[0])) >= 3
+        and abs(len(tokens[0]) - len(candidate[0])) <= 2
+        and (tokens[0].startswith(candidate[0]) or candidate[0].startswith(tokens[0]))
+    ):
+        first_close = True
+    if not first_close:
+        return 0.0
+    # Frueher musste das zweite Token exakt stimmen; eine einzige Fehlhoerung
+    # am Zeilenanfang blockierte damit die komplette Wiederholungserkennung.
+    # Jetzt reicht generische Aehnlichkeit; komplett fremde Zweitworte sperren
+    # weiterhin, damit Fenster nicht mitten in fremden Zeilen matchen.
+    if len(tokens) >= 2 and len(candidate) >= 2:
+        second_similarity = _script_word_similarity(tokens[1], candidate[1])
+        if tokens[1] != candidate[1] and second_similarity < 0.55:
+            return 0.0
+    fuzzy_hits = sum(
+        1
+        for left, right in zip(tokens, candidate)
+        if left == right or _script_word_similarity(left, right) >= 0.80
+    )
+    fuzzy_ratio = fuzzy_hits / max(len(tokens), len(candidate), 1)
+    seq_ratio = difflib.SequenceMatcher(a=" ".join(candidate), b=" ".join(tokens), autojunk=False).ratio()
+    return max(fuzzy_ratio, seq_ratio)
+
+
+def _effective_find_occurrences(
+    tokens: list[str],
+    hyp: list[HypWord],
+    *,
+    start_index: int = 0,
+    end_index: int | None = None,
+    max_count: int | None = None,
+) -> list[dict[str, Any]]:
+    """Findet plausible ASR-Vorkommen einer Lyrics-Zeile.
+
+    Die Funktion arbeitet bewusst lokal und konservativ. Sie dient nur dazu,
+    zusätzliche von Suno gesungene Wiederholungen in eine abgeleitete SRT-Lyrics-
+    Sicht zu übernehmen. Original-Lyrics, API, Tasks und DB-Schema bleiben
+    unverändert.
+    """
+    if not tokens or not hyp:
+        return []
+    if len(tokens) == 1 and len(tokens[0]) < 5:
+        return []
+    threshold = _effective_line_match_threshold(tokens)
+    hyp_tokens = [word.norm for word in hyp]
+    size = len(tokens)
+    # Split-/Merge-tolerante Fenster: Wenn ASR ein Wort in zwei Tokens zerhackt
+    # ("flehn" -> "fl hen") oder zwei Woerter zusammenzieht, liegt das echte
+    # Vorkommen in einem Fenster der Groesse size+1 bzw. size-1. Der Vergleich
+    # auf zeichen-konkatenierter Ebene in _effective_ngram_score bewertet solche
+    # Fenster korrekt hoch; das ersetzt die frueheren wortspezifischen Splits.
+    minimum_window_size = 1 if size == 1 else 2
+    window_sizes = sorted({candidate_size for candidate_size in (size - 1, size, size + 1) if candidate_size >= minimum_window_size})
+    if not window_sizes:
+        window_sizes = [size]
+    end_limit = min(len(hyp_tokens), end_index if end_index is not None else len(hyp_tokens))
+    pos = max(0, int(start_index or 0))
+    occurrences: list[dict[str, Any]] = []
+    while pos < end_limit:
+        best_score = 0.0
+        best_size = 0
+        for candidate_size in window_sizes:
+            if pos + candidate_size > end_limit:
+                continue
+            candidate = hyp_tokens[pos:pos + candidate_size]
+            score = _effective_ngram_score(tokens, candidate)
+            if score > best_score:
+                best_score = score
+                best_size = candidate_size
+        if best_size and best_score >= threshold:
+            occurrences.append({
+                "start_index": pos,
+                "end_index": pos + best_size,
+                "start": float(hyp[pos].start),
+                "end": float(hyp[pos + best_size - 1].end),
+                "score": round(float(best_score), 3),
+            })
+            if max_count is not None and len(occurrences) >= max_count:
+                break
+            pos += max(1, best_size)
+            continue
+        pos += 1
+    return occurrences
+
+
+def _effective_find_occurrences_flexible(
+    tokens: list[str],
+    hyp: list[HypWord],
+    *,
+    start_index: int = 0,
+    end_index: int | None = None,
+    max_count: int | None = None,
+) -> list[dict[str, Any]]:
+    merged: list[dict[str, Any]] = []
+    seen: set[tuple[int, int]] = set()
+    for variant in _effective_line_token_variants(tokens):
+        for occurrence in _effective_find_occurrences(
+            variant,
+            hyp,
+            start_index=start_index,
+            end_index=end_index,
+            max_count=None,
+        ):
+            key = (int(occurrence["start_index"]), int(occurrence["end_index"]))
+            if key in seen:
+                continue
+            occurrence = dict(occurrence)
+            occurrence["variant_len"] = len(variant)
+            occurrence["variant_tokens"] = variant
+            merged.append(occurrence)
+            seen.add(key)
+    merged.sort(key=lambda item: (int(item["start_index"]), -float(item.get("score") or 0.0), -int(item.get("variant_len") or 0)))
+    if max_count is not None:
+        return merged[:max_count]
+    return merged
+
+
+def _effective_first_occurrence(tokens: list[str], hyp: list[HypWord], start_index: int = 0) -> dict[str, Any] | None:
+    found = _effective_find_occurrences_flexible(tokens, hyp, start_index=start_index, max_count=1)
+    return found[0] if found else None
+
+
+def _effective_next_anchor_occurrence(
+    entries: list[_EffectiveLyricsEntry],
+    current_index: int,
+    hyp: list[HypWord],
+    start_index: int,
+) -> tuple[int, dict[str, Any]] | None:
+    candidates: list[tuple[int, dict[str, Any]]] = []
+    # Nur ein lokales Fenster betrachten. Das verhindert, dass spaetere identische
+    # Hook-/Chorus-Wiederholungen einen fruehen Abschnitt falsch begrenzen.
+    for probe_index in range(current_index + 1, min(len(entries), current_index + 9)):
+        tokens = _effective_line_tokens(entries[probe_index].text)
+        if not tokens:
+            continue
+        occurrence = _effective_first_occurrence(tokens, hyp, start_index=start_index)
+        if occurrence:
+            candidates.append((probe_index, occurrence))
+    if not candidates:
+        return None
+    return min(candidates, key=lambda item: (item[1]["start_index"], item[0]))
+
+
+def _effective_line_similarity(left: str, right: str) -> float:
+    left_tokens = _effective_line_tokens(left)
+    right_tokens = _effective_line_tokens(right)
+    if not left_tokens or not right_tokens:
+        return 0.0
+    left_variants = _effective_line_token_variants(left_tokens) or [left_tokens]
+    right_variants = _effective_line_token_variants(right_tokens) or [right_tokens]
+    best = 0.0
+    for left_variant in left_variants:
+        left_text = " ".join(left_variant)
+        for right_variant in right_variants:
+            score = difflib.SequenceMatcher(a=left_text, b=" ".join(right_variant), autojunk=False).ratio()
+            best = max(best, score)
+    return best
+
+
+def _script_find_line_occurrence_after(line: LyricLine, hyp: list[HypWord], cursor: int) -> dict[str, Any] | None:
+    tokens = line.match_tokens or _effective_line_tokens(line.display)
+    if not tokens:
+        return None
+    occurrences = _effective_find_occurrences_flexible(tokens, hyp, start_index=max(0, cursor), max_count=8)
+    if not occurrences:
+        return None
+    return occurrences[0]
+
+
+def _script_hyp_index_at_time(hyp: list[HypWord], time_value: float) -> int:
+    target = max(0.0, float(time_value or 0.0))
+    for index, word in enumerate(hyp):
+        if float(word.end) >= target:
+            return index
+    return max(0, len(hyp) - 1)
+
+
+def _script_anchor_repeated_section_blocks(lines: list[LyricLine], hyp: list[HypWord]) -> list[str]:
+    """Verankert explizit wiederholte Abschnittsblöcke vor der Lückenverteilung.
+
+    Wenn ein Hook/Bridge-Block im Songtext zweimal direkt hintereinander steht,
+    kann SequenceMatcher die erste Zeile bis in die zweite Wiederholung ziehen,
+    weil Wörter wie "trage die Glut" mehrfach vorkommen. Danach werden die
+    übrigen Wiederholungszeilen kurz vor den nächsten Abschnitt gequetscht.
+    Diese Korrektur greift nur bei klar erkannten Wiederholungsblöcken innerhalb
+    desselben Abschnitts und nutzt weiterhin ausschließlich ASR-Wortzeiten.
+    """
+    report: list[str] = []
+    if not lines or not hyp:
+        return report
+
+    run_start = 0
+    while run_start < len(lines):
+        section_key = (lines[run_start].section_type or "", lines[run_start].section_label or "")
+        run_end = run_start + 1
+        while run_end < len(lines) and (lines[run_end].section_type or "", lines[run_end].section_label or "") == section_key:
+            run_end += 1
+
+        run_len = run_end - run_start
+        if run_len >= 4:
+            max_block_len = min(6, run_len // 2)
+            for block_len in range(max_block_len, 1, -1):
+                first_start = run_start
+                second_start = run_start + block_len
+                second_end = second_start + block_len
+                if second_end > run_end:
+                    continue
+
+                similarities = [
+                    _effective_line_similarity(lines[first_start + offset].display, lines[second_start + offset].display)
+                    for offset in range(block_len)
+                ]
+                if not similarities or sum(similarities) / len(similarities) < 0.78:
+                    continue
+                if min(similarities) < 0.66:
+                    continue
+
+                occurrences: list[dict[str, Any]] = []
+                previous_time = None
+                if first_start > 0 and lines[first_start - 1].end is not None:
+                    previous_time = float(lines[first_start - 1].end or 0.0)
+                elif lines[first_start].start is not None:
+                    previous_time = max(0.0, float(lines[first_start].start or 0.0) - 1.5)
+                cursor = _script_hyp_index_at_time(hyp, max(0.0, (previous_time or 0.0) - 0.35))
+                failed = False
+                for idx in range(first_start, second_end):
+                    occurrence = _script_find_line_occurrence_after(lines[idx], hyp, cursor)
+                    if not occurrence:
+                        failed = True
+                        break
+                    occurrences.append(occurrence)
+                    cursor = max(int(occurrence.get("end_index") or cursor), int(occurrence.get("start_index") or cursor) + 1)
+
+                if failed or len(occurrences) != block_len * 2:
+                    continue
+
+                starts = [float(item.get("start") or 0.0) for item in occurrences]
+                if any(right <= left for left, right in zip(starts, starts[1:])):
+                    continue
+                if starts[block_len] - starts[0] < 4.0:
+                    continue
+
+                changed = False
+                for idx, occurrence in zip(range(first_start, second_end), occurrences):
+                    start = round(float(occurrence.get("start") or 0.0), 3)
+                    end = round(float(occurrence.get("end") or start), 3)
+                    if end <= start:
+                        continue
+                    line = lines[idx]
+                    if abs(float(line.start or -1.0) - start) > 0.12 or abs(float(line.end or -1.0) - end) > 0.12:
+                        changed = True
+                    line.start = start
+                    line.end = end
+                    line.matched = True
+                    line.wstart = None
+                    line.wend = None
+
+                if changed:
+                    report.append(
+                        f"INFO: Wiederholter Abschnittsblock {lines[first_start].section_label or lines[first_start].section_type or 'Lyrics'} "
+                        f"({first_start + 1}-{second_end}) vor Lueckenverteilung per ASR-Wortzeiten verankert."
+                    )
+                break
+
+        run_start = run_end
+
+    return report
+
+
+
+
+def _entry_marker_key(entry: _EffectiveLyricsEntry) -> tuple[str, str]:
+    marker = entry.marker if isinstance(entry.marker, dict) else {}
+    return (str(marker.get("type") or "").lower(), str(marker.get("label") or ""))
+
+
+def _entry_in_explicit_repeated_block(entries: list[_EffectiveLyricsEntry], index: int) -> bool:
+    """Erkennt direkt ausgeschriebene Wiederholungsbloecke im Original-Songtext.
+
+    Wichtig fuer Suno: Wenn der Songtext einen Hook/Chorus bereits als
+    A-B-C-D / A-B-C-D enthaelt, duerfen spaetere ASR-Heuristiken keine
+    zusaetzlichen A/B/C/D-Zeilen einfuegen oder vorhandene kurze Zeilen als
+    kuenstliche Wiederholung entfernen. Die Performance darf variieren, aber die
+    sichtbare Reihenfolge bleibt Source-of-Truth aus dem effektiven Songtext.
+    """
+    if index < 0 or index >= len(entries):
+        return False
+    key = _entry_marker_key(entries[index])
+    if not any(key):
+        return False
+    run_start = index
+    while run_start > 0 and _entry_marker_key(entries[run_start - 1]) == key:
+        run_start -= 1
+    run_end = index + 1
+    while run_end < len(entries) and _entry_marker_key(entries[run_end]) == key:
+        run_end += 1
+    run_len = run_end - run_start
+    if run_len < 4:
+        return False
+    max_block_len = min(8, run_len // 2)
+    for block_len in range(2, max_block_len + 1):
+        for start in range(run_start, run_end - (block_len * 2) + 1):
+            sims = [
+                _effective_line_similarity(entries[start + offset].text, entries[start + block_len + offset].text)
+                for offset in range(block_len)
+            ]
+            if sims and min(sims) >= 0.66 and (sum(sims) / len(sims)) >= 0.82:
+                if start <= index < start + block_len * 2:
+                    return True
+    return False
+
+
+def _line_section_key(line: LyricLine) -> tuple[str, str]:
+    return (str(line.section_type or "").lower(), str(line.section_label or ""))
+
+
+def _line_in_explicit_repeated_block(lines: list[LyricLine], index: int) -> bool:
+    if index < 0 or index >= len(lines):
+        return False
+    key = _line_section_key(lines[index])
+    if not any(key):
+        return False
+    run_start = index
+    while run_start > 0 and _line_section_key(lines[run_start - 1]) == key:
+        run_start -= 1
+    run_end = index + 1
+    while run_end < len(lines) and _line_section_key(lines[run_end]) == key:
+        run_end += 1
+    run_len = run_end - run_start
+    if run_len < 4:
+        return False
+    max_block_len = min(8, run_len // 2)
+    for block_len in range(2, max_block_len + 1):
+        for start in range(run_start, run_end - (block_len * 2) + 1):
+            sims = [
+                _effective_line_similarity(lines[start + offset].display, lines[start + block_len + offset].display)
+                for offset in range(block_len)
+            ]
+            if sims and min(sims) >= 0.66 and (sum(sims) / len(sims)) >= 0.82:
+                if start <= index < start + block_len * 2:
+                    return True
+    return False
+
+
+def _script_explicit_repeated_block_ranges(lines: list[LyricLine]) -> list[tuple[int, int, int]]:
+    """Liefert (start, block_len, repeat_count) fuer direkt notierte Refrain-Bloecke."""
+    ranges: list[tuple[int, int, int]] = []
+    run_start = 0
+    while run_start < len(lines):
+        key = _line_section_key(lines[run_start])
+        run_end = run_start + 1
+        while run_end < len(lines) and _line_section_key(lines[run_end]) == key:
+            run_end += 1
+        run_len = run_end - run_start
+        if any(key) and run_len >= 4:
+            chosen: tuple[int, int, int] | None = None
+            max_block_len = min(8, run_len // 2)
+            # Laengere Bloecke bevorzugen, damit A-B-C-D/A-B-C-D nicht als
+            # kleinere A-B/A-B-Teilmenge behandelt wird.
+            for block_len in range(max_block_len, 1, -1):
+                for start in range(run_start, run_end - block_len * 2 + 1):
+                    max_repeat = (run_end - start) // block_len
+                    repeat_count = 1
+                    for rep in range(1, max_repeat):
+                        sims = [
+                            _effective_line_similarity(lines[start + offset].display, lines[start + rep * block_len + offset].display)
+                            for offset in range(block_len)
+                        ]
+                        if not sims or min(sims) < 0.66 or (sum(sims) / len(sims)) < 0.82:
+                            break
+                        repeat_count += 1
+                    if repeat_count >= 2:
+                        chosen = (start, block_len, repeat_count)
+                        break
+                if chosen:
+                    break
+            if chosen:
+                ranges.append(chosen)
+                run_start = max(run_end, chosen[0] + chosen[1] * chosen[2])
+                continue
+        run_start = run_end
+    return ranges
+
+
+def _script_repair_explicit_repeated_section_blocks(lines: list[LyricLine], hyp: list[HypWord]) -> list[str]:
+    """Stabilisiert direkt notierte Chorus-/Hook-Wiederholungen als Block.
+
+    Fehlerbild: Bei mehrfach gleichen Hook-Zeilen kann eine Einzelzeilen-Heuristik
+    sichere spaetere Treffer vorziehen oder zusaetzliche Duplikate einfuegen.
+    Dann stolpert die SRT innerhalb des Blocks, z. B. C-D-A-A-B-C-B-D statt
+    A-B-C-D/A-B-C-D. Diese Funktion behandelt solche Abschnitte als komplette
+    Bloecke und setzt vorhandene Zeilen wieder auf monotone ASR-Wortzeiten bzw.
+    verteilt fehlende Treffer innerhalb des Blockfensters. Sichtbarer Text bleibt
+    in Songtext-Reihenfolge.
+    """
+    report: list[str] = []
+    if not lines:
+        return report
+    for block_start, block_len, repeat_count in _script_explicit_repeated_block_ranges(lines):
+        block_end = block_start + block_len * repeat_count
+        if block_end > len(lines):
+            continue
+        block_lines = lines[block_start:block_end]
+        first_section_type = str(block_lines[0].section_type or "").lower() if block_lines else ""
+        if first_section_type in {"intro", "instrumental_intro"}:
+            # Intro-A-B-A-B hat eigene Speziallogik, weil kurze Artist-Calls
+            # oft nur synthetisch aus der Luecke geschaetzt werden. Die allgemeine
+            # Blockreparatur wuerde solche Luecken zu frueh verteilen.
+            continue
+        if len(block_lines) < 4:
+            continue
+        durations = [float(line.end or 0.0) - float(line.start or 0.0) for line in block_lines]
+        starts = [float(line.start or 0.0) for line in block_lines]
+        needs_repair = (
+            any(duration < 0.55 for duration in durations)
+            or any(right <= left + 0.03 for left, right in zip(starts, starts[1:]))
+            or not all(line.matched for line in block_lines)
+        )
+        # Auch scheinbar plausible Bloecke kurz pruefen: Wenn die ASR-Treffer
+        # deutlich andere monotone Starts liefern, war die alte Einzelankerung
+        # wahrscheinlich auf spaetere Wiederholungen verrutscht.
+        previous_time = float(lines[block_start - 1].end or 0.0) if block_start > 0 else max(0.0, starts[0] - 1.0)
+        cursor = _script_hyp_index_at_time(hyp, max(0.0, previous_time - 0.6)) if hyp else 0
+        occurrences: list[tuple[int, dict[str, Any]]] = []
+        for local_index, line in enumerate(block_lines):
+            occurrence = _script_find_line_occurrence_after(line, hyp, cursor) if hyp else None
+            if occurrence:
+                occurrences.append((local_index, occurrence))
+                cursor = max(int(occurrence.get("end_index") or cursor), int(occurrence.get("start_index") or cursor) + 1)
+        if len(occurrences) >= max(3, int(len(block_lines) * 0.58)):
+            occurrence_starts = [float(item[1].get("start") or 0.0) for item in occurrences]
+            if any(abs(starts[local_index] - float(occ.get("start") or 0.0)) > 1.25 for local_index, occ in occurrences):
+                needs_repair = True
+            if any(right <= left for left, right in zip(occurrence_starts, occurrence_starts[1:])):
+                continue
+        if not needs_repair:
+            continue
+
+        changed = False
+        matched_local = {local_index: occ for local_index, occ in occurrences}
+        for local_index, occurrence in matched_local.items():
+            line = block_lines[local_index]
+            start = round(float(occurrence.get("start") or 0.0), 3)
+            end = round(max(float(occurrence.get("end") or start), start + 0.55), 3)
+            if abs(float(line.start or -1.0) - start) > 0.12 or abs(float(line.end or -1.0) - end) > 0.12:
+                changed = True
+            line.start = start
+            line.end = end
+            line.matched = True
+            line.wstart = None
+            line.wend = None
+
+        # Fehlende Treffer innerhalb des Blockes aus Nachbarankern verteilen.
+        anchor_locals = sorted(matched_local)
+        if anchor_locals:
+            first_anchor = anchor_locals[0]
+            if first_anchor > 0:
+                start = previous_time
+                end = float(block_lines[first_anchor].start or start)
+                if end > start + 0.25:
+                    _script_spread(block_lines, 0, first_anchor, start, end)
+                    changed = True
+            for left, right in zip(anchor_locals, anchor_locals[1:]):
+                if right <= left + 1:
+                    continue
+                start = float(block_lines[left].end or block_lines[left].start or 0.0)
+                end = float(block_lines[right].start or start)
+                if end > start + 0.25:
+                    _script_spread(block_lines, left + 1, right, start, end)
+                    changed = True
+            last_anchor = anchor_locals[-1]
+            if last_anchor < len(block_lines) - 1:
+                start = float(block_lines[last_anchor].end or block_lines[last_anchor].start or previous_time)
+                next_time = float(lines[block_end].start or 0.0) if block_end < len(lines) else 0.0
+                if next_time <= start:
+                    next_time = start + _script_readable_window_seconds(block_lines, last_anchor + 1, len(block_lines))
+                _script_spread(block_lines, last_anchor + 1, len(block_lines), start, next_time)
+                changed = True
+        else:
+            # Ohne ASR-Treffer: Reihenfolge bleibt Songtext, Timing wird als
+            # lesbares Fenster zwischen Nachbarsegmenten verteilt.
+            start = previous_time
+            end = float(lines[block_end].start or 0.0) if block_end < len(lines) else 0.0
+            if end <= start:
+                end = start + _script_readable_window_seconds(block_lines, 0, len(block_lines))
+            _script_spread(block_lines, 0, len(block_lines), start, end)
+            changed = True
+
+        if changed:
+            for local_index, repaired in enumerate(block_lines):
+                lines[block_start + local_index] = repaired
+            report.append(
+                f"INFO: Wiederholter Abschnittsblock {block_lines[0].section_label or block_lines[0].section_type or 'Lyrics'} "
+                f"als Block stabilisiert ({block_start + 1}-{block_end}, {repeat_count}x{block_len})."
+            )
+    return report
+
+def _script_drop_squeezed_unmatched_repeats(lines: list[LyricLine], max_duration: float = 0.42) -> list[str]:
+    """Entfernt künstlich gequetschte Wiederholungszeilen ohne ASR-Beleg.
+
+    Lyrics bleiben grundsätzlich Source of Truth. Wenn eine wiederholte Zeile
+    aber nicht gematcht wurde und nach der Timeline-Auflösung nur ein technisches
+    Mini-Fenster bekommt, ist das für den Player schlechter als das Auslassen der
+    unbelegten Wiederholung. Gesungene Wiederholungen sind davon nicht betroffen,
+    weil sie als gematchte oder ausreichend lange Zeilen erhalten bleiben.
+    """
+    if not lines:
+        return []
+
+    drop_indexes: set[int] = set()
+    for index, line in enumerate(lines):
+        duration = float(line.end or 0.0) - float(line.start or 0.0)
+        if _line_in_explicit_repeated_block(lines, index):
+            # Explizit ausgeschriebene Hook-/Chorus-Wiederholungen nicht
+            # entfernen; sie werden bei Bedarf als kompletter Block repariert.
+            continue
+        if line.matched or duration > max_duration:
+            continue
+        section_key = (line.section_type or "", line.section_label or "")
+        if not any(section_key):
+            continue
+
+        has_repeat_anchor = False
+        for probe in range(max(0, index - 8), min(len(lines), index + 9)):
+            if probe == index:
+                continue
+            other = lines[probe]
+            if (other.section_type or "", other.section_label or "") != section_key:
+                continue
+            other_duration = float(other.end or 0.0) - float(other.start or 0.0)
+            if other_duration < 0.75:
+                continue
+            if _effective_line_similarity(line.display, other.display) >= 0.86:
+                has_repeat_anchor = True
+                break
+        if has_repeat_anchor:
+            drop_indexes.add(index)
+
+    if not drop_indexes:
+        return []
+
+    removed = [lines[index].display for index in sorted(drop_indexes)]
+    lines[:] = [line for index, line in enumerate(lines) if index not in drop_indexes]
+    return [
+        f"INFO: {len(removed)} gequetschte unbelegte Wiederholungszeile(n) ausgelassen: "
+        + "; ".join(repr(item) for item in removed[:6])
+    ]
+
+
+def _effective_entries_from_lyrics(lyrics: str, source_lyrics: str | None) -> tuple[list[_EffectiveLyricsEntry], bool]:
+    source_entries = _source_structure_lyrics_lines(source_lyrics or "") if source_lyrics else []
+    if source_entries:
+        entries: list[_EffectiveLyricsEntry] = []
+        for index, entry in enumerate(source_entries):
+            marker = entry.get("marker") if isinstance(entry.get("marker"), dict) else None
+            entries.append(_EffectiveLyricsEntry(
+                text=str(entry.get("text") or "").strip(),
+                marker={"label": str(marker.get("label") or ""), "type": str(marker.get("type") or "")} if marker else None,
+                original_index=index,
+            ))
+        return [entry for entry in entries if entry.text], True
+
+    entries = []
+    for index, raw in enumerate(str(lyrics or "").replace("\r\n", "\n").replace("\r", "\n").split("\n")):
+        cleaned = _clean_srt_text_tags_from_line(raw)
+        if cleaned:
+            entries.append(_EffectiveLyricsEntry(text=cleaned, original_index=index))
+    return entries, False
+
+
+def _render_effective_source_lyrics(entries: list[_EffectiveLyricsEntry]) -> str:
+    lines: list[str] = []
+    previous_key: str | None = None
+    for entry in entries:
+        marker = entry.marker if isinstance(entry.marker, dict) else None
+        marker_label = str(marker.get("label") or "").strip() if marker else ""
+        marker_type = str(marker.get("type") or "").strip() if marker else ""
+        marker_key = f"{marker_type}:{marker_label}" if marker_label or marker_type else ""
+        if marker_label and marker_key != previous_key:
+            lines.append(f"[{marker_label}]")
+            previous_key = marker_key
+        lines.append(entry.text)
+    return "\n".join(lines).strip()
+
+
+def _build_effective_srt_lyrics_from_asr(
+    lyrics: str,
+    source_lyrics: str | None,
+    hyp: list[HypWord],
+) -> tuple[str, str | None, list[str], dict[str, Any]]:
+    """Erzeugt eine abgeleitete SRT-Lyrics-Sicht fuer Suno-Abweichungen.
+
+    Praxisfall: Suno wiederholt im Intro/Hook eine Zeile, die im offiziellen
+    Songtext nur einmal steht. Ohne diese Zusatzzeile wird das Alignment auf den
+    naechsten Abschnitt gezogen und Segmente springen. Diese Funktion fuegt nur
+    dann abgeleitete Zeilen ein, wenn ASR dieselbe Lyrics-Zeile mehrfach vor dem
+    naechsten plausiblen Abschnitts-/Zeilenanker erkennt.
+    """
+    entries, had_structure = _effective_entries_from_lyrics(lyrics, source_lyrics)
+    if not entries or not hyp:
+        return lyrics, source_lyrics, [], {"enabled": True, "derived_count": 0, "source": "no_effective_change"}
+
+    effective: list[_EffectiveLyricsEntry] = []
+    report: list[str] = []
+    derived_records: list[dict[str, Any]] = []
+    cursor = 0
+
+    for index, entry in enumerate(entries):
+        effective.append(entry)
+        tokens = _effective_line_tokens(entry.text)
+        if not tokens:
+            continue
+
+        first = _effective_first_occurrence(tokens, hyp, start_index=cursor)
+        if not first:
+            continue
+
+        next_anchor = _effective_next_anchor_occurrence(entries, index, hyp, int(first["end_index"]))
+        if not next_anchor:
+            cursor = max(cursor, int(first["end_index"]))
+            continue
+
+        next_index, next_occurrence = next_anchor
+        boundary = int(next_occurrence["start_index"])
+        if boundary <= int(first["end_index"]):
+            cursor = max(cursor, int(first["end_index"]))
+            continue
+
+        duplicates = _effective_find_occurrences_flexible(
+            tokens,
+            hyp,
+            start_index=int(first["end_index"]),
+            end_index=boundary,
+            max_count=3,
+        )
+        accepted: list[dict[str, Any]] = []
+        previous_start_time = float(first["start"])
+        for occurrence in duplicates:
+            start_time = float(occurrence["start"])
+            end_time = float(occurrence["end"])
+            if start_time - previous_start_time < 0.45:
+                continue
+            if end_time > float(next_occurrence["start"]) - 0.10:
+                continue
+            # Sehr grosse Luecken sind meist spaetere Hook-/Chorus-Wiederholungen,
+            # keine lokale von Suno eingefuegte Zusatzzeile.
+            if start_time - previous_start_time > 24.0:
+                continue
+            accepted.append(occurrence)
+            previous_start_time = start_time
+
+        if accepted and _entry_in_explicit_repeated_block(entries, index):
+            # Direkt im Songtext ausgeschriebene Wiederholungsbloecke duerfen
+            # nicht noch einmal aus ASR-Duplikaten erweitert werden. Sonst
+            # entstehen in Hooks/Choruses zusaetzliche A/B-Zeilen und die
+            # Reihenfolge stolpert.
+            cursor = max(cursor, int(first["end_index"]))
+            continue
+
+        for occurrence in accepted:
+            # Wenn Suno einen fruehen Intro-Block A-B als A-B-A-B performt,
+            # ASR aber den kurzen A-Call beim zweiten Durchlauf verschluckt,
+            # sieht die bisherige Logik nur B erneut und erzeugt A-B-B. In
+            # diesem konservativen Spezialfall wird die vorherige Intro-Zeile
+            # als Block-Prefix vor der erneut belegten aktuellen Zeile in die
+            # effektive SRT-Lyrics-Sicht eingefuegt. Der gespeicherte Songtext
+            # bleibt unveraendert; es betrifft nur das Alignment.
+            if index > 0:
+                previous_entry = entries[index - 1]
+                current_marker = entry.marker if isinstance(entry.marker, dict) else {}
+                previous_marker = previous_entry.marker if isinstance(previous_entry.marker, dict) else {}
+                same_intro_marker = (
+                    str(current_marker.get("type") or "").lower() in {"intro", "instrumental_intro"}
+                    and str(previous_marker.get("type") or "").lower() == str(current_marker.get("type") or "").lower()
+                    and str(previous_marker.get("label") or "") == str(current_marker.get("label") or "")
+                )
+                previous_tokens = _effective_line_tokens(previous_entry.text)
+                current_tokens = _effective_line_tokens(entry.text)
+                previous_is_short_call = 1 <= len(previous_tokens) <= 4 and previous_tokens != current_tokens
+                repeat_start_index = int(occurrence.get("start_index") or 0)
+                previous_between = _effective_find_occurrences_flexible(
+                    previous_tokens,
+                    hyp,
+                    start_index=int(first["end_index"]),
+                    end_index=repeat_start_index,
+                    max_count=1,
+                ) if previous_tokens and repeat_start_index > int(first["end_index"]) else []
+                already_inserted_previous = bool(effective and _effective_line_similarity(effective[-1].text, previous_entry.text) >= 0.92)
+                if same_intro_marker and previous_is_short_call and not already_inserted_previous:
+                    prefix_occurrence = previous_between[0] if previous_between else None
+                    prefix_confidence = float(prefix_occurrence.get("score") or 0.0) if prefix_occurrence else 0.62
+                    prefix_time_hint = float(prefix_occurrence.get("start") or 0.0) if prefix_occurrence else max(0.0, float(occurrence.get("start") or 0.0) - 2.6)
+                    prefix = _EffectiveLyricsEntry(
+                        text=previous_entry.text,
+                        marker=previous_entry.marker,
+                        derived=True,
+                        reason="asr_intro_block_prefix_repeat" if prefix_occurrence else "inferred_intro_block_prefix_repeat",
+                        confidence=prefix_confidence,
+                        time_hint=prefix_time_hint,
+                        original_index=previous_entry.original_index,
+                    )
+                    effective.append(prefix)
+                    derived_records.append({
+                        "after_original_line": (previous_entry.original_index if previous_entry.original_index is not None else index - 1) + 1,
+                        "text": previous_entry.text,
+                        "section": (previous_entry.marker or {}).get("label") if isinstance(previous_entry.marker, dict) else None,
+                        "reason": prefix.reason,
+                        "confidence": round(prefix.confidence, 3),
+                        "time_hint": round(float(prefix.time_hint or 0.0), 3),
+                    })
+                    report.append(
+                        f"INFO: Effektive SRT-Lyrics: Intro-Block-Prefix vor wiederholter Zeile eingefuegt "
+                        f"({previous_entry.text!r}, Hinweis bei {prefix_time_hint:.1f}s)."
+                    )
+
+            derived = _EffectiveLyricsEntry(
+                text=entry.text,
+                marker=entry.marker,
+                derived=True,
+                reason="asr_repeated_line_before_next_anchor",
+                confidence=float(occurrence.get("score") or 0.0),
+                time_hint=float(occurrence.get("start") or 0.0),
+                original_index=entry.original_index,
+            )
+            effective.append(derived)
+            derived_records.append({
+                "after_original_line": (entry.original_index if entry.original_index is not None else index) + 1,
+                "text": entry.text,
+                "section": (entry.marker or {}).get("label") if isinstance(entry.marker, dict) else None,
+                "reason": derived.reason,
+                "confidence": round(derived.confidence, 3),
+                "time_hint": round(float(derived.time_hint or 0.0), 3),
+            })
+            report.append(
+                f"INFO: Effektive SRT-Lyrics: zusaetzliche Zeile nach Originalzeile "
+                f"{(entry.original_index if entry.original_index is not None else index) + 1} eingefuegt "
+                f"({entry.text!r}, ASR bei {float(occurrence.get('start') or 0.0):.1f}s)."
+            )
+
+        cursor = max(cursor, int((accepted[-1] if accepted else first)["end_index"]))
+
+    if not derived_records:
+        return lyrics, source_lyrics, [], {"enabled": True, "derived_count": 0, "source": "no_repeated_lines_detected"}
+
+    effective_lyrics = "\n".join(entry.text for entry in effective if entry.text).strip()
+    effective_source_lyrics = _render_effective_source_lyrics(effective) if had_structure else None
+    info = {
+        "enabled": True,
+        "source": "asr_repeated_line_detection",
+        "derived_count": len(derived_records),
+        "derived_lines": derived_records[:80],
+        "original_line_count": len(entries),
+        "effective_line_count": len(effective),
+    }
+    return effective_lyrics or lyrics, effective_source_lyrics or source_lyrics, report, info
+
+
 def _script_align_lines(lines: list[LyricLine], hyp: list[HypWord], warn_factor: float = 0.6) -> list[str]:
     target: list[str] = []
     tok_line: list[int] = []
+    line_token_offsets: list[int] = []
     for line_index, line in enumerate(lines):
+        line_token_offsets.append(len(target))
         for token in line.match_tokens:
             target.append(token)
             tok_line.append(line_index)
@@ -397,11 +1430,37 @@ def _script_align_lines(lines: list[LyricLine], hyp: list[HypWord], warn_factor:
     token_ends: list[float | None] = [None] * n
 
     matcher = difflib.SequenceMatcher(a=hyp_tokens, b=target, autojunk=False)
+    fuzzy_rescued = 0
     for tag, i1, i2, j1, j2 in matcher.get_opcodes():
         if tag == "equal":
             for offset in range(i2 - i1):
                 token_starts[j1 + offset] = hyp[i1 + offset].start
                 token_ends[j1 + offset] = hyp[i1 + offset].end
+        elif tag == "replace":
+            # Fuzzy-Rescue: SequenceMatcher verwirft Fehlhörungen komplett.
+            # Innerhalb eines replace-Blocks ist die Reihenfolge aber gesichert,
+            # deshalb dürfen positionsgleiche Paare (links- und rechtsbündig)
+            # mit generischer Wortähnlichkeit als zusätzliche Anker dienen.
+            # Das ersetzt die frühere Ankerarmut bei gehn/gehen, Flut/Blut usw.
+            span = min(i2 - i1, j2 - j1)
+            for offset in range(span):
+                j = j1 + offset
+                if token_starts[j] is not None:
+                    continue
+                candidate = hyp[i1 + offset]
+                if _script_word_similarity(candidate.norm, target[j]) >= SCRIPT_FUZZY_WORD_THRESHOLD:
+                    token_starts[j] = candidate.start
+                    token_ends[j] = candidate.end
+                    fuzzy_rescued += 1
+            for offset in range(1, span + 1):
+                j = j2 - offset
+                if token_starts[j] is not None:
+                    continue
+                candidate = hyp[i2 - offset]
+                if _script_word_similarity(candidate.norm, target[j]) >= SCRIPT_FUZZY_WORD_THRESHOLD:
+                    token_starts[j] = candidate.start
+                    token_ends[j] = candidate.end
+                    fuzzy_rescued += 1
 
     last = -1.0
     tolerance = 0.30
@@ -421,8 +1480,35 @@ def _script_align_lines(lines: list[LyricLine], hyp: list[HypWord], warn_factor:
             line.start = min(starts)
             line.end = max(ends)
             line.matched = True
+            # Exakte Token-Zeiten in Displaywort-Zeiten übernehmen statt sie zu
+            # verwerfen. Lücken (None) werden später von _script_compute_word_times
+            # zwischen den bekannten Ankern interpoliert. Heuristiken, die die
+            # Zeile später verschieben, setzen wstart/wend weiterhin auf None und
+            # erzwingen damit eine komplette Neuinterpolation.
+            offset = line_token_offsets[line_index]
+            word_starts: list[float | None] = []
+            word_ends: list[float | None] = []
+            cursor = offset
+            for count in line.tok_counts:
+                slice_starts = [token_starts[cursor + k] for k in range(count) if token_starts[cursor + k] is not None]
+                slice_ends = [token_ends[cursor + k] for k in range(count) if token_ends[cursor + k] is not None]
+                word_starts.append(min(slice_starts) if slice_starts else None)
+                word_ends.append(max(slice_ends) if slice_ends else None)
+                cursor += count
+            if len(word_starts) == len(line.words) and any(value is not None for value in word_starts):
+                line.wstart = word_starts  # type: ignore[assignment]
+                line.wend = word_ends  # type: ignore[assignment]
 
-    return _script_resolve_timeline(lines, warn_factor)
+    hyp_first_start = min((word.start for word in hyp), default=None)
+    report: list[str] = []
+    if fuzzy_rescued:
+        report.append(f"INFO: Fuzzy-Rescue: {fuzzy_rescued} ASR-Fehlhoerung(en) als zusaetzliche Wort-Anker uebernommen.")
+    report.extend(_script_apply_asr_line_review(lines, hyp))
+    report.extend(_script_anchor_repeated_section_blocks(lines, hyp))
+    report.extend(_script_reassign_sparse_section_jump_anchors(lines))
+    report.extend(_script_resolve_timeline(lines, warn_factor, hyp_first_start=hyp_first_start, hyp=hyp))
+    report.extend(_script_rebalance_ambiguous_intro_prefix(lines, hyp_first_start))
+    return report
 
 
 def _script_spread(lines: list[LyricLine], i0: int, i1: int, start: float, end: float) -> None:
@@ -436,7 +1522,257 @@ def _script_spread(lines: list[LyricLine], i0: int, i1: int, start: float, end: 
         t += duration
 
 
-def _script_resolve_timeline(lines: list[LyricLine], warn_factor: float) -> list[str]:
+
+def _script_min_intro_gap_seconds(lines: list[LyricLine], i0: int, i1: int) -> float:
+    """Mindestfenster fuer fruehe, vom ASR verschluckte Intro-Zeilen.
+
+    Kurze Artist-Calls und gesprochene Einstiegszeilen werden von Whisper/Groq
+    haeufig nicht als Wort-Anker geliefert. Wenn danach ein sicherer Anchor folgt,
+    darf die fehlende Zeile nicht auf ein paar Zehntelsekunden gequetscht werden,
+    weil der Player sonst scheinbar eine Zeile ueberspringt.
+    Die Funktion ist bewusst nur fuer fruehe Gap-Protection gedacht und aendert
+    keine API-/DB-Struktur.
+    """
+    total = 0.0
+    for line in lines[i0:i1]:
+        word_count = max(1, len(line.words or line.display.split()))
+        # Untergrenze fuer Lesbarkeit; laengere Intro-Phrasen bekommen mehr Raum,
+        # aber keine uebertrieben langen Luecken.
+        by_words = 0.36 * word_count
+        by_weight = 0.30 * max(float(line.weight or 1.0), 1.0)
+        total += max(1.15, min(3.35, max(by_words, by_weight)))
+    return total
+
+
+
+def _script_readable_window_seconds(lines: list[LyricLine], i0: int, i1: int) -> float:
+    """Plausibles Mindestfenster für mehrere sichtbare Lyrics-Zeilen.
+
+    Wird nur für Korrekturen offensichtlich falscher Frühanker verwendet. Es ist
+    bewusst konservativ und beeinflusst keine API-/DB-Struktur.
+    """
+    total = 0.0
+    for line in lines[i0:i1]:
+        words = line.words or line.display.split()
+        word_count = max(1, len(words))
+        by_words = 0.28 * word_count
+        by_weight = 0.18 * max(float(line.weight or 1.0), 1.0)
+        total += max(1.35, min(4.10, max(by_words, by_weight)))
+    return total
+
+
+def _script_demote_false_early_section_anchors(lines: list[LyricLine], seconds_per_weight: float) -> list[str]:
+    """Ignoriert frühe doppelte Abschnitts-Anker aus Suno-Intro-Wiederholungen.
+
+    Praxisfall: Suno hängt im Intro noch einmal Worte an, die im offiziellen
+    Songtext erst mit ``[Verse 1]`` beginnen. Das ASR erkennt diese Worte früh,
+    SequenceMatcher verankert dadurch die erste Verse-Zeile bei Sekunde 8, obwohl
+    der eigentliche Verse erst deutlich später beginnt. Erkennbar ist das an:
+      - erste Zeile eines neuen Abschnitts,
+      - sehr frühe Startzeit direkt nach Intro-Zeilen,
+      - danach langer Abstand bis zum nächsten stabilen Anker.
+    In diesem Fall wird nur dieser frühe Anker demotet; die Zeile bleibt erhalten
+    und wird im späteren Fenster vor dem nächsten Anker verteilt.
+    """
+    report: list[str] = []
+    upper = min(len(lines) - 1, 10)
+    for idx in range(1, upper):
+        line = lines[idx]
+        if not line.matched or not line.starts_section:
+            continue
+        if not line.section_type or line.section_type in {"intro", "instrumental_intro"}:
+            continue
+        if line.start is None or line.end is None:
+            continue
+        start = float(line.start)
+        end = float(line.end)
+        if start > 18.0:
+            continue
+
+        prev = lines[idx - 1]
+        prev_end = float(prev.end or 0.0)
+        prev_section = str(prev.section_type or "")
+        if prev_end <= 0.0 or start > prev_end + 2.75:
+            continue
+        if prev_section and prev_section == str(line.section_type or ""):
+            continue
+
+        next_anchor = None
+        for probe in range(idx + 2, min(len(lines), idx + 9)):
+            candidate = lines[probe]
+            if candidate.matched and candidate.start is not None:
+                next_anchor = probe
+                break
+        if next_anchor is None:
+            continue
+
+        next_start = float(lines[next_anchor].start or 0.0)
+        long_gap = next_start - end
+        if long_gap < max(8.0, _script_readable_window_seconds(lines, idx, next_anchor) + 3.0):
+            continue
+
+        duration = max(0.0, end - start)
+        # Sehr kurze Treffer oder Treffer direkt auf Worte des vorherigen Intros
+        # sind besonders verdächtig. Normale frühe Verse-Anker ohne langen Gap
+        # bleiben unangetastet.
+        if duration <= 1.35 or long_gap >= 12.0:
+            line.matched = False
+            line.start = None
+            line.end = None
+            line.wstart = []
+            line.wend = []
+            report.append(
+                f"INFO: Früher Abschnitts-Anker Zeile {idx + 1} ({line.section_label or line.section_type}) "
+                f"bei {start:.1f}s als Intro-Wiederholung ignoriert; Zeile wird vor Anker {next_anchor + 1} neu verteilt."
+            )
+    return report
+
+
+def _script_first_hyp_onset_in_window(hyp: list[HypWord] | None, window_start: float, window_end: float) -> float | None:
+    """Erster ASR-Wortbeginn innerhalb eines Zeitfensters (Vokal-Onset)."""
+    if not hyp:
+        return None
+    lower = window_start + 0.30
+    upper = window_end - 0.20
+    if upper <= lower:
+        return None
+    for word in hyp:
+        start = float(word.start)
+        if start < lower:
+            continue
+        if start > upper:
+            return None
+        return start
+    return None
+
+
+def _script_tail_spread_section_transition(
+    lines: list[LyricLine],
+    anchor_a: int,
+    anchor_b: int,
+    window_start: float,
+    window_end: float,
+    hyp: list[HypWord] | None = None,
+) -> tuple[float | None, str | None]:
+    """Legt einen neuen Abschnitt am Ende einer großen Intro-Lücke ab.
+
+    Wenn nach dem Intro ein neuer Abschnitt beginnt und bis zum nächsten sicheren
+    Anker ein sehr großes Fenster offen ist, ist eine gleichmäßige Verteilung ab
+    dem Intro-Ende falsch: Dann würden Verse-Zeilen viel zu früh erscheinen.
+
+    Ursachen-Fix: Existieren im Fenster echte ASR-Wörter (Vokal-Onset, auch wenn
+    sie textlich nicht gematcht wurden), beginnt der Abschnitt an diesem Onset —
+    dort setzt die Stimme hörbar ein. Nur ohne jeden ASR-Beleg wird wie bisher
+    ein lesbares Fenster direkt vor den nächsten stabilen Anker gelegt; die
+    reine Lesbarkeitsrechnung hat Verse-Starts sonst mehrere Sekunden zu spät
+    platziert (z. B. 30s statt 25s).
+    """
+    if anchor_b <= anchor_a + 1:
+        return None, None
+    if anchor_a > 8 or window_end > 55.0:
+        return None, None
+    first = lines[anchor_a + 1]
+    previous = lines[anchor_a]
+    if not first.starts_section or not first.section_type:
+        return None, None
+    if first.section_type in {"intro", "instrumental_intro"}:
+        return None, None
+    if previous.section_type and previous.section_type == first.section_type:
+        return None, None
+
+    window = max(0.0, window_end - window_start)
+    required = _script_readable_window_seconds(lines, anchor_a + 1, anchor_b)
+    if window < max(9.0, required + 4.5):
+        return None, None
+
+    onset = _script_first_hyp_onset_in_window(hyp, window_start, window_end)
+    if onset is not None and onset < window_end - 1.0:
+        return onset, (
+            f"INFO: Abschnitt {first.section_label or first.section_type} nach Intro-Lücke am "
+            f"ASR-Vokal-Onset gestartet ({window_start:.1f}s-{window_end:.1f}s -> {onset:.1f}s-{window_end:.1f}s)."
+        )
+
+    tail_start = max(window_start, window_end - required)
+    # Nicht an den ersten paar Sekunden kleben lassen; genau das erzeugt den
+    # beobachteten Sprung von Intro direkt in Verse-Zeilen.
+    if tail_start <= window_start + 2.5:
+        return None, None
+    return tail_start, (
+        f"INFO: Abschnitt {first.section_label or first.section_type} nach Intro-Lücke spät verteilt "
+        f"({window_start:.1f}s-{window_end:.1f}s -> {tail_start:.1f}s-{window_end:.1f}s)."
+    )
+
+
+def _script_protect_early_gap_before_anchor(
+    lines: list[LyricLine],
+    anchor_a: int,
+    anchor_b: int,
+    *,
+    gap_seconds: float = 0.04,
+) -> tuple[float, str | None]:
+    """Reserviert Leseraum fuer fruehe ungematchte Zeilen zwischen Anchors.
+
+    Fehlerbild: ``Skalino`` wird korrekt bei Sekunde 3 erkannt, der naechste
+    echte Intro-Satz wurde vom ASR aber nicht erkannt. Wenn der erkannte
+    ``Skalino``-Anchor zu lang endet, wird die ungematchte Zeile direkt vor den
+    folgenden Verse-Anchor gequetscht und der Player springt visuell zwei Zeilen
+    weiter. In den ersten Sekunden duerfen wir den fruehen Anchor daher am Ende
+    kuerzen, damit die fehlende Intro-Zeile einen eigenen Zeitbereich bekommt.
+    """
+    if anchor_a < 0 or anchor_b <= anchor_a + 1:
+        return float(lines[anchor_a].end or 0.0), None
+    if anchor_a > 2 or anchor_b > 6:
+        return float(lines[anchor_a].end or 0.0), None
+
+    next_start = float(lines[anchor_b].start or 0.0)
+    if next_start <= 0.0 or next_start > 24.0:
+        return float(lines[anchor_a].end or 0.0), None
+
+    required = _script_min_intro_gap_seconds(lines, anchor_a + 1, anchor_b)
+    current_start = float(lines[anchor_a].end or 0.0)
+    available = max(0.0, next_start - current_start)
+
+    anchor_start = float(lines[anchor_a].start or 0.0)
+    anchor_word_count = len(lines[anchor_a].words or lines[anchor_a].display.split())
+
+    # Wichtig: Kurze Artist-Calls/Adlibs am Anfang werden von ASR-Anbietern
+    # gelegentlich mit zu langer Endzeit geliefert (z. B. "Skalino" 3.0-7.1s).
+    # Auch wenn rechnerisch ein kleines Gap uebrig bleibt, fuehlt sich das im
+    # Live-Player wie ein Sprung ueber die naechste Intro-Zeile an. Deshalb darf
+    # ein sehr frueher, kurzer Anchor nicht den ganzen Raum bis zum naechsten
+    # Hauptzeilen-Anchor belegen.
+    max_short_anchor_duration = 1.35 if anchor_word_count <= 2 else 2.15
+    short_anchor_cap = anchor_start + max_short_anchor_duration
+    candidate_end = current_start
+
+    if anchor_a <= 1 and anchor_word_count <= 2 and current_start > short_anchor_cap + 0.20:
+        # Den Anchor nur kuerzen, wenn dadurch fuer die fehlenden Zeilen ein
+        # sinnvoller Leseraum entsteht. Der naechste sichere Anker bleibt fix.
+        expanded_available = max(0.0, next_start - short_anchor_cap)
+        if expanded_available >= max(1.35, required * 0.62):
+            candidate_end = min(candidate_end, short_anchor_cap)
+
+    if available < required * 0.82:
+        min_anchor_duration = 0.75 if anchor_word_count <= 2 else 1.05
+        # Frueherer Start wird bevorzugt, solange der Anchor selbst lesbar bleibt.
+        gap_based_end = max(anchor_start + min_anchor_duration, next_start - required)
+        candidate_end = min(candidate_end, gap_based_end)
+
+    if candidate_end + gap_seconds < current_start:
+        lines[anchor_a].end = round(candidate_end, 3)
+        return float(lines[anchor_a].end or candidate_end), (
+            f"INFO: Fruehe Intro-Zeile(n) {anchor_a + 2}-{anchor_b} vor Anker {anchor_b + 1} "
+            f"entquetscht ({available:.1f}s -> {max(0.0, next_start - candidate_end):.1f}s)."
+        )
+
+    return current_start, None
+
+def _script_resolve_timeline(
+    lines: list[LyricLine],
+    warn_factor: float,
+    hyp_first_start: float | None = None,
+    hyp: list[HypWord] | None = None,
+) -> list[str]:
     report: list[str] = []
     n = len(lines)
     rates = [
@@ -445,6 +1781,7 @@ def _script_resolve_timeline(lines: list[LyricLine], warn_factor: float) -> list
         if line.matched and line.start is not None and line.end is not None and line.end > line.start and line.weight > 0
     ]
     seconds_per_weight = sorted(rates)[len(rates) // 2] if rates else 0.35
+    report.extend(_script_demote_false_early_section_anchors(lines, seconds_per_weight))
     anchors = [idx for idx in range(n) if lines[idx].matched]
     if not anchors:
         report.append("WARN: keine einzige Zeile sicher gematcht -- komplette Schaetzung.")
@@ -459,18 +1796,53 @@ def _script_resolve_timeline(lines: list[LyricLine], warn_factor: float) -> list
     if first > 0:
         need = sum(lines[i].weight for i in range(first)) * seconds_per_weight
         end = lines[first].start or need
-        _script_spread(lines, 0, first, max(0.0, end - need), end)
-        report.append(f"INFO: Zeilen 1-{first} vor erstem Anker geschaetzt.")
+        default_start = max(0.0, end - need)
+        start = default_start
+
+        # Schutz fuer fruehe Intro-/Adlib-Zeilen: ASR-Modelle verschlucken kurze
+        # Einstiegsworte wie Kuenstlernamen oder gesprochene Intros haeufig.
+        # Bisher wurden solche Zeilen direkt vor den ersten sicheren Anker gelegt;
+        # dadurch erschien z. B. "Skalino" erst bei 7-8s und sprang sofort weiter.
+        # Wenn der erste sichere Anker spaeter liegt, reservieren wir ein plausibles
+        # Intro-Fenster vor dem Anker. Das veraendert keine API/Datenstruktur,
+        # sondern nur die Schaetzung fuer nicht gematchte Zeilen vor dem ersten
+        # Wort-Anker.
+        if end >= 2.0:
+            protected_window = max(need, min(4.75, end * 0.62))
+            protected_start = max(0.0, end - protected_window)
+            if hyp_first_start is not None and 0.75 <= hyp_first_start < end - 0.20:
+                protected_start = min(protected_start, max(0.0, float(hyp_first_start)))
+            start = min(default_start, protected_start)
+
+        _script_spread(lines, 0, first, start, end)
+        if start < default_start - 0.25:
+            report.append(
+                f"INFO: Zeilen 1-{first} vor erstem Anker mit Intro-Fenster geschaetzt "
+                f"({start:.1f}s-{end:.1f}s)."
+            )
+        else:
+            report.append(f"INFO: Zeilen 1-{first} vor erstem Anker geschaetzt.")
 
     for anchor_a, anchor_b in zip(anchors, anchors[1:]):
         gap = anchor_b - anchor_a - 1
         if gap <= 0:
             continue
         window_start = lines[anchor_a].end or 0.0
+        protection_report = None
+        if anchor_a <= 2 and anchor_b <= 6:
+            window_start, protection_report = _script_protect_early_gap_before_anchor(lines, anchor_a, anchor_b)
+            if protection_report:
+                report.append(protection_report)
         window_end = lines[anchor_b].start or window_start
         window = max(window_end - window_start, 0.0)
         expected = sum(lines[i].weight for i in range(anchor_a + 1, anchor_b)) * seconds_per_weight
-        _script_spread(lines, anchor_a + 1, anchor_b, window_start, window_end)
+        tail_start, tail_report = _script_tail_spread_section_transition(lines, anchor_a, anchor_b, window_start, window_end, hyp=hyp)
+        if tail_start is not None:
+            _script_spread(lines, anchor_a + 1, anchor_b, tail_start, window_end)
+            if tail_report:
+                report.append(tail_report)
+        else:
+            _script_spread(lines, anchor_a + 1, anchor_b, window_start, window_end)
         per_line = window / gap if gap else 0.0
         if expected > 0 and window < expected * warn_factor:
             report.append(
@@ -486,6 +1858,925 @@ def _script_resolve_timeline(lines: list[LyricLine], warn_factor: float) -> list
         _script_spread(lines, last + 1, n, start, start + need)
         report.append(f"INFO: Zeilen {last + 2}-{n} nach letztem Anker geschaetzt.")
 
+    return report
+
+
+
+def _script_insert_repeated_lines_from_timing(lines: list[LyricLine], hyp: list[HypWord]) -> list[str]:
+    """Fuegt wiederholte kurze Zeilen anhand der finalen Zeitfenster ein.
+
+    Diese zweite Sicherung greift, wenn der Effective-Lyrics-Layer eine Suno-
+    Wiederholung nicht frueh genug erkannt hat, die ASR-Worte aber innerhalb des
+    langen Zeitfensters einer kurzen Lyrics-Zeile zweimal auftauchen. Sie aendert
+    nur die in-memory Alignment-Zeilen, keine API, keine DB, keine Tasklogik.
+    """
+    report: list[str] = []
+    if not lines or not hyp:
+        return report
+
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        start = float(line.start or 0.0)
+        end = float(line.end or start)
+        duration = end - start
+        tokens = line.match_tokens or _effective_line_tokens(line.display)
+        if _line_in_explicit_repeated_block(lines, i):
+            i += 1
+            continue
+        if duration < 4.25 or len(tokens) < 3 or len(tokens) > 8:
+            i += 1
+            continue
+        if i + 1 < len(lines):
+            next_line = lines[i + 1]
+            if _effective_line_tokens(next_line.display) == _effective_line_tokens(line.display):
+                i += 1
+                continue
+
+        occurrences: list[dict[str, Any]] = []
+        for occurrence in _effective_find_occurrences_flexible(tokens, hyp, start_index=0, max_count=None):
+            occ_start = float(occurrence.get("start") or 0.0)
+            occ_end = float(occurrence.get("end") or occ_start)
+            if occ_start >= start - 0.35 and occ_end <= end + 0.35:
+                occurrences.append(occurrence)
+        occurrences.sort(key=lambda item: float(item.get("start") or 0.0))
+        if len(occurrences) < 2:
+            i += 1
+            continue
+
+        first = occurrences[0]
+        second = occurrences[1]
+        first_start = float(first.get("start") or start)
+        first_end = float(first.get("end") or first_start)
+        second_start = float(second.get("start") or start)
+        second_end = float(second.get("end") or second_start)
+        if second_start - first_start < 0.75:
+            i += 1
+            continue
+
+        next_start = float(lines[i + 1].start) if i + 1 < len(lines) and lines[i + 1].start is not None else end
+        first_new_end = min(end, max(start + 0.75, min(second_start - 0.04, first_end + 0.45)))
+        second_new_start = max(first_new_end + 0.04, second_start)
+        second_new_end = min(next_start - 0.04 if next_start > second_new_start else end, max(second_end + 0.45, second_new_start + 0.85))
+        if second_new_end <= second_new_start + 0.35:
+            midpoint = start + duration / 2
+            first_new_end = max(start + 0.75, midpoint - 0.04)
+            second_new_start = min(end - 0.75, midpoint + 0.04)
+            second_new_end = end
+        if second_new_end <= second_new_start + 0.35 or first_new_end <= start + 0.35:
+            i += 1
+            continue
+
+        line.end = round(first_new_end, 3)
+        line.wstart = None
+        line.wend = None
+
+        duplicate = LyricLine(
+            index=line.index,
+            display=line.display,
+            words=list(line.words or []),
+            tok_counts=list(line.tok_counts or []),
+            match_tokens=list(line.match_tokens or []),
+            weight=float(line.weight or 1.0),
+            matched=True,
+            start=round(second_new_start, 3),
+            end=round(second_new_end, 3),
+            wstart=None,
+            wend=None,
+            section_label=line.section_label,
+            section_type=line.section_type,
+            starts_section=False,
+        )
+        lines.insert(i + 1, duplicate)
+        report.append(
+            f"INFO: Wiederholte kurze Zeile aus ASR-Zeitfenster ergaenzt: {line.display!r} "
+            f"bei {second_new_start:.1f}s."
+        )
+        i += 2
+    return report
+
+
+def _script_intro_lines_same(left: LyricLine, right: LyricLine) -> bool:
+    left_tokens = _effective_line_tokens(left.display)
+    right_tokens = _effective_line_tokens(right.display)
+    if left_tokens and right_tokens and left_tokens == right_tokens:
+        return True
+    return _effective_line_similarity(left.display, right.display) >= 0.92
+
+
+def _script_insert_missing_intro_block_prefix_repeats(lines: list[LyricLine]) -> list[str]:
+    """Ergaenzt fehlende kurze Prefix-Zeilen bei Intro-Block-Wiederholungen.
+
+    Praxisfall: Songtext enthaelt im Intro A-B, Suno performt A-B-A-B, aber
+    ASR erkennt beim zweiten Durchlauf nur B sauber. Dann kann die vorherige
+    Logik bereits B duplizieren, laesst A aber fehlen. Diese Funktion arbeitet
+    nach dem ersten Timing-Alignment und fuegt die kurze vorherige Intro-Zeile
+    direkt vor dem zweiten B ein. Dadurch entsteht die echte Performance-Sicht
+    A-B-A-B, ohne den gespeicherten Songtext oder DB-Schema zu veraendern.
+    """
+    report: list[str] = []
+    if len(lines) < 4:
+        return report
+
+    index = 0
+    while index < min(len(lines) - 2, 12):
+        first = lines[index]
+        second = lines[index + 1]
+        first_section = str(first.section_type or "").lower()
+        second_section = str(second.section_type or "").lower()
+        if first_section not in {"intro", "instrumental_intro"} or second_section != first_section:
+            index += 1
+            continue
+        if _script_intro_lines_same(first, second):
+            index += 1
+            continue
+
+        first_tokens = first.match_tokens or _effective_line_tokens(first.display)
+        second_tokens = second.match_tokens or _effective_line_tokens(second.display)
+        if not (1 <= len(first_tokens) <= 4 and 2 <= len(second_tokens) <= 10):
+            index += 1
+            continue
+
+        # Nur bis zum ersten Nicht-Intro-Abschnitt pruefen. Spaetere Hooks oder
+        # Bridges duerfen keine fruehen Intro-Duplikate erzeugen.
+        intro_end = index + 2
+        while intro_end < len(lines):
+            section = str(lines[intro_end].section_type or "").lower()
+            if section and section not in {"intro", "instrumental_intro"}:
+                break
+            intro_end += 1
+
+        repeat_index: int | None = None
+        for probe in range(index + 2, intro_end):
+            if _script_intro_lines_same(lines[probe], second):
+                repeat_index = probe
+                break
+        if repeat_index is None:
+            index += 1
+            continue
+
+        # Wenn die Prefix-Zeile bereits vor dem zweiten B existiert, ist der
+        # Block schon korrekt A-B-A-B und darf nicht erneut erweitert werden.
+        if any(_script_intro_lines_same(lines[probe], first) for probe in range(index + 2, repeat_index)):
+            index += 1
+            continue
+
+        repeated_second = lines[repeat_index]
+        repeated_second_start = float(repeated_second.start or 0.0)
+        previous_end = float(second.end or second.start or 0.0)
+        if repeated_second_start <= previous_end + 0.45:
+            index += 1
+            continue
+
+        estimated = _script_estimated_repeat_line_duration(first)
+        duplicate_end = min(repeated_second_start - 0.04, max(previous_end + 0.55, repeated_second_start - 0.04))
+        duplicate_start = max(previous_end + 0.08, duplicate_end - estimated)
+        if duplicate_end <= duplicate_start + 0.45:
+            index += 1
+            continue
+
+        duplicate = LyricLine(
+            index=first.index,
+            display=first.display,
+            words=list(first.words or []),
+            tok_counts=list(first.tok_counts or []),
+            match_tokens=list(first.match_tokens or []),
+            weight=float(first.weight or 1.0),
+            matched=False,
+            start=round(duplicate_start, 3),
+            end=round(duplicate_end, 3),
+            wstart=None,
+            wend=None,
+            section_label=first.section_label,
+            section_type=first.section_type,
+            starts_section=False,
+        )
+        lines.insert(repeat_index, duplicate)
+        report.append(
+            f"INFO: Fehlender Intro-Block-Prefix als Performance-Wiederholung ergaenzt: "
+            f"{first.display!r} vor wiederholter Zeile {second.display!r} bei {duplicate_start:.1f}s."
+        )
+        index = repeat_index + 1
+
+    return report
+
+
+def _script_estimated_repeat_line_duration(line: LyricLine) -> float:
+    words = line.words or line.display.split()
+    word_count = max(1, len(words))
+    weight = max(float(line.weight or 1.0), 1.0)
+    return max(1.15, min(3.2, 0.34 * word_count + 0.12 * weight + 0.45))
+
+
+def _script_observed_word_span_seconds(line: LyricLine) -> float | None:
+    starts = [float(value) for value in (line.wstart or []) if value is not None]
+    ends = [float(value) for value in (line.wend or []) if value is not None]
+    if not starts or not ends:
+        return None
+    start = min(starts)
+    end = max(ends)
+    return max(0.0, end - start) if end > start else None
+
+
+def _script_reflow_section_after_intro_repeat(lines: list[LyricLine], duplicate_index: int, gap: float = 0.04) -> str | None:
+    """Zieht geschätzte erste Abschnittszeilen nach einer Intro-Wiederholung leicht vor.
+
+    Die synthetische Intro-Wiederholung wird erst nach der initialen Timeline-
+    Auflösung eingefügt. Der folgende Verse/Hook wurde zu diesem Zeitpunkt oft
+    bereits konservativ direkt vor den nächsten sicheren ASR-Anker gelegt. Wenn
+    zwischen Wiederholung und Anker noch ausreichend freies Fenster liegt, dürfen
+    die ersten ungematchten Abschnittszeilen dieses Fenster nutzen, statt leicht
+    verspätet zu starten.
+    """
+    start_idx = duplicate_index + 1
+    if start_idx >= len(lines):
+        return None
+    first = lines[start_idx]
+    if not first.starts_section or not first.section_type:
+        return None
+    if first.section_type in {"intro", "instrumental_intro"}:
+        return None
+
+    anchor_idx: int | None = None
+    for probe in range(start_idx + 1, min(len(lines), start_idx + 8)):
+        candidate = lines[probe]
+        if candidate.matched and candidate.start is not None:
+            anchor_idx = probe
+            break
+    if anchor_idx is None or anchor_idx <= start_idx:
+        return None
+    if any(lines[index].matched for index in range(start_idx, anchor_idx)):
+        return None
+
+    duplicate = lines[duplicate_index]
+    duplicate_end = float(duplicate.end or duplicate.start or 0.0)
+    anchor_start = float(lines[anchor_idx].start or 0.0)
+    if duplicate_end <= 0.0 or anchor_start <= duplicate_end:
+        return None
+
+    required = _script_readable_window_seconds(lines, start_idx, anchor_idx)
+    available = anchor_start - duplicate_end
+    if available < required + 0.65:
+        return None
+
+    current_start = float(first.start or 0.0)
+    line_count = anchor_idx - start_idx
+    if line_count == 2:
+        second = lines[start_idx + 1]
+        second_current_start = float(second.start or 0.0)
+        first_words = first.words or first.display.split()
+        # Der erste echte Verse-Einsatz wurde vor dem Einfuegen der synthetischen
+        # Intro-Wiederholung bereits plausibel gesetzt. In diesem Spezialfall
+        # soll nicht der ganze Verse-Block nach vorne rutschen; nur die zweite
+        # geschätzte Zeile beginnt zu spaet. Kurze Rap-Zeilen duerfen deshalb
+        # frueher wechseln, waehrend der sichere Folgeanker fix bleibt.
+        first_duration = max(1.35, min(1.85, 0.13 * max(1, len(first_words)) + 0.25))
+        second_target_start = max(current_start + first_duration, duplicate_end + 0.35)
+        second_target_start = min(second_target_start, anchor_start - 1.05)
+        if second_target_start + 0.35 < second_current_start:
+            first.end = round(second_target_start - gap, 3)
+            first.wstart = None
+            first.wend = None
+            second.start = round(second_target_start, 3)
+            second.end = round(max(second_target_start + 0.75, anchor_start - gap), 3)
+            second.wstart = None
+            second.wend = None
+            return (
+                f"INFO: Zweite Abschnittszeile nach Intro-Wiederholung frueher gesetzt "
+                f"({second_current_start:.1f}s -> {second_target_start:.1f}s, erster Start bleibt {current_start:.1f}s)."
+            )
+        return None
+
+    surplus = max(0.0, available - required - 0.35)
+    lead_in = min(1.6, surplus)
+    target_start = max(duplicate_end + 0.35, anchor_start - required - lead_in)
+    target_end = max(target_start + 0.75, anchor_start - gap)
+    if target_start >= current_start - 0.35 or target_end <= target_start:
+        return None
+
+    _script_spread(lines, start_idx, anchor_idx, target_start, target_end)
+    return (
+        f"INFO: Abschnitt {first.section_label or first.section_type} nach Intro-Wiederholung frueher verteilt "
+        f"({current_start:.1f}s -> {target_start:.1f}s, Anker {anchor_idx + 1} bei {anchor_start:.1f}s)."
+    )
+
+
+def _script_find_time_occurrence(tokens: list[str], hyp: list[HypWord], start_time: float, end_time: float) -> dict[str, Any] | None:
+    if not tokens or not hyp or end_time <= start_time:
+        return None
+    start_index = 0
+    end_index = len(hyp)
+    for idx, word in enumerate(hyp):
+        if word.end >= start_time:
+            start_index = idx
+            break
+    for idx, word in enumerate(hyp):
+        if word.start > end_time:
+            end_index = idx
+            break
+    matches = _effective_find_occurrences_flexible(tokens, hyp, start_index=start_index, end_index=end_index, max_count=1)
+    if matches:
+        return matches[0]
+
+    # Fallback fuer schwache ASR-Ausgaben: Wenn wenigstens der Anfang der Zeile
+    # erneut auftaucht, gilt das als Hinweis, die Wiederholung im Intro sichtbar
+    # zu machen. Die sichtbare Textzeile stammt weiterhin aus dem Songtext.
+    variants = _effective_line_token_variants(tokens) or [tokens]
+    for variant in variants:
+        prefix = variant[:min(3, len(variant))]
+        if len(prefix) < 2 and (not prefix or len(prefix[0]) < 5):
+            continue
+        hyp_tokens = [word.norm for word in hyp]
+        for pos in range(start_index, max(start_index, end_index - len(prefix) + 1)):
+            candidate = hyp_tokens[pos:pos + len(prefix)]
+            if candidate == prefix or (len(prefix) == 1 and candidate and _script_word_similarity(candidate[0], prefix[0]) >= 0.82):
+                return {
+                    "start_index": pos,
+                    "end_index": pos + len(prefix),
+                    "start": float(hyp[pos].start),
+                    "end": float(hyp[pos + len(prefix) - 1].end),
+                    "score": 0.74 if len(prefix) > 1 else 0.70,
+                    "variant_len": len(prefix),
+                    "variant_tokens": prefix,
+                }
+    return None
+
+
+def _script_build_asr_line_candidates(hyp: list[HypWord]) -> list[_AsrLineCandidate]:
+    """Baut robuste ASR-Zeilenkandidaten aus Wortzeiten.
+
+    Whisper/Groq liefert fuer Musik selten perfekte Zeilen. Trotzdem sind
+    Pausen, lange Wortabstaende und kompakte Wortgruppen gute Hinweise darauf,
+    welche Lyrics-Zeile gerade gesungen wurde. Diese Kandidaten dienen nur als
+    Timing-Reviewer; sichtbarer Text bleibt weiterhin aus den Songlyrics.
+    """
+    candidates: list[_AsrLineCandidate] = []
+    current: list[HypWord] = []
+
+    def flush() -> None:
+        nonlocal current
+        tokens = [word.norm for word in current if word.norm]
+        if len(tokens) >= 2:
+            candidates.append(_AsrLineCandidate(
+                index=len(candidates),
+                tokens=tokens,
+                start=round(float(current[0].start), 3),
+                end=round(float(current[-1].end), 3),
+                text=" ".join(tokens),
+            ))
+        current = []
+
+    previous: HypWord | None = None
+    for word in hyp:
+        if previous is not None:
+            pause = float(word.start) - float(previous.end)
+            duration = float(previous.end) - float(current[0].start) if current else 0.0
+            previous_duration = float(previous.end) - float(previous.start)
+            if (
+                pause >= 0.82
+                or (previous_duration >= 1.6 and pause >= 0.30)
+                or len(current) >= 15
+                or (len(current) >= 7 and duration >= 5.8)
+            ):
+                flush()
+        current.append(word)
+        previous = word
+    flush()
+    return candidates
+
+
+def _script_candidate_line_score(candidate_tokens: list[str], line: LyricLine) -> float:
+    line_tokens = line.match_tokens or _effective_line_tokens(line.display)
+    if not candidate_tokens or not line_tokens:
+        return 0.0
+
+    candidate_text = " ".join(candidate_tokens)
+
+    def fuzzy_sequence_score(variant: list[str]) -> float:
+        if not variant:
+            return 0.0
+
+        candidate_cursor = 0
+        matched = 0
+        similarity_sum = 0.0
+        first_match_at: int | None = None
+        last_match_at: int | None = None
+
+        for token in variant:
+            best_index: int | None = None
+            best_similarity = 0.0
+            # Ein kleines Vorwaertsfenster reicht fuer normale ASR-Fehlhoerungen
+            # und verhindert, dass spaete Hook-Treffer einen fruehen Abschnitt
+            # nur wegen einzelner gleicher Woerter dominieren.
+            for candidate_index in range(candidate_cursor, len(candidate_tokens)):
+                similarity = _script_word_similarity(candidate_tokens[candidate_index], token)
+                if similarity > best_similarity:
+                    best_similarity = similarity
+                    best_index = candidate_index
+                if similarity >= 0.92:
+                    break
+            if best_index is None or best_similarity < SCRIPT_FUZZY_WORD_THRESHOLD:
+                continue
+            if first_match_at is None:
+                first_match_at = best_index
+            last_match_at = best_index
+            matched += 1
+            similarity_sum += best_similarity
+            candidate_cursor = best_index + 1
+
+        if matched <= 0:
+            return 0.0
+
+        line_coverage = matched / max(1, len(variant))
+        candidate_coverage = matched / max(1, len(candidate_tokens))
+        avg_similarity = similarity_sum / matched
+        span_width = (last_match_at - first_match_at + 1) if first_match_at is not None and last_match_at is not None else matched
+        compactness = matched / max(1, span_width)
+        prefix_bonus = 0.0
+        if variant and candidate_tokens:
+            first_similarity = _script_word_similarity(candidate_tokens[0], variant[0])
+            if first_similarity >= 0.86:
+                prefix_bonus += 0.05
+            if len(variant) > 1 and len(candidate_tokens) > 1 and _script_word_similarity(candidate_tokens[1], variant[1]) >= 0.82:
+                prefix_bonus += 0.03
+
+        length_penalty = 0.0
+        if len(candidate_tokens) <= 3 and len(variant) >= 7 and line_coverage < 0.55:
+            length_penalty = 0.10
+        elif len(candidate_tokens) >= 7 and len(variant) <= 3 and candidate_coverage < 0.55:
+            length_penalty = 0.12
+
+        score = (
+            line_coverage * 0.40
+            + candidate_coverage * 0.32
+            + avg_similarity * 0.18
+            + compactness * 0.10
+            + prefix_bonus
+            - length_penalty
+        )
+        return max(0.0, min(1.0, score))
+
+    best = 0.0
+    for variant in _effective_line_token_variants(line_tokens) or [line_tokens]:
+        variant_text = " ".join(variant)
+        seq = difflib.SequenceMatcher(a=candidate_text, b=variant_text, autojunk=False).ratio()
+        fuzzy = fuzzy_sequence_score(variant)
+        best = max(best, min(1.0, max(seq, fuzzy)))
+    return round(best, 3)
+
+
+def _script_match_asr_candidates_to_lyrics(
+    candidates: list[_AsrLineCandidate],
+    lines: list[LyricLine],
+    *,
+    min_score: float = 0.78,
+) -> list[_AsrLyricsLineMatch]:
+    if not candidates or not lines:
+        return []
+
+    # Monotones ASR-Block-zu-Lyrics-Alignment:
+    # Kandidaten duerfen nur vorwaerts auf Lyrics-Zeilen gemappt werden. Fehlende
+    # ASR-Zeilen werden ueber Skip-Kosten modelliert, statt dass der beste globale
+    # Einzelhit die komplette Reihenfolge ueberschreibt. Das ist die eigentliche
+    # Korrektur gegen die fruehere Ankerarmut durch reine Exact-Matches.
+    effective_min_score = min(min_score, 0.64)
+    max_lookahead = 12
+    states: dict[int, tuple[float, list[_AsrLyricsLineMatch]]] = {0: (0.0, [])}
+
+    for candidate in candidates:
+        next_states: dict[int, tuple[float, list[_AsrLyricsLineMatch]]] = {}
+
+        def update(cursor: int, score: float, path: list[_AsrLyricsLineMatch]) -> None:
+            current = next_states.get(cursor)
+            if current is None or score > current[0]:
+                next_states[cursor] = (score, path)
+
+        for cursor, (state_score, path) in states.items():
+            update(cursor, state_score - 0.05, path)
+            line_limit = min(len(lines), cursor + max_lookahead)
+            for line_index in range(cursor, line_limit):
+                raw_score = _script_candidate_line_score(candidate.tokens, lines[line_index])
+                if raw_score < effective_min_score:
+                    continue
+                skipped = line_index - cursor
+                skip_penalty = skipped * 0.11
+                if skipped >= 3:
+                    skip_penalty += (skipped - 2) * 0.08
+                if skipped > 0 and any(lines[probe].starts_section for probe in range(cursor + 1, line_index + 1)):
+                    skip_penalty += 0.18
+                transition_score = raw_score - skip_penalty
+                if transition_score < 0.46:
+                    continue
+                match = _AsrLyricsLineMatch(
+                    candidate_index=candidate.index,
+                    line_index=line_index,
+                    score=round(raw_score, 3),
+                    start=candidate.start,
+                    end=candidate.end,
+                    text=candidate.text,
+                )
+                update(line_index + 1, state_score + transition_score, path + [match])
+
+        states = next_states or states
+
+    if not states:
+        return []
+    _, best_path = max(states.values(), key=lambda item: (item[0], len(item[1])))
+    return best_path
+
+
+def _script_has_ambiguous_skipped_prefix(lines: list[LyricLine], match: _AsrLyricsLineMatch) -> bool:
+    """Schuetzt uebersprungene Lyrics-Zeilen mit gleichem Satzanfang.
+
+    Suno zieht Verse-/Hook-Anfaenge gelegentlich in Intro-Luecken oder wiederholt
+    nur einzelne Prefix-Worte. Der ASR-Zeilenreviewer darf dann einen spaeteren
+    Songtext-Treffer nicht als Anker setzen, wenn direkt davor eine noch nicht
+    sauber abgeschlossene Zeile mit demselben Anfang steht. Dadurch bleibt der
+    Songtext die Quelle der Reihenfolge, waehrend ASR nur sichere Timing-Anker
+    korrigiert.
+    """
+    if match.line_index <= 0:
+        return False
+    candidate_tokens = _script_tokenize_match(match.text)
+    if len(candidate_tokens) < 2:
+        return False
+    candidate_prefix = candidate_tokens[:2]
+    start_index = max(0, match.line_index - 4)
+    for previous_index in range(start_index, match.line_index):
+        previous = lines[previous_index]
+        previous_tokens = previous.match_tokens or _effective_line_tokens(previous.display)
+        if len(previous_tokens) < 2 or previous_tokens[:2] != candidate_prefix:
+            continue
+        previous_start = float(previous.start or 0.0)
+        previous_end = float(previous.end or previous_start)
+        previous_duration = previous_end - previous_start
+        previous_is_clean_before = (
+            bool(previous.matched)
+            and previous_duration >= 0.45
+            and previous_end <= match.start - 0.25
+        )
+        if not previous_is_clean_before:
+            return True
+    return False
+
+
+def _script_apply_asr_line_review(lines: list[LyricLine], hyp: list[HypWord]) -> list[str]:
+    candidates = _script_build_asr_line_candidates(hyp)
+    matches = _script_match_asr_candidates_to_lyrics(candidates, lines)
+    if not candidates:
+        return []
+
+    report = [
+        f"INFO: ASR-Zeilenabgleich: {len(candidates)} Kandidaten, {len(matches)} sequenzielle Lyrics-Treffer "
+        "per fuzzy Block-Alignment."
+    ]
+    changed = 0
+    for match in matches:
+        if match.line_index < 0 or match.line_index >= len(lines):
+            continue
+        line = lines[match.line_index]
+        current_start = float(line.start or 0.0)
+        current_end = float(line.end or current_start)
+        candidate_duration = max(0.0, match.end - match.start)
+        if candidate_duration < 0.45:
+            continue
+        if _script_has_ambiguous_skipped_prefix(lines, match):
+            report.append(
+                f"INFO: ASR-Zeilenabgleich: Kandidat {match.candidate_index + 1} fuer Zeile "
+                f"{match.line_index + 1} wegen voriger aehnlicher Lyrics-Zeile nicht als Anker uebernommen."
+            )
+            continue
+        # Sichere ASR-Zeilen duerfen falsche oder fehlende globale
+        # SequenceMatcher-Anker korrigieren. Bei bereits nahen Treffern bleibt
+        # die bestehende feinere Wortzeit erhalten.
+        should_apply = (
+            not line.matched
+            or line.start is None
+            or abs(current_start - match.start) > 1.15
+            or (current_end - current_start < 0.45 and candidate_duration >= 0.75)
+        )
+        if not should_apply:
+            continue
+        line.start = round(match.start, 3)
+        line.end = round(max(match.end, match.start + 0.6), 3)
+        line.matched = True
+        line.wstart = None
+        line.wend = None
+        changed += 1
+    if changed:
+        report.append(f"INFO: ASR-Zeilenabgleich: {changed} Lyrics-Zeile(n) als Timing-Anker korrigiert.")
+    return report
+
+
+def _script_reassign_sparse_section_jump_anchors(lines: list[LyricLine]) -> list[str]:
+    """Korrigiert frühe ASR-Sprünge innerhalb eines neuen Abschnitts.
+
+    Wenn Whisper/Groq nach einem Intro eine große Lücke hat, kann der erste
+    Treffer im Verse/Hook inhaltlich wie eine spätere Lyrics-Zeile aussehen.
+    Der sichtbare Songtext soll aber weiterhin strikt in Songtext-Reihenfolge
+    laufen. Deshalb wird ein erster Anker, der mehrere erwartete Zeilen eines
+    neuen Abschnitts überspringt, auf die nächste erwartete Zeile umgelegt. Das
+    ist eine konservative Korrektur fuer lueckenhafte ASR-Starts, keine
+    Sonderregel fuer konkrete Lyrics.
+    """
+    report: list[str] = []
+    idx = 0
+    while idx < len(lines):
+        section_start = idx
+        line = lines[section_start]
+        section_type = str(line.section_type or "").lower()
+        if not line.starts_section or not section_type or section_type in {"intro", "instrumental_intro"}:
+            idx += 1
+            continue
+
+        section_end = section_start + 1
+        while section_end < len(lines):
+            probe = lines[section_end]
+            if probe.starts_section and probe.section_type != line.section_type:
+                break
+            section_end += 1
+
+        previous = lines[section_start - 1] if section_start > 0 else None
+        previous_section = str(previous.section_type or "").lower() if previous else ""
+        previous_end = float(previous.end or 0.0) if previous else 0.0
+        if previous is None or previous_section not in {"intro", "instrumental_intro"} or previous_end <= 0.0:
+            idx = section_end
+            continue
+
+        first_anchor: int | None = None
+        for anchor_index in range(section_start, section_end):
+            candidate = lines[anchor_index]
+            if candidate.matched and candidate.start is not None and candidate.end is not None:
+                first_anchor = anchor_index
+                break
+        if first_anchor is None:
+            idx = section_end
+            continue
+
+        skipped = first_anchor - section_start
+        first_anchor_start = float(lines[first_anchor].start or 0.0)
+        if skipped < 2 or first_anchor_start <= previous_end + 8.0 or first_anchor_start > 62.0:
+            idx = section_end
+            continue
+
+        shifted = 0
+        for source_index in range(first_anchor, section_end):
+            source = lines[source_index]
+            if not source.matched or source.start is None or source.end is None:
+                continue
+            target_index = source_index - skipped
+            if target_index < section_start or target_index >= source_index:
+                continue
+            target = lines[target_index]
+            if target.matched and target.start is not None and target.end is not None:
+                continue
+            target.start = source.start
+            target.end = source.end
+            target.matched = True
+            target.wstart = list(source.wstart or [])
+            target.wend = list(source.wend or [])
+
+            source.matched = False
+            source.start = None
+            source.end = None
+            source.wstart = []
+            source.wend = []
+            shifted += 1
+
+        if shifted:
+            report.append(
+                f"INFO: Lueckenhafter ASR-Abschnittsstart: {shifted} Anker im Abschnitt "
+                f"{line.section_label or line.section_type} um {skipped} Lyrics-Zeile(n) nach vorne korrigiert."
+            )
+
+        idx = section_end
+    return report
+
+
+def _script_rebalance_ambiguous_intro_prefix(lines: list[LyricLine], hyp_first_start: float | None) -> list[str]:
+    """Korrigiert einen ambigen ersten Intro-ASR-Block.
+
+    Manche ASR-Ausgaben erkennen den ersten hörbaren Intro-Call als Anfang der
+    nächsten Intro-Zeile. Wenn davor eine kurze ungematchte Intro-Zeile steht
+    und der erste gematchte Intro-Block ungewöhnlich lang ist, darf diese kurze
+    Zeile nicht vor den ersten hörbaren Einsatz geschätzt werden. Stattdessen
+    beginnt sie am ersten ASR-Start; die folgende lange Intro-Zeile nutzt das
+    freie Fenster bis vor den ersten Nicht-Intro-Abschnitt.
+    """
+    if len(lines) < 3 or hyp_first_start is None:
+        return []
+    first = lines[0]
+    second = lines[1]
+    first_section = str(first.section_type or "").lower()
+    second_section = str(second.section_type or "").lower()
+    if first_section not in {"intro", "instrumental_intro"} or second_section not in {"intro", "instrumental_intro"}:
+        return []
+    if first.matched or not second.matched or second.start is None or second.end is None:
+        return []
+    second_start = float(second.start)
+    second_end = float(second.end)
+    if abs(second_start - float(hyp_first_start)) > 0.35:
+        return []
+    if second_end - second_start < 4.0:
+        return []
+
+    next_section_index: int | None = None
+    for idx in range(2, len(lines)):
+        section = str(lines[idx].section_type or "").lower()
+        if section and section not in {"intro", "instrumental_intro"}:
+            next_section_index = idx
+            break
+    if next_section_index is None:
+        return []
+    next_start = float(lines[next_section_index].start or 0.0)
+    if next_start <= second_end + 6.0:
+        return []
+
+    first_words = max(1, len(first.words or first.display.split()))
+    first_duration = max(1.8, min(3.2, 0.75 + first_words * 0.95))
+    first_start = float(hyp_first_start)
+    first_end = min(next_start - 0.65, first_start + first_duration)
+    second_start_new = first_end + 0.04
+    second_end_new = max(second_end, min(next_start - 0.55, next_start - 8.0))
+    if second_end_new <= second_start_new + 1.2:
+        return []
+
+    first.start = round(first_start, 3)
+    first.end = round(first_end, 3)
+    first.wstart = None
+    first.wend = None
+    second.start = round(second_start_new, 3)
+    second.end = round(second_end_new, 3)
+    second.wstart = None
+    second.wend = None
+    return [
+        f"INFO: Ambiger Intro-Start korrigiert: erste Intro-Zeile auf {first_start:.1f}s gesetzt, "
+        f"folgende Intro-Zeile bis {second_end_new:.1f}s verlaengert."
+    ]
+
+
+def _script_insert_plausible_intro_repeated_lines(lines: list[LyricLine], hyp: list[HypWord]) -> list[str]:
+    """Fuegt plausibel wiederholte Intro-Zeilen ein, wenn Suno sie zusaetzlich singt.
+
+    Diese Sicherung greift genau fuer den Praxisfall, in dem der offizielle
+    Songtext eine Intro-Zeile nur einmal enthaelt, Suno sie vor dem Verse aber
+    ein zweites Mal singt. Manche ASR-Modelle geben die Wiederholung nicht als
+    sauberes zweites Volltreffer-Fenster aus; dann wuerde die SRT trotz
+    Neugenerierung nur eine lange oder einzelne Intro-Zeile zeigen. Die Funktion
+    arbeitet konservativ und nur im fruehen Intro vor dem ersten Nicht-Intro-
+    Abschnitt. Es werden keine APIs, DB-Schemata oder Taskablaeufe geaendert.
+    """
+    report: list[str] = []
+    if not lines:
+        return report
+
+    i = 0
+    while i < min(len(lines) - 1, 8):
+        line = lines[i]
+        next_line = lines[i + 1]
+        section_type = str(line.section_type or "").lower()
+        next_section_type = str(next_line.section_type or "").lower()
+        if section_type not in {"intro", "instrumental_intro"}:
+            i += 1
+            continue
+        if not next_line.starts_section or next_section_type in {"intro", "instrumental_intro"}:
+            i += 1
+            continue
+        if i > 0:
+            prev_tokens = _effective_line_tokens(lines[i - 1].display)
+            if prev_tokens == _effective_line_tokens(line.display):
+                i += 1
+                continue
+            # Wenn dieselbe Intro-Zeile im aktuellen Intro-Block bereits frueher
+            # vorkommt, wurde eine echte oder effektive Wiederholung schon
+            # materialisiert. Dann darf diese Fallback-Heuristik nicht noch ein
+            # weiteres synthetisches Duplikat am Ende der Intro-Luecke erzeugen.
+            if any(
+                str(lines[probe].section_type or "").lower() == section_type
+                and _effective_line_similarity(lines[probe].display, line.display) >= 0.92
+                for probe in range(0, i)
+            ):
+                i += 1
+                continue
+        tokens = line.match_tokens or _effective_line_tokens(line.display)
+        if len(tokens) < 3 or len(tokens) > 9:
+            i += 1
+            continue
+        if i + 1 < len(lines) and _effective_line_tokens(next_line.display) == _effective_line_tokens(line.display):
+            i += 1
+            continue
+
+        start = float(line.start or 0.0)
+        end = float(line.end or start)
+        next_start = float(next_line.start or 0.0)
+        if start <= 0.0 or next_start <= start:
+            i += 1
+            continue
+        if start > 18.0 or next_start > 48.0:
+            i += 1
+            continue
+
+        # Wenn direkt nach der Introzeile bereits Worte des kommenden Abschnitts
+        # auftauchen, handelt es sich nicht um eine wiederholte Introzeile,
+        # sondern um von Suno vorgezogenen Verse-/Hook-Text. Diesen Fall hat die
+        # fruehere Abschnittsanker-Logik bereits speziell abgesichert.
+        next_tokens = next_line.match_tokens or _effective_line_tokens(next_line.display)
+        early_next_section = _script_find_time_occurrence(
+            next_tokens,
+            hyp,
+            start_time=end + 0.01,
+            end_time=min(next_start - 0.10, end + 5.0),
+        )
+        if early_next_section is not None:
+            i += 1
+            continue
+
+        single_duration = _script_estimated_repeat_line_duration(line)
+        duration = max(0.0, end - start)
+        gap_after = max(0.0, next_start - end)
+        intro_window = next_start - start
+        # Ohne ausreichend großes Intro-Fenster soll keine synthetische
+        # Wiederholung entstehen. Kurze normale Pausen vor dem Verse bleiben frei.
+        if intro_window < max(6.2, single_duration * 2.25):
+            i += 1
+            continue
+
+        occurrence = _script_find_time_occurrence(
+            tokens,
+            hyp,
+            start_time=min(next_start - 0.2, max(end + 0.18, start + single_duration * 0.85)),
+            end_time=max(start + single_duration, next_start - 0.15),
+        )
+
+        observed_word_span = _script_observed_word_span_seconds(line)
+        observed_span = observed_word_span if observed_word_span is not None else duration
+        compact_first_take = observed_span <= min(single_duration * 0.85, 2.35)
+        has_large_gap = gap_after >= single_duration + 1.25
+        has_repeat_hint = occurrence is not None
+        synthetic_gap_repeat_allowed = (
+            has_large_gap
+            and intro_window >= single_duration * 3.1
+            and compact_first_take
+        )
+        if not (has_repeat_hint or synthetic_gap_repeat_allowed):
+            i += 1
+            continue
+
+        if occurrence:
+            duplicate_start = float(occurrence.get("start") or 0.0)
+            duplicate_end_hint = float(occurrence.get("end") or duplicate_start)
+        else:
+            # Wenn Groq/Whisper in einer langen Intro-Luecke keine verwertbaren
+            # Worte fuer die Wiederholung liefert, darf die Wiederholung nicht
+            # direkt nach dem ersten kurzen Treffer erscheinen. In diesem Fall
+            # liegt Sunos zusaetzliche Intro-Zeile typischerweise kurz vor dem
+            # eigentlichen Abschnittsstart. Kurze Luecken behalten das alte
+            # direkte Verhalten.
+            if gap_after >= max(5.5, single_duration * 2.0) and intro_window >= single_duration * 3.6:
+                duplicate_start = max(end + 0.55, next_start - single_duration * 2.0)
+            else:
+                duplicate_start = min(next_start - single_duration - 0.08, end + 0.55)
+            duplicate_end_hint = duplicate_start + single_duration
+
+        if duplicate_start <= start + 0.65 or duplicate_start >= next_start - 0.65:
+            i += 1
+            continue
+
+        first_end = min(end, max(start + 0.75, min(duplicate_start - 0.05, start + single_duration)))
+        duplicate_start = max(first_end + 0.08, duplicate_start)
+        duplicate_end = min(next_start - 0.05, max(duplicate_end_hint + 0.35, duplicate_start + min(single_duration, 2.8)))
+        if duplicate_end <= duplicate_start + 0.45:
+            i += 1
+            continue
+
+        line.end = round(first_end, 3)
+        line.wstart = None
+        line.wend = None
+        duplicate = LyricLine(
+            index=line.index,
+            display=line.display,
+            words=list(line.words or []),
+            tok_counts=list(line.tok_counts or []),
+            match_tokens=list(line.match_tokens or []),
+            weight=float(line.weight or 1.0),
+            matched=bool(has_repeat_hint),
+            start=round(duplicate_start, 3),
+            end=round(duplicate_end, 3),
+            wstart=None,
+            wend=None,
+            section_label=line.section_label,
+            section_type=line.section_type,
+            starts_section=False,
+        )
+        lines.insert(i + 1, duplicate)
+        reflow_report = _script_reflow_section_after_intro_repeat(lines, i + 1)
+        report.append(
+            f"INFO: Plausible Suno-Intro-Wiederholung als effektive SRT-Zeile ergaenzt: "
+            f"{line.display!r} bei {duplicate_start:.1f}s vor Abschnitt {next_line.section_label or next_line.section_type}."
+        )
+        if reflow_report:
+            report.append(reflow_report)
+        i += 2
     return report
 
 
@@ -536,13 +2827,45 @@ def _script_compute_word_times(lines: list[LyricLine]) -> None:
         end = float(line.end or start)
         existing_start = line.wstart or []
         existing_end = line.wend or []
-        if existing_start and existing_end and len(existing_start) == len(words):
+        if existing_start and existing_end and len(existing_start) == len(words) and len(existing_end) == len(words):
+            # Exakte ASR-Wortanker uebernehmen; nur fehlende Woerter (None)
+            # werden gewichtet zwischen den umliegenden Ankern interpoliert.
+            weights = [_script_word_weight(word) for word in words]
+            filled_start: list[float | None] = [
+                float(value) if value is not None else None for value in existing_start
+            ]
+            filled_end: list[float | None] = [
+                float(value) if value is not None else None for value in existing_end
+            ]
+            count = len(words)
+            idx = 0
+            while idx < count:
+                if filled_start[idx] is not None and filled_end[idx] is not None:
+                    idx += 1
+                    continue
+                gap_start = idx
+                while idx < count and (filled_start[idx] is None or filled_end[idx] is None):
+                    idx += 1
+                gap_end = idx  # exklusiv
+                left_time = float(filled_end[gap_start - 1]) if gap_start > 0 and filled_end[gap_start - 1] is not None else start
+                right_time = float(filled_start[gap_end]) if gap_end < count and filled_start[gap_end] is not None else end
+                right_time = max(right_time, left_time)
+                gap_weights = weights[gap_start:gap_end]
+                total_gap_weight = sum(gap_weights) or 1.0
+                span = right_time - left_time
+                cursor = left_time
+                for pos, weight in zip(range(gap_start, gap_end), gap_weights):
+                    part = span * (weight / total_gap_weight)
+                    filled_start[pos] = cursor
+                    filled_end[pos] = cursor + part
+                    cursor += part
+
             clamped_start: list[float] = []
             clamped_end: list[float] = []
             previous = start
-            for raw_start, raw_end in zip(existing_start, existing_end):
-                ws = min(max(float(raw_start), previous), end)
-                we = min(max(float(raw_end), ws), end)
+            for raw_start, raw_end in zip(filled_start, filled_end):
+                ws = min(max(float(raw_start if raw_start is not None else previous), previous), end)
+                we = min(max(float(raw_end if raw_end is not None else ws), ws), end)
                 clamped_start.append(ws)
                 clamped_end.append(we)
                 previous = we
@@ -628,6 +2951,38 @@ def _script_to_portrait_srt(lines: list[LyricLine], max_chars: int = 22, min_dur
     return ("\n\n".join(blocks).strip() + "\n") if blocks else ""
 
 
+def _extend_srt_segments_to_next_start(segments: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], int]:
+    rows = [dict(segment) for segment in segments or [] if isinstance(segment, dict)]
+    rows.sort(key=lambda item: (_seconds(item.get("start"), 0.0), _seconds(item.get("end"), 0.0), int(item.get("index") or 0)))
+    changed = 0
+    for index, segment in enumerate(rows[:-1]):
+        start = _seconds(segment.get("start"), 0.0)
+        next_start = _seconds(rows[index + 1].get("start"), start)
+        current_end = _seconds(segment.get("end"), start)
+        if next_start <= start + 0.05:
+            # Fast gleichzeitiger Folgestart: Verlaengern ist hier sinnlos, aber
+            # eine bestehende Ueberlappung darf nicht stehen bleiben.
+            if current_end > next_start:
+                segment["end"] = round(next_start if next_start > start else start + 0.02, 3)
+                changed += 1
+            continue
+        if abs(current_end - next_start) <= 0.001:
+            continue
+        segment["end"] = round(next_start, 3)
+        changed += 1
+    for index, segment in enumerate(rows, start=1):
+        segment["index"] = index
+    return rows, changed
+
+
+def _gapless_srt_text(srt_text: str) -> str:
+    segments = parse_srt_text(srt_text or "")
+    if not segments:
+        return srt_text
+    gapless, _ = _extend_srt_segments_to_next_start(segments)
+    return export_srt_text(gapless)
+
+
 def segments_to_half_srt(segments: list[dict[str, Any]], max_chars: int = 22, min_dur: float = 0.6) -> str:
     """Fallback-Half-SRT aus Segmentzeiten, z. B. nach manuellen Editor-Änderungen."""
     lines: list[LyricLine] = []
@@ -651,7 +3006,7 @@ def segments_to_half_srt(segments: list[dict[str, Any]], max_chars: int = 22, mi
         )
         lines.append(line)
     _script_compute_word_times(lines)
-    return _script_to_portrait_srt(lines, max_chars=max_chars, min_dur=min_dur)
+    return _gapless_srt_text(_script_to_portrait_srt(lines, max_chars=max_chars, min_dur=min_dur))
 
 
 def _clean_text(value: Any) -> str:
@@ -718,28 +3073,91 @@ def _normalize_srt_tag_text(text: str) -> str:
 
 
 SRT_VISIBLE_CONSONANT_STRETCH_RE = re.compile(r"([bcdfghjklmnpqrstvwxyzßBCDFGHJKLMNPQRSTVWXYZẞ])\1{2,}")
+SRT_VISIBLE_WORD_TOKEN_RE = re.compile(r"(?<![\wÄÖÜäöüßẞ])([A-Za-zÄÖÜäöüßẞ]+(?:-[A-Za-zÄÖÜäöüßẞ]+)*)(?![\wÄÖÜäöüßẞ])")
+SRT_VISIBLE_VOWEL_STRETCH_RE = re.compile(r"([aeiouyäöüAEIOUYÄÖÜ])\1{2,}")
+SRT_VISIBLE_CONSONANT_LETTER_RE = re.compile(r"[bcdfghjklmnpqrstvwxyzßBCDFGHJKLMNPQRSTVWXYZẞ]")
+SRT_VISIBLE_ADLIB_WORDS = {
+    "ah", "aha", "ha", "hah", "oh", "ooh", "uh", "uhh", "eh", "ey", "eyy", "yeah",
+    "yo", "ya", "yah", "mh", "mhm", "hmm", "mmm", "na", "la", "lalala",
+}
+SRT_VISIBLE_HYPHEN_SPACE_PREFIXES = {"zu"}
+
+
+def _looks_like_srt_vocal_adlib_token(token: str) -> bool:
+    compact = re.sub(r"[^A-Za-zÄÖÜäöüßẞ]", "", str(token or "")).lower()
+    if not compact:
+        return False
+    simplified = re.sub(r"([a-zäöüß])\1+", r"\1", compact)
+    return simplified in SRT_VISIBLE_ADLIB_WORDS
+
+
+def _record_srt_stretch_normalization(original: str, replacement: str, normalized: list[str] | None) -> None:
+    if normalized is not None and original != replacement:
+        normalized.append(f"{original}->{replacement}")
+
+
+def _normalize_srt_visible_hyphen_word(token: str) -> str:
+    """Glättet offensichtliche Suno-Singhilfen in normalen Wörtern.
+
+    ``zu-gehn`` ist für die SRT besser als zwei Wörter lesbar, während
+    künstliche Trennungen innerhalb eines Wortes wie ``Fle-hen`` wieder
+    zusammengeführt werden. Die Regel ist eng gehalten, damit echte
+    Bindestrichbegriffe nicht pauschal zerstört werden.
+    """
+    if "-" not in token:
+        return token
+    parts = [part for part in token.split("-") if part]
+    if len(parts) != 2:
+        return token
+    left, right = parts
+    if left.lower() in SRT_VISIBLE_HYPHEN_SPACE_PREFIXES and len(right) >= 3:
+        return f"{left} {right}"
+    if len(left) >= 3 and len(right) >= 2:
+        return f"{left}{right}"
+    return token
 
 
 def _normalize_srt_visible_word_stretches(text: str, normalized: list[str] | None = None) -> str:
-    """Normalisiert offensichtliche SRT-Anzeige-Artefakte wie ``Nachttt`` -> ``Nacht``.
+    """Normalisiert offensichtliche SRT-Anzeige-Artefakte in normalen Wörtern.
 
-    Die Regel ist absichtlich konservativ: Nur Konsonanten mit mindestens drei
-    Wiederholungen werden gekürzt. Vokal-Stretchings wie ``ohhh``/``yeahhh``
-    bleiben damit weitgehend unangetastet, während typische Suno-/Lyrics-
-    Artefakte wie ``Einnn teilll derrr Nachttt`` zuverlässig lesbar werden.
+    Die Funktion bleibt bewusst konservativ:
+    - Konsonanten-Stretchings werden wie bisher gekürzt, z. B. ``Nachttt`` -> ``Nacht``.
+    - Vokal-Stretchings werden nur in klaren normalen Wörtern mit mindestens
+      zwei Konsonanten gekürzt, z. B. ``Skalinooo`` -> ``Skalino`` oder
+      ``entlaaang`` -> ``entlang``.
+    - Kurze Adlibs/Ausrufe wie ``ahaaa``, ``ohhh`` oder ``yeahhh`` bleiben
+      erhalten, weil sie für den gesungenen Ausdruck relevant sein können.
+    - Suno-Längungsbindestriche in normalen Wörtern werden geglättet, z. B.
+      ``zu-gehn`` -> ``zu gehn`` und ``Fle-hen`` -> ``Flehen``.
     """
     value = str(text or "")
     if not value:
         return ""
 
-    def repl(match: re.Match[str]) -> str:
-        original = match.group(0)
-        replacement = match.group(1)
-        if normalized is not None and original != replacement:
-            normalized.append(f"{original}->{replacement}")
-        return replacement
+    def normalize_token(match: re.Match[str]) -> str:
+        token = match.group(1)
+        original = token
+        if _looks_like_srt_vocal_adlib_token(token):
+            return token
 
-    return SRT_VISIBLE_CONSONANT_STRETCH_RE.sub(repl, value)
+        token = _normalize_srt_visible_hyphen_word(token)
+
+        token = SRT_VISIBLE_CONSONANT_STRETCH_RE.sub(lambda consonant_match: consonant_match.group(1), token)
+
+        compact_for_adlib = re.sub(r"[^A-Za-zÄÖÜäöüßẞ]", "", token).lower()
+        consonant_count = len(SRT_VISIBLE_CONSONANT_LETTER_RE.findall(token))
+        should_normalize_vowels = (
+            len(compact_for_adlib) >= 5
+            and consonant_count >= 2
+            and not _looks_like_srt_vocal_adlib_token(token)
+        )
+        if should_normalize_vowels:
+            token = SRT_VISIBLE_VOWEL_STRETCH_RE.sub(lambda vowel_match: vowel_match.group(1), token)
+
+        _record_srt_stretch_normalization(original, token, normalized)
+        return token
+
+    return SRT_VISIBLE_WORD_TOKEN_RE.sub(normalize_token, value)
 
 def _looks_like_srt_stage_direction(text: str) -> bool:
     normalized = _normalize_srt_tag_text(text)
@@ -756,7 +3174,11 @@ def _looks_like_srt_structure_tag(text: str) -> bool:
     if not normalized:
         return False
     # Reine Struktur-/Prompttags wie "[Verse 1 | German Male Rap | Energy: High]"
-    # sollen niemals als Untertitelzeile erscheinen.
+    # sollen niemals als Untertitelzeile erscheinen. Die zentrale
+    # Abschnittserkennung aus waveform_service bleibt hier die führende Quelle,
+    # damit SRT-Cleanup und Timeline-/Waveform-Segmente dieselben Tags verstehen.
+    if extract_structure_marker(text):
+        return True
     if "|" in str(text or ""):
         return True
     return bool(SRT_CLEANUP_SECTION_HINT_RE.search(normalized))
@@ -1196,6 +3618,8 @@ def _looks_like_plain_srt_structure_line(text: str) -> bool:
     normalized = _normalize_srt_tag_text(text)
     if not normalized:
         return True
+    if extract_structure_marker(text):
+        return True
     if re.fullmatch(r"(?:intro|outro|verse|strophe|hook|chorus|refrain|bridge|pre chorus|post chorus|part|teil)\s*\d*", normalized):
         return True
     if _looks_like_style_only_prompt(text):
@@ -1320,9 +3744,9 @@ async def prepare_lyrics_for_srt_alignment(db: Session, asset: AudioAsset, lyric
         "z. B. 'Boot sequence initialized.', 'Unknown process detected.', 'Firewall breached.' oder 'System integrity compromised.'. "
         "Entferne nur die beschreibenden Tags darüber, nicht den folgenden gesprochenen Inhalt. "
         "Ändere keine Reihenfolge, übersetze nichts und erfinde keine Zeilen. "
-        "Offensichtliche Wiederholungs-/Tipp-Artefakte in normalen Wörtern darfst du konservativ normalisieren, "
-        "z. B. 'Ein teil der Nachttt' -> 'Ein teil der Nacht' und 'Einnn teilll derrr Nachttt' -> 'Ein teil der Nacht'. "
-        "Lass künstlerische Vokal-Adlibs und bewusst gedehnte Ausrufe unverändert, wenn sie nicht klar ein normales Wort beschädigen."
+        "Offensichtliche Wiederholungs-/Tipp-Artefakte und Suno-Längungsschreibweisen in normalen Wörtern darfst du konservativ normalisieren, "
+        "z. B. 'Ein teil der Nachttt' -> 'Ein teil der Nacht', 'Skalinooo' -> 'Skalino', 'Weeeg entlaaang' -> 'Weg entlang' und 'Fle-hen' -> 'Flehen'. "
+        "Lass künstlerische Vokal-Adlibs und bewusst gedehnte Ausrufe wie 'ahaaa', 'ohhh' oder 'yeahhh' unverändert, wenn sie nicht klar ein normales Wort beschädigen."
     )
     payload = {
         "mode": "srt_lyrics_cleanup",
@@ -1336,7 +3760,7 @@ async def prepare_lyrics_for_srt_alignment(db: Session, asset: AudioAsset, lyric
             "Beispiele für zu erhaltende Inhaltszeilen: Boot sequence initialized.; Unknown process detected.; Firewall breached.; System integrity compromised.",
             "Geklammerte gesungene oder gesprochene Wörter entklammern, nicht löschen, z. B. (Alla hopp!) -> Alla hopp!.",
             "Keine Zeilen umdichten, keine Übersetzung, keine neuen Wörter.",
-            "Offensichtliche beschädigte Wort-Stretchings konservativ normalisieren: Nachttt -> Nacht, Einnn teilll derrr Nachttt -> Ein teil der Nacht.",
+            "Offensichtliche beschädigte Wort-Stretchings und Suno-Längungsschreibweisen konservativ normalisieren: Nachttt -> Nacht, Skalinooo -> Skalino, Weeeg entlaaang -> Weg entlang, Fle-hen -> Flehen, zu-gehn -> zu gehn.",
             "Antwort JSON: clean_lyrics, removed_items, warnings.",
         ],
         "lyrics": base_text,
@@ -2732,32 +5156,67 @@ def _spread_lines_inside_time_window(assigned_lines: list[dict[str, Any]], assig
     return result
 
 
-def align_lyrics_to_timeline_bundle(lyrics: str, asr: AsrResult, duration_seconds: float) -> dict[str, Any]:
+def align_lyrics_to_timeline_bundle(lyrics: str, asr: AsrResult, duration_seconds: float, source_lyrics: str | None = None) -> dict[str, Any]:
     """Exaktes Lyrics-Alignment nach dem funktionierenden Referenzskript.
 
     Liefert zusätzlich eine `*.half.srt`-Variante für mobile Geräte.
     Die normale SRT nutzt Lyrics-Zeilen als Source of Truth; die Half-SRT splittet
     dieselben Zeilen wortbasiert mit Zeitinterpolation wie im CLI-Skript.
     """
-    lines = _script_parse_lyrics_text(lyrics, skip_prefixes=("#", "/", ";"), skip_parens=False)
-    if not lines:
-        raise HTTPException(status_code=422, detail="Der Songtext enthält keine sichtbaren Zeilen.")
-
-    hyp = [
-        HypWord(
-            norm=_script_tokenize_match(word.word)[0] if _script_tokenize_match(word.word) else str(word.word or "").strip().lower(),
-            start=word.start,
-            end=word.end,
-        )
-        for word in asr.words
-        if word.end >= word.start
-    ]
-    hyp = [word for word in hyp if word.norm]
+    # Einheitlicher Hyp-Aufbau für ALLE Backends: Groq/WhisperX liefern bereits
+    # expandierte Einzel-Tokens, OpenAI/Voxtral rohe Wörter. Das frühere
+    # `tokenize(word)[0]` hat bei rohen Mehrfach-Token-Wörtern (Bindestriche,
+    # zusammengezogene Erkennungen) alle Folge-Tokens verworfen und damit Anker
+    # verloren. `_script_expand_word` + `_script_finalize_hyp` sind für bereits
+    # expandierte Tokens idempotent und verteilen bei rohen Wörtern die Zeit
+    # korrekt auf alle Tokens.
+    raw_hyp_tokens: list[tuple[str, float | None, float | None]] = []
+    for word in asr.words:
+        if word.end < word.start:
+            continue
+        raw_hyp_tokens += _script_expand_word(str(word.word or ""), word.start, word.end)
+    hyp = _script_finalize_hyp(raw_hyp_tokens)
     if not hyp:
         raise HTTPException(status_code=422, detail="ASR lieferte keine verwertbaren Wort-Timestamps.")
 
-    report = _script_align_lines(lines, hyp, warn_factor=0.6)
+    effective_lyrics, effective_source_lyrics, effective_report, effective_info = _build_effective_srt_lyrics_from_asr(lyrics, source_lyrics, hyp)
+    lines = _script_parse_lyrics_text(effective_lyrics, skip_prefixes=("#", "/", ";"), skip_parens=False, source_lyrics=effective_source_lyrics or source_lyrics)
+    if not lines:
+        raise HTTPException(status_code=422, detail="Der Songtext enthält keine sichtbaren Zeilen.")
+
+    report = list(effective_report)
+    word_source = str(asr.raw.get("songstudio_word_source") or "") if isinstance(asr.raw, dict) else ""
+    if word_source == "segment_text_distributed":
+        report.append(
+            "WARN: Provider lieferte KEINE Wort-Timestamps (Datenschema-Abweichung); "
+            "Wortzeiten wurden gleichmaessig ueber Segmentfenster verteilt. "
+            "Zeitstempel koennen dadurch mehrere Sekunden abweichen -> Backend/Modell mit "
+            "Word-Timestamps verwenden (z. B. whisper-large-v3 statt Turbo-/Segment-only-Modell)."
+        )
+    elif word_source == "none":
+        report.append("WARN: Provider-Antwort enthielt weder Wort- noch Segment-Timestamps.")
+    report.extend(_script_align_lines(lines, hyp, warn_factor=0.6))
     _script_enforce_monotonic(lines, min_dur=0.6, gap=0.04)
+    squeezed_repeat_report = _script_drop_squeezed_unmatched_repeats(lines)
+    if squeezed_repeat_report:
+        report.extend(squeezed_repeat_report)
+        _script_enforce_monotonic(lines, min_dur=0.6, gap=0.04)
+    timing_repeat_report = _script_insert_repeated_lines_from_timing(lines, hyp)
+    if timing_repeat_report:
+        report.extend(timing_repeat_report)
+        _script_enforce_monotonic(lines, min_dur=0.6, gap=0.04)
+    intro_repeat_report = _script_insert_plausible_intro_repeated_lines(lines, hyp)
+    if intro_repeat_report:
+        report.extend(intro_repeat_report)
+        _script_enforce_monotonic(lines, min_dur=0.6, gap=0.04)
+    intro_block_prefix_report = _script_insert_missing_intro_block_prefix_repeats(lines)
+    if intro_block_prefix_report:
+        report.extend(intro_block_prefix_report)
+        _script_enforce_monotonic(lines, min_dur=0.6, gap=0.04)
+    repeated_block_report = _script_repair_explicit_repeated_section_blocks(lines, hyp)
+    if repeated_block_report:
+        report.extend(repeated_block_report)
+        _script_enforce_monotonic(lines, min_dur=0.6, gap=0.04)
     _script_compute_word_times(lines)
 
     segments: list[dict[str, Any]] = []
@@ -2779,13 +5238,18 @@ def align_lyrics_to_timeline_bundle(lyrics: str, asr: AsrResult, duration_second
         for segment in segments:
             segment.setdefault("alignment_report", report)
 
+    segments, gapless_changed = _extend_srt_segments_to_next_start(segments)
+    if gapless_changed:
+        report.append(f"INFO: Karaoke-SRT: {gapless_changed} Segment-Endzeiten bis zur naechsten Zeile verlaengert.")
+    segments, _ = _extend_srt_segments_to_next_start(segments)
     normalized_segments = validate_and_normalize_srt_segments(segments)
-    half_srt_text = _script_to_portrait_srt(lines, max_chars=22, min_dur=0.6)
+    half_srt_text = _gapless_srt_text(_script_to_portrait_srt(lines, max_chars=22, min_dur=0.6))
     return {
         "segments": normalized_segments,
         "half_srt_text": half_srt_text,
         "alignment_report": report,
         "half_max_chars": 22,
+        "effective_srt_lyrics": effective_info,
     }
 
 
@@ -2862,6 +5326,86 @@ def _transcription_only_segments_from_words(words: list[WordTiming]) -> list[dic
     return segments
 
 
+def _sanitize_transcription_only_segments(
+    segments: list[dict[str, Any]],
+    *,
+    min_duration: float = 0.6,
+    merge_gap: float = 0.45,
+    max_merged_duration: float = 9.0,
+) -> list[dict[str, Any]]:
+    """Bereinigt rohe ASR-Segmentgrenzen fuer den Transcription-only-Modus.
+
+    Ursache der Editor-Faelle "Segment endet 7,02s / naechstes startet 7,00s"
+    und "Segment nur 0,3s sichtbar": Whisper-Segmentgrenzen werden 1:1
+    uebernommen; sie ueberlappen bei Musik regelmaessig um 10-50ms und liefern
+    Mini-Segmente. Der Lyrics-Pfad normalisiert das ueber enforce_monotonic --
+    dieser Pfad hatte keine entsprechende Stufe.
+      1. Sortierung nach Startzeit
+      2. Mini-Segmente werden mit dem zeitlich naechsten Nachbarn zusammengefuehrt
+      3. Ueberlappungen werden geklemmt (Ende <= Folgestart), Reihenfolge monoton
+      4. Zu kurze Segmente werden in vorhandene Luecken auf Mindestdauer gestreckt
+    """
+    rows = [dict(segment) for segment in segments or [] if str(segment.get("text") or "").strip()]
+    rows.sort(key=lambda item: (_seconds(item.get("start"), 0.0), _seconds(item.get("end"), 0.0)))
+    if not rows:
+        return []
+
+    merged: list[dict[str, Any]] = []
+    index = 0
+    while index < len(rows):
+        segment = dict(rows[index])
+        start = _seconds(segment.get("start"), 0.0)
+        end = max(start, _seconds(segment.get("end"), start))
+        duration = end - start
+        if duration < min_duration:
+            prev = merged[-1] if merged else None
+            nxt = rows[index + 1] if index + 1 < len(rows) else None
+            prev_gap = start - _seconds(prev.get("end"), start) if prev else None
+            next_gap = (_seconds(nxt.get("start"), end) - end) if nxt else None
+            prev_ok = (
+                prev is not None
+                and prev_gap is not None
+                and prev_gap <= merge_gap
+                and (end - _seconds(prev.get("start"), start)) <= max_merged_duration
+            )
+            next_ok = (
+                nxt is not None
+                and next_gap is not None
+                and next_gap <= merge_gap
+                and (_seconds(nxt.get("end"), end) - start) <= max_merged_duration
+            )
+            if prev_ok and (not next_ok or prev_gap <= next_gap):
+                prev["text"] = f"{str(prev.get('text') or '').strip()} {str(segment.get('text') or '').strip()}".strip()
+                prev["end"] = round(max(_seconds(prev.get("end"), end), end), 3)
+                index += 1
+                continue
+            if next_ok:
+                follower = dict(nxt)
+                follower["text"] = f"{str(segment.get('text') or '').strip()} {str(follower.get('text') or '').strip()}".strip()
+                follower["start"] = round(min(start, _seconds(follower.get("start"), start)), 3)
+                rows[index + 1] = follower
+                index += 1
+                continue
+        merged.append(segment)
+        index += 1
+
+    previous_end = 0.0
+    for position, segment in enumerate(merged):
+        start = max(previous_end, _seconds(segment.get("start"), previous_end))
+        end = max(start + 0.05, _seconds(segment.get("end"), start))
+        next_start = _seconds(merged[position + 1].get("start"), end) if position + 1 < len(merged) else None
+        if next_start is not None and end > next_start:
+            end = max(start + 0.05, next_start)
+        if end - start < min_duration:
+            limit = next_start if next_start is not None else start + min_duration
+            end = min(max(end, start + min_duration), max(limit, start + 0.05))
+        segment["start"] = round(start, 3)
+        segment["end"] = round(end, 3)
+        segment["index"] = position + 1
+        previous_end = segment["end"]
+    return merged
+
+
 def build_transcription_only_srt_bundle(asr: AsrResult, duration_seconds: float) -> dict[str, Any]:
     """Fallback fuer Audios ohne sichtbare Lyrics; Standard bleibt Lyrics-Alignment."""
     segments = _transcription_only_segments_from_asr_segments(asr.segments or [])
@@ -2882,6 +5426,8 @@ def build_transcription_only_srt_bundle(asr: AsrResult, duration_seconds: float)
         }]
         source = "full_text"
 
+    segments = _sanitize_transcription_only_segments(segments)
+    segments, _ = _extend_srt_segments_to_next_start(segments)
     normalized_segments = validate_and_normalize_srt_segments(segments)
     if not normalized_segments:
         raise HTTPException(status_code=422, detail="Transkription lieferte keinen verwertbaren Text fuer SRT.")
@@ -3001,6 +5547,7 @@ def _transcribe_openai_sync(audio_path: Path, language: str) -> AsrResult:
     if response.status_code >= 400:
         raise TranscriptionBackendError(f"OpenAI Whisper API Fehler {response.status_code}: {response.text[:500]}")
     raw = response.json()
+    raw["songstudio_word_source"] = _detect_asr_word_source(raw)
     return AsrResult(text=str(raw.get("text") or ""), words=_extract_words(raw), segments=_extract_segments(raw), raw=raw)
 
 
@@ -3037,6 +5584,7 @@ def _transcribe_voxtral_sync(audio_path: Path, language: str) -> AsrResult:
     if response.status_code >= 400:
         raise TranscriptionBackendError(f"Voxtral API Fehler {response.status_code}: {response.text[:700]}")
     raw = response.json()
+    raw["songstudio_word_source"] = _detect_asr_word_source(raw)
     return AsrResult(text=str(raw.get("text") or ""), words=_extract_words(raw), segments=_extract_segments(raw), raw=raw)
 
 
@@ -3132,6 +5680,40 @@ def _prepare_groq_upload_audio_path(
         bitrate=bitrate,
     )
     return target
+
+
+def _detect_asr_word_source(payload: Any) -> str:
+    """Klassifiziert, woher die Wortzeiten der Provider-Antwort stammen.
+
+    Ursachen-Fix fuer stille Degradation: Liefert die API keine echten
+    Word-Timestamps (Datenschema-Abweichung, Modell ohne Wort-Support), werden
+    Woerter bisher stillschweigend gleichmaessig ueber die Segmentfenster
+    verteilt. Die SRT wirkt dann frueh im Song sekundenweise versetzt und erst
+    bei dichten Segmenten synchron. Diese Klassifikation macht den Fallback
+    im Debug-Log und Alignment-Report sichtbar.
+    """
+    if not isinstance(payload, dict):
+        return "none"
+    direct_words = payload.get("words")
+    if isinstance(direct_words, list) and any(
+        isinstance(word, dict) and word.get("start") is not None and word.get("end") is not None
+        for word in direct_words
+    ):
+        return "word_timestamps"
+    segments = payload.get("segments")
+    if isinstance(segments, list):
+        for segment in segments:
+            if not isinstance(segment, dict):
+                continue
+            words = segment.get("words")
+            if isinstance(words, list) and any(
+                isinstance(word, dict) and word.get("start") is not None and word.get("end") is not None
+                for word in words
+            ):
+                return "segment_word_timestamps"
+        if any(isinstance(segment, dict) and str(segment.get("text") or "").strip() for segment in segments):
+            return "segment_text_distributed"
+    return "none"
 
 
 def _transcribe_groq_sync(audio_path: Path, language: str, progress_callback: GroqProgressCallback | None = None) -> AsrResult:
@@ -3280,6 +5862,7 @@ def _transcribe_groq_sync(audio_path: Path, language: str, progress_callback: Gr
 
     raw = response.json()
     hyp = _script_flatten_words_from_payload(raw)
+    raw["songstudio_word_source"] = _detect_asr_word_source(raw)
     raw["backend"] = "groq"
     raw["model"] = model_name
     raw["text"] = str(raw.get("text") or "")
@@ -3475,6 +6058,7 @@ def _run_whisperx_sync(audio_path: Path, language: str) -> AsrResult:
     hyp = _script_flatten_words_from_segments(raw.get("segments", []) if isinstance(raw.get("segments"), list) else [])
     if not hyp:
         hyp = _script_flatten_words_from_payload(raw)
+    raw["songstudio_word_source"] = _detect_asr_word_source(raw)
     return AsrResult(text=str(raw.get("text") or ""), words=_script_hyp_to_word_timings(hyp), segments=_extract_segments(raw), raw=raw)
 
 
@@ -3649,6 +6233,153 @@ def _json_safe_preview(value: Any, max_len: int = 240) -> Any:
         return {str(key): _json_safe_preview(item, max_len=max_len) for key, item in list(value.items())[:18]}
     text = str(value)
     return text if len(text) <= max_len else f"{text[:max_len]}…"
+
+
+def _srt_debug_payload(data: dict[str, Any] | None = None) -> dict[str, Any]:
+    return {str(key): _json_safe_preview(value, max_len=360) for key, value in (data or {}).items()}
+
+
+def _append_srt_debug_event(
+    db: Session | None,
+    task: SunoTask | None,
+    asset: AudioAsset | None,
+    event: str,
+    *,
+    detail: str | None = None,
+    data: dict[str, Any] | None = None,
+    commit: bool = True,
+) -> None:
+    """Schreibt kompakte Debug-Entscheidungen zur SRT-Erzeugung.
+
+    Der normale `steps_log` bleibt fuer UI-Fortschritt reserviert. `debug_log`
+    dokumentiert die technischen Entscheidungen: KI-Cleanup, Provider/ASR,
+    Alignment-Reports und SRT-Heuristiken. Keine kompletten Lyrics/Rohantworten
+    speichern; dafuer existiert die separate AI_STORE_RAW_RESPONSES-Logik.
+    """
+    safe_data = _srt_debug_payload(data)
+    asset_id = asset.id if asset is not None else None
+    task_id = task.id if task is not None else None
+    logger.info(
+        "SRT debug event=%s asset_id=%s task_id=%s detail=%s data=%s",
+        event,
+        asset_id,
+        task_id,
+        detail or "",
+        safe_data,
+    )
+    if task is None or db is None:
+        return
+
+    now = utc_now_naive()
+    entry = {
+        "at": now.isoformat(),
+        "event": event,
+        "detail": detail or event,
+        **safe_data,
+    }
+    payload = dict(task.response_payload or {})
+    debug_log = payload.get("debug_log") if isinstance(payload.get("debug_log"), list) else []
+    debug_log.append(entry)
+    payload["debug_log"] = debug_log[-SRT_DEBUG_LOG_LIMIT:]
+    payload["last_debug_event"] = entry
+    task.response_payload = payload
+    task.heartbeat_at = now
+    db.add(task)
+    if commit:
+        db.commit()
+        try:
+            db.refresh(task)
+        except Exception:
+            pass
+
+
+def _alignment_report_debug_summary(report: list[str] | None) -> dict[str, Any]:
+    rows = [str(item or "") for item in (report or []) if str(item or "").strip()]
+    warn_rows = [item for item in rows if item.upper().startswith("WARN")]
+    info_rows = [item for item in rows if item.upper().startswith("INFO")]
+    repeat_rows = [
+        item for item in rows
+        if any(marker in item.lower() for marker in ("wiederholung", "repeated", "effektive srt-lyrics", "intro-wiederholung"))
+    ]
+    return {
+        "total": len(rows),
+        "info_count": len(info_rows),
+        "warn_count": len(warn_rows),
+        "repeat_decisions": repeat_rows[:8],
+        "warnings": warn_rows[:8],
+        "first_entries": rows[:8],
+    }
+
+
+def _segment_debug_preview(segments: list[dict[str, Any]] | None, limit: int = 8) -> list[dict[str, Any]]:
+    preview: list[dict[str, Any]] = []
+    for segment in (segments or [])[:limit]:
+        preview.append({
+            "index": segment.get("index"),
+            "start": segment.get("start"),
+            "end": segment.get("end"),
+            "text": _json_safe_preview(segment.get("text"), max_len=90),
+        })
+    return preview
+
+
+def _positive_float(value: Any) -> float | None:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if number > 0 else None
+
+
+def _last_asr_word_end(asr: AsrResult | None) -> float | None:
+    if asr is None or not asr.words:
+        return None
+    ends = [_positive_float(getattr(word, "end", None)) for word in asr.words]
+    valid = [end for end in ends if end is not None]
+    return max(valid) if valid else None
+
+
+def _resolve_srt_duration_seconds(asset: AudioAsset | None, file_duration_seconds: float | int | None, asr: AsrResult | None = None) -> dict[str, Any]:
+    """Bestimmt eine robuste Dauer fuer SRT-Alignment und Struktursegmente.
+
+    Mutagen kann bei einzelnen Suno-MP3s deutlich falsche Werte liefern. Fuer
+    SRT ist die Provider-/DB-Dauer zusammen mit dem letzten ASR-Wort belastbarer
+    als ein einzelner kaputter lokaler Header. Offensichtlich abweichende
+    Dateidauern werden deshalb dokumentiert, aber nicht als harte Grenze genutzt.
+    """
+    file_duration = _positive_float(file_duration_seconds)
+    asset_duration = _positive_float(getattr(asset, "duration_seconds", None))
+    asr_end = _last_asr_word_end(asr)
+
+    trusted = [value for value in (asset_duration, asr_end) if value is not None]
+    if trusted:
+        anchor = max(trusted)
+        tolerance = max(12.0, anchor * 0.12)
+        if file_duration is not None and abs(file_duration - anchor) <= tolerance:
+            duration = max(anchor, file_duration)
+            source = "file_asset_asr_consensus" if asr_end is not None and asset_duration is not None else "file_consensus"
+            ignored_file_duration = False
+        else:
+            duration = anchor
+            source = "asset_asr_consensus" if asr_end is not None and asset_duration is not None else ("asset_duration" if asset_duration is not None else "asr_last_word")
+            ignored_file_duration = file_duration is not None
+    elif file_duration is not None:
+        duration = file_duration
+        source = "file_duration"
+        ignored_file_duration = False
+    else:
+        duration = 0.0
+        source = "unknown"
+        ignored_file_duration = False
+
+    return {
+        "duration_seconds": round(float(duration), 3),
+        "source": source,
+        "file_duration_seconds": round(float(file_duration), 3) if file_duration is not None else None,
+        "asset_duration_seconds": round(float(asset_duration), 3) if asset_duration is not None else None,
+        "asr_last_word_end_seconds": round(float(asr_end), 3) if asr_end is not None else None,
+        "ignored_file_duration": ignored_file_duration,
+    }
 
 
 def _transcription_timeout_seconds(backend: str) -> float:
@@ -3841,6 +6572,14 @@ async def _transcribe_audio_with_status_events(
                 detail=_groq_progress_detail(event, payload),
                 extra=payload,
             )
+            _append_srt_debug_event(
+                db,
+                srt_task,
+                asset,
+                f"provider_{event}",
+                detail=_groq_progress_detail(event, payload),
+                data=payload,
+            )
 
     try:
         while True:
@@ -3858,6 +6597,14 @@ async def _transcribe_audio_with_status_events(
                     "transcription_started",
                     detail=_groq_progress_detail(event, payload),
                     extra=payload,
+                )
+                _append_srt_debug_event(
+                    db,
+                    srt_task,
+                    asset,
+                    f"provider_{event}",
+                    detail=_groq_progress_detail(event, payload),
+                    data=payload,
                 )
                 queue_task = asyncio.create_task(queue.get())
 
@@ -3938,16 +6685,20 @@ def _create_srt_status_task(
 def _finish_srt_status_task(db: Session, task: SunoTask | None, asset: AudioAsset, status: str, message: str, result_payload: dict[str, Any] | None = None) -> None:
     now = utc_now_naive()
     if task:
-        task.status = status
-        task.completed_at = now
-        task.heartbeat_at = now
-        task.error_message = None if status == "SUCCESS" else message
-        task.result_payload = result_payload or {
+        existing_payload = dict(task.response_payload or {})
+        debug_log = existing_payload.get("debug_log") if isinstance(existing_payload.get("debug_log"), list) else []
+        final_result_payload = result_payload or {
             "audio_asset_id": asset.id,
             "status": status,
             "message": message,
         }
-        existing_payload = dict(task.response_payload or {})
+        if isinstance(final_result_payload, dict) and debug_log and "srt_debug_log" not in final_result_payload:
+            final_result_payload = {**final_result_payload, "srt_debug_log": debug_log}
+        task.status = status
+        task.completed_at = now
+        task.heartbeat_at = now
+        task.error_message = None if status == "SUCCESS" else message
+        task.result_payload = final_result_payload
         existing_progress = dict(existing_payload.get("progress") or {})
         final_phase = "completed" if status == "SUCCESS" else "failed"
         final_step, final_label = SRT_STATUS_PHASES.get(final_phase, (SRT_STATUS_TOTAL_STEPS, status))
@@ -4219,6 +6970,56 @@ async def generate_srt_for_audio_asset(
             db.add(srt_task)
             db.commit()
         _update_srt_status_step(db, srt_task, asset, "audio_ready", detail="Task-Payload aktualisiert.")
+        _append_srt_debug_event(
+            db,
+            srt_task,
+            asset,
+            "srt_configuration_resolved",
+            detail="SRT-Konfiguration, Lyrics-Quelle und Audioquelle wurden festgelegt.",
+            data={
+                "backend": backend,
+                "configured_language": configured_language,
+                "resolved_language": language,
+                "has_alignment_lyrics": has_alignment_lyrics,
+                "manual_lyrics": bool(manual_lyrics),
+                "source_lyrics_chars": len(source_lyrics or ""),
+                "clean_lyrics_chars": len(lyrics or ""),
+                "srt_ai_cleanup_enabled": bool(admin_settings.get("srt_ai_cleanup_enabled", True)),
+                "lyrics_cleanup_method": lyrics_cleanup_info.get("method") if isinstance(lyrics_cleanup_info, dict) else None,
+                "lyrics_cleanup_ai_used": bool((lyrics_cleanup_info.get("ai") or {}).get("used")) if isinstance(lyrics_cleanup_info, dict) and isinstance(lyrics_cleanup_info.get("ai"), dict) else False,
+                "language_detection": language_info,
+                "audio_source": transcription_audio_source,
+                "audio_path": str(transcription_audio_path),
+            },
+        )
+        if isinstance(lyrics_cleanup_info, dict):
+            deterministic = lyrics_cleanup_info.get("deterministic") if isinstance(lyrics_cleanup_info.get("deterministic"), dict) else {}
+            ai_cleanup = lyrics_cleanup_info.get("ai") if isinstance(lyrics_cleanup_info.get("ai"), dict) else {}
+            preservation = lyrics_cleanup_info.get("ai_content_preservation") if isinstance(lyrics_cleanup_info.get("ai_content_preservation"), dict) else {}
+            _append_srt_debug_event(
+                db,
+                srt_task,
+                asset,
+                "lyrics_cleanup_decision",
+                detail="Deterministische und optionale KI-Lyrics-Bereinigung ausgewertet.",
+                data={
+                    "method": lyrics_cleanup_info.get("method"),
+                    "source_chars": lyrics_cleanup_info.get("source_chars"),
+                    "clean_chars": lyrics_cleanup_info.get("clean_chars"),
+                    "deterministic_changed": deterministic.get("changed"),
+                    "deterministic_removed_count": deterministic.get("removed_count"),
+                    "deterministic_unwrapped_count": deterministic.get("unwrapped_count"),
+                    "ai_enabled": ai_cleanup.get("enabled"),
+                    "ai_used": ai_cleanup.get("used"),
+                    "ai_provider": ai_cleanup.get("provider"),
+                    "ai_model": ai_cleanup.get("model"),
+                    "ai_removed_count": len(ai_cleanup.get("removed_items") or []) if isinstance(ai_cleanup.get("removed_items"), list) else 0,
+                    "ai_warning_count": len(ai_cleanup.get("warnings") or []) if isinstance(ai_cleanup.get("warnings"), list) else 0,
+                    "ai_warnings": ai_cleanup.get("warnings") if isinstance(ai_cleanup.get("warnings"), list) else [],
+                    "preservation_changed": preservation.get("changed"),
+                    "preservation_restored_count": preservation.get("restored_count"),
+                },
+            )
 
         transcript = AudioTranscript(
             audio_asset_id=audio_asset_id,
@@ -4240,7 +7041,9 @@ async def generate_srt_for_audio_asset(
             extra={"transcript_id": transcript.id},
         )
 
-        duration = float(read_audio_duration_seconds(audio_path) or 0.0)
+        file_duration = float(read_audio_duration_seconds(audio_path) or 0.0)
+        duration_resolution = _resolve_srt_duration_seconds(asset, file_duration, None)
+        duration = float(duration_resolution.get("duration_seconds") or file_duration or 0.0)
         _update_srt_status_step(
             db,
             srt_task,
@@ -4251,6 +7054,7 @@ async def generate_srt_for_audio_asset(
                 "backend": backend,
                 "language": language,
                 "duration_seconds": round(duration, 3),
+                "duration_resolution": duration_resolution,
                 "timeout_seconds": _transcription_timeout_seconds(backend),
                 "groq_request_timeout_seconds": _groq_request_timeout_seconds() if backend == "groq" else None,
                 "groq_max_retries": _groq_max_retries() if backend == "groq" else None,
@@ -4265,6 +7069,35 @@ async def generate_srt_for_audio_asset(
             detail="Transkription abgeschlossen, Wortzeiten werden fuer Alignment vorbereitet.",
             extra={"word_count": len(asr.words or []), "asr_segments": len(asr.segments or [])},
         )
+        first_word = asr.words[0] if asr.words else None
+        last_word = asr.words[-1] if asr.words else None
+        duration_resolution = _resolve_srt_duration_seconds(asset, file_duration, asr)
+        duration = float(duration_resolution.get("duration_seconds") or duration or 0.0)
+        _append_srt_debug_event(
+            db,
+            srt_task,
+            asset,
+            "asr_completed",
+            detail="ASR-Ergebnis fuer SRT-Alignment vorbereitet.",
+            data={
+                "backend": backend,
+                "language": language,
+                "word_count": len(asr.words or []),
+                "asr_segments": len(asr.segments or []),
+                "first_word": {"word": first_word.word, "start": first_word.start, "end": first_word.end} if first_word else None,
+                "last_word": {"word": last_word.word, "start": last_word.start, "end": last_word.end} if last_word else None,
+                "duration_resolution": duration_resolution,
+            },
+        )
+        if duration_resolution.get("ignored_file_duration"):
+            _append_srt_debug_event(
+                db,
+                srt_task,
+                asset,
+                "duration_reconciled",
+                detail="Lokale Dateidauer weicht deutlich von DB-/ASR-Dauer ab und wurde fuer das Alignment nicht als harte Grenze genutzt.",
+                data=duration_resolution,
+            )
 
         if isinstance(asr.raw, dict):
             asr.raw["songstudio_language_detection"] = language_info
@@ -4279,7 +7112,7 @@ async def generate_srt_for_audio_asset(
             detail="Lyrics werden auf die Transkriptionszeiten ausgerichtet." if has_alignment_lyrics else "Keine Lyrics vorhanden; ASR-Text wird direkt als SRT segmentiert.",
             extra={"mode": "lyrics_alignment" if has_alignment_lyrics else "transcription_only_no_lyrics"},
         )
-        alignment_bundle = align_lyrics_to_timeline_bundle(lyrics, asr, duration) if has_alignment_lyrics else build_transcription_only_srt_bundle(asr, duration)
+        alignment_bundle = align_lyrics_to_timeline_bundle(lyrics, asr, duration, source_lyrics=source_lyrics) if has_alignment_lyrics else build_transcription_only_srt_bundle(asr, duration)
         segments = alignment_bundle["segments"]
         half_srt_text = str(alignment_bundle.get("half_srt_text") or "")
         srt_text = segments_to_srt(segments)
@@ -4297,6 +7130,24 @@ async def generate_srt_for_audio_asset(
                 "source": alignment_bundle.get("source"),
             },
         )
+        alignment_report = alignment_bundle.get("alignment_report") or []
+        _append_srt_debug_event(
+            db,
+            srt_task,
+            asset,
+            "alignment_decisions",
+            detail="SRT-Alignment und Heuristik-Entscheidungen ausgewertet.",
+            data={
+                "mode": alignment_bundle.get("mode") or "lyrics_alignment",
+                "source": alignment_bundle.get("source"),
+                "duration_seconds": round(duration, 3),
+                "segments": len(segments or []),
+                "half_srt": bool(half_srt_text.strip()),
+                "effective_srt_lyrics": alignment_bundle.get("effective_srt_lyrics"),
+                "alignment_report": _alignment_report_debug_summary(alignment_report),
+                "segment_preview": _segment_debug_preview(segments),
+            },
+        )
         if not srt_text.strip():
             raise HTTPException(status_code=422, detail="Alignment fehlgeschlagen: Es wurde keine SRT erzeugt.")
 
@@ -4310,6 +7161,19 @@ async def generate_srt_for_audio_asset(
             "files_written",
             detail="SRT- und optionale Half-SRT-Dateien wurden gespeichert.",
             extra={"srt_path": str(target_path), "half_srt": bool(half_srt_text.strip())},
+        )
+        _append_srt_debug_event(
+            db,
+            srt_task,
+            asset,
+            "srt_files_written",
+            detail="SRT-Dateien wurden lokal geschrieben.",
+            data={
+                "srt_path": str(target_path),
+                "half_srt": bool(half_srt_text.strip()),
+                "srt_chars": len(srt_text or ""),
+                "half_srt_chars": len(half_srt_text or ""),
+            },
         )
 
         transcript.srt_text = srt_text
@@ -4331,6 +7195,19 @@ async def generate_srt_for_audio_asset(
             extra={"structure_segments": len(structure_segments or [])},
             commit=False,
         )
+        _append_srt_debug_event(
+            db,
+            srt_task,
+            asset,
+            "structure_segments_decision",
+            detail="Waveform-/Abschnittssegmente aus SRT-Zeiten ausgewertet.",
+            data={
+                "has_alignment_lyrics": has_alignment_lyrics,
+                "structure_segments": len(structure_segments or []),
+                "structure_preview": structure_segments[:8] if structure_segments else [],
+            },
+            commit=False,
+        )
         db.commit()
         db.refresh(transcript)
         result = transcript_to_response(transcript, audio_asset_id)
@@ -4344,6 +7221,7 @@ async def generate_srt_for_audio_asset(
             result["srt_generation_source"] = alignment_bundle.get("source")
         if structure_segments:
             result["structure_segments"] = structure_segments
+        result["srt_debug_log"] = (srt_task.response_payload or {}).get("debug_log") if srt_task is not None else []
         _finish_srt_status_task(db, srt_task, asset, "SUCCESS", "SRT wurde erzeugt und gespeichert.", result)
         return result
     except HTTPException as exc:
@@ -4353,6 +7231,14 @@ async def generate_srt_for_audio_asset(
             transcript.updated_at = utc_now_naive()
             db.add(transcript)
             db.commit()
+        _append_srt_debug_event(
+            db,
+            srt_task,
+            asset,
+            "srt_failed",
+            detail=str(exc.detail),
+            data={"exception_type": type(exc).__name__, "status_code": exc.status_code},
+        )
         _update_srt_status_step(db, srt_task, asset, "failed", detail=str(exc.detail), status="FAILED")
         _finish_srt_status_task(db, srt_task, asset, "FAILED", str(exc.detail))
         raise
@@ -4363,6 +7249,14 @@ async def generate_srt_for_audio_asset(
             transcript.updated_at = utc_now_naive()
             db.add(transcript)
             db.commit()
+        _append_srt_debug_event(
+            db,
+            srt_task,
+            asset,
+            "srt_failed",
+            detail=str(exc),
+            data={"exception_type": type(exc).__name__, "backend_error": True},
+        )
         _update_srt_status_step(db, srt_task, asset, "failed", detail=str(exc), status="FAILED")
         _finish_srt_status_task(db, srt_task, asset, "FAILED", str(exc))
         raise HTTPException(status_code=502, detail=str(exc)) from exc
@@ -4373,6 +7267,14 @@ async def generate_srt_for_audio_asset(
             transcript.updated_at = utc_now_naive()
             db.add(transcript)
             db.commit()
+        _append_srt_debug_event(
+            db,
+            srt_task,
+            asset,
+            "srt_failed",
+            detail=str(exc),
+            data={"exception_type": type(exc).__name__},
+        )
         _update_srt_status_step(db, srt_task, asset, "failed", detail=str(exc), status="FAILED")
         _finish_srt_status_task(db, srt_task, asset, "FAILED", str(exc))
         raise HTTPException(status_code=500, detail=f"SRT-Erzeugung fehlgeschlagen: {exc}") from exc

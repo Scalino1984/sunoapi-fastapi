@@ -16,6 +16,7 @@ from app.services.audio_metadata_service import normalize_audio_content_type, re
 from app.services.audio_asset_repair_service import repair_audio_library, is_bad_image_asset
 from app.services.task_lifecycle_service import recover_stale_tasks
 from app.services.database_maintenance_service import inspect_database_maintenance, run_database_maintenance
+from app.services.cover_cache_maintenance_service import cache_external_cover_references
 from app.services.system_status_notification_service import create_system_status_notification
 from app.services.portable_path_service import to_portable_path
 from app.services.portable_backup_service import (
@@ -379,6 +380,51 @@ def database_maintenance_run(payload: dict[str, Any] | None = None, db: Session 
         commit=True,
     )
     return result_payload
+
+
+@router.post("/maintenance/cache-external-covers")
+async def cache_external_covers(payload: dict[str, Any] | None = None, db: Session = Depends(get_db)) -> dict[str, Any]:
+    """Lokalen Cache für externe Cover-Referenzen über die System-Wartung pflegen.
+
+    Diese Route ist bewusst von /api/archive/covers/cache-missing getrennt:
+    sie arbeitet mit Dry-Run als sicherem Standard, begrenztem Umfang und einem
+    Wartungs-Resultatformat für die Systemseite. Nicht als Audio-Asset-Cache
+    oder SRT-/Video-Nebenpfad zweckentfremden.
+    """
+    payload = payload or {}
+    confirm = bool(payload.get("confirm", False))
+    dry_run = bool(payload.get("dry_run", not confirm))
+    if not dry_run and not confirm:
+        raise HTTPException(status_code=400, detail="Echter Cover-Cache-Lauf benötigt confirm=true.")
+    try:
+        limit = int(payload.get("limit") or 50)
+    except (TypeError, ValueError):
+        limit = 50
+    limit = max(1, min(500, limit))
+    result = await cache_external_cover_references(db, dry_run=dry_run, limit=limit)
+    create_system_status_notification(
+        db,
+        event_type="external_cover_cache_dry_run" if dry_run else "external_cover_cache_completed",
+        title=("Externe Cover geprüft" if dry_run else "Externe Cover lokal gesichert"),
+        message=(
+            f"Kandidaten: {int(result.get('candidate_urls') or 0)}, "
+            f"Referenzen: {int(result.get('reference_count') or 0)}, "
+            f"Downloads: {int(result.get('downloaded') or 0)}, "
+            f"Fehler: {int(result.get('failed') or 0)}."
+        ),
+        severity="info" if dry_run or result.get("ok", True) else "warning",
+        target_tab="system",
+        target_payload={
+            "target_tab": "system",
+            "section": "cover_cache",
+            "dry_run": dry_run,
+            "limit": limit,
+            "result": result,
+            "click_target": "system_cover_cache",
+        },
+        commit=True,
+    )
+    return result
 
 
 @router.get("/export")

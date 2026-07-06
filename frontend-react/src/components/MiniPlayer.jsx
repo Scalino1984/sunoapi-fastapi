@@ -39,13 +39,15 @@ function srtSegmentsFromState(state, { preferHalf = false } = {}) {
   if (preferHalf) {
     return parseSrtText(state?.half_srt_text || '');
   }
+  const fileSegments = parseSrtText(state?.srt_text || '');
+  if (fileSegments.length) return fileSegments;
   if (Array.isArray(state?.segments) && state.segments.length) {
     return state.segments
       .map((segment) => ({ start: Number(segment.start || 0), end: Number(segment.end || 0), text: String(segment.text || '').trim() }))
       .filter((segment) => segment.text && segment.end > segment.start)
       .sort((a, b) => a.start - b.start);
   }
-  return parseSrtText(state?.srt_text || '');
+  return [];
 }
 
 function findActiveSrtSegment(segments, currentTime) {
@@ -58,28 +60,6 @@ function findActiveSrtSegment(segments, currentTime) {
     if (!active || start > Number(active.start || 0)) active = segment;
   }
   return active;
-}
-
-function findRecentlyEndedSrtSegment(segments, currentTime, holdSeconds = 0.45, bridgeGapSeconds = 1.8) {
-  const t = Number(currentTime || 0);
-  let previous = null;
-  const rows = segments || [];
-  for (const segment of rows) {
-    const start = Number(segment.start || 0);
-    const end = Number(segment.end || 0);
-    if (start > t) break;
-    if (end <= t && t - end <= holdSeconds) previous = segment;
-  }
-  if (previous) return previous;
-
-  for (let index = 0; index < rows.length; index += 1) {
-    const segment = rows[index];
-    const end = Number(segment.end || 0);
-    const next = rows[index + 1] || null;
-    const nextStart = Number(next?.start || 0);
-    if (end <= t && next && t < nextStart && nextStart - end <= bridgeGapSeconds) return segment;
-  }
-  return previous;
 }
 
 const TASK_SUCCESS_STATUSES = new Set(['SUCCESS', 'COMPLETED', 'COMPLETE', 'DONE', 'FINISHED']);
@@ -130,22 +110,35 @@ function parseMaybeJson(value) {
   try { return JSON.parse(value); } catch { return null; }
 }
 
+function positiveNumber(value) {
+  const number = Number(value || 0);
+  return Number.isFinite(number) && number > 0 ? number : 0;
+}
+
 function trustedAssetDuration(asset) {
-  const assetDuration = Number(asset?.duration_seconds || 0);
+  const assetDuration = positiveNumber(asset?.duration_seconds);
   const waveform = parseMaybeJson(asset?.waveform_json);
-  const waveformDuration = Number(waveform?.duration_seconds || 0);
-  if (Number.isFinite(waveformDuration) && waveformDuration > 0) return waveformDuration;
-  if (Number.isFinite(assetDuration) && assetDuration > 0) return assetDuration;
+  const waveformDuration = positiveNumber(waveform?.duration_seconds);
+  if (waveformDuration > 0) return waveformDuration;
+  if (assetDuration > 0) return assetDuration;
   return 0;
 }
 
 function resolvePlaybackDuration(nativeDuration, asset) {
-  const nativeValue = Number(nativeDuration || 0);
-  const trustedValue = trustedAssetDuration(asset);
-  if (trustedValue > 0) return trustedValue;
-  return nativeValue > 0 ? nativeValue : 0;
+  const nativeValue = positiveNumber(nativeDuration);
+  if (nativeValue > 0) return nativeValue;
+  return trustedAssetDuration(asset);
 }
 
+function resolveSeekDuration(audio, fallbackDuration, asset) {
+  const nativeValue = resolvePlaybackDuration(audio?.duration, asset);
+  if (nativeValue > 0) return nativeValue;
+  const fallbackValue = positiveNumber(fallbackDuration);
+  if (fallbackValue > 0) return fallbackValue;
+  return trustedAssetDuration(asset);
+}
+
+const SRT_DISPLAY_LEAD_SECONDS = 0;
 const MOBILE_SRT_MEDIA_QUERY = '(max-width: 760px)';
 
 function useMediaQuery(query) {
@@ -181,6 +174,9 @@ export function MiniPlayer({ queue, currentIndex, loop, sidebarMode = 'open', mo
   const lastPlayerCommandRef = useRef(0);
   const streamRetryRef = useRef({ assetId: null, count: 0 });
   const srtTaskWatchRef = useRef({ assetId: null, taskId: null, timer: null, attempts: 0 });
+  const playbackClockFrameRef = useRef(null);
+  const playbackClockLastUpdateRef = useRef(0);
+  const lastPlaybackNotifyRef = useRef(null);
   const [error, setError] = useState('');
   const [isPlaying, setIsPlaying] = useState(false);
   const [duration, setDuration] = useState(0);
@@ -333,6 +329,37 @@ export function MiniPlayer({ queue, currentIndex, loop, sidebarMode = 'open', mo
   }, [current?.id]);
 
   useEffect(() => () => clearSrtTaskWatcher(), []);
+
+  function syncAudioClock({ force = false } = {}) {
+    const audio = audioRef.current;
+    if (!audio) return;
+    const nextTime = Number(audio.currentTime || 0);
+    setCurrentTime((currentValue) => {
+      if (!force && Math.abs(Number(currentValue || 0) - nextTime) < 0.045) return currentValue;
+      return nextTime;
+    });
+  }
+
+  useEffect(() => {
+    if (!isPlaying || typeof window === 'undefined' || typeof window.requestAnimationFrame !== 'function') return undefined;
+    let cancelled = false;
+
+    const tick = (timestamp) => {
+      if (cancelled) return;
+      if (timestamp - Number(playbackClockLastUpdateRef.current || 0) >= 90) {
+        playbackClockLastUpdateRef.current = timestamp;
+        syncAudioClock();
+      }
+      playbackClockFrameRef.current = window.requestAnimationFrame(tick);
+    };
+
+    playbackClockFrameRef.current = window.requestAnimationFrame(tick);
+    return () => {
+      cancelled = true;
+      if (playbackClockFrameRef.current) window.cancelAnimationFrame(playbackClockFrameRef.current);
+      playbackClockFrameRef.current = null;
+    };
+  }, [isPlaying, currentAssetId]);
 
   useEffect(() => {
     if (typeof document === 'undefined') return undefined;
@@ -524,12 +551,29 @@ export function MiniPlayer({ queue, currentIndex, loop, sidebarMode = 'open', mo
   }, [muted]);
 
   useEffect(() => {
-    onPlaybackStateChange?.({
+    const nextState = {
       currentAssetId: current?.id || null,
       isPlaying,
       currentTime,
       duration: duration || Number(current?.duration_seconds || 0),
-    });
+    };
+    const previous = lastPlaybackNotifyRef.current || {};
+    const identityChanged = String(previous.currentAssetId || '') !== String(nextState.currentAssetId || '')
+      || Boolean(previous.isPlaying) !== Boolean(nextState.isPlaying)
+      || Math.abs(Number(previous.duration || 0) - Number(nextState.duration || 0)) >= 0.5;
+    const pausedTimeChanged = !nextState.isPlaying
+      && Math.abs(Number(previous.currentTime || 0) - Number(nextState.currentTime || 0)) >= 0.25;
+    const firstNotification = !lastPlaybackNotifyRef.current;
+
+    // currentTime aendert sich waehrend Playback sehr haeufig. Diese Ticks duerfen
+    // nicht in die App-/Library-State-Kette laufen, weil sie sonst Dropdowns,
+    // Textauswahl und Scrollbereiche permanent invalidieren. Der MiniPlayer rendert
+    // die Live-Uhr lokal; App-Seiten bekommen nur Identitaets-/Pause-Updates.
+    if (!firstNotification && nextState.isPlaying && !identityChanged) return;
+    if (!firstNotification && !identityChanged && !pausedTimeChanged) return;
+
+    lastPlaybackNotifyRef.current = nextState;
+    onPlaybackStateChange?.(nextState);
   }, [current?.id, isPlaying, currentTime, duration, current?.duration_seconds, onPlaybackStateChange]);
 
   useEffect(() => {
@@ -552,10 +596,9 @@ export function MiniPlayer({ queue, currentIndex, loop, sidebarMode = 'open', mo
   }, [playerCommand]);
 
   const srtSegments = useMemo(() => srtSegmentsFromState(srtState, { preferHalf: preferHalfSrtDisplay }), [srtState, preferHalfSrtDisplay]);
-  const activeSrtSegment = findActiveSrtSegment(srtSegments, currentTime);
+  const srtDisplayTime = Math.max(0, Number(currentTime || 0) + SRT_DISPLAY_LEAD_SECONDS);
   const hasSrt = srtSegments.length > 0;
-  const heldSrtSegment = activeSrtSegment ? null : findRecentlyEndedSrtSegment(srtSegments, currentTime);
-  const displayedSrtSegment = activeSrtSegment || heldSrtSegment || null;
+  const displayedSrtSegment = findActiveSrtSegment(srtSegments, srtDisplayTime);
   const displayedSrtText = displayedSrtSegment?.text || '';
   const displayedSrtLength = displayedSrtText.replace(/\s+/g, ' ').trim().length;
   const displayedSrtFontSize = displayedSrtLength > 165
@@ -564,20 +607,12 @@ export function MiniPlayer({ queue, currentIndex, loop, sidebarMode = 'open', mo
       ? '0.92rem'
       : '1rem';
 
-  useEffect(() => {
-    if (typeof window === 'undefined' || !current?.id) return;
-    window.dispatchEvent(new CustomEvent('player:srt-line', {
-      detail: {
-        assetId: current.id,
-        text: displayedSrtText,
-        start: displayedSrtSegment?.start || 0,
-        end: displayedSrtSegment?.end || 0,
-        hasSrt,
-        isPlaying,
-        duration: duration || Number(current?.duration_seconds || 0),
-      }
-    }));
-  }, [current?.id, hasSrt, displayedSrtText, displayedSrtSegment?.start, displayedSrtSegment?.end, isPlaying, duration, current?.duration_seconds]);
+  // WICHTIGER STABILITAETS-CONTRACT:
+  // Live-SRT-Zeilenwechsel bleiben lokal im MiniPlayer. Sie duerfen nicht mehr
+  // als globales `player:srt-line`-Event an App-/Seitenkomponenten dispatcht
+  // werden, weil jeder Zeilenwechsel sonst alle aktiven Tabs/Editoren indirekt
+  // neu rendert und Textauswahl, Dropdowns sowie Scrollbereiche zerstoert.
+  // Nur dieser Komponentenbereich darf die laufende SRT-Zeile live aktualisieren.
 
   function handleAudioError() {
     if (!current?.id || !audioRef.current) {
@@ -766,25 +801,31 @@ export function MiniPlayer({ queue, currentIndex, loop, sidebarMode = 'open', mo
   }
 
   function onTimeUpdate() {
-    const time = audioRef.current?.currentTime || 0;
-    setCurrentTime(time);
+    syncAudioClock({ force: true });
   }
 
   function seekRelative(deltaSeconds) {
-    if (!audioRef.current) return;
-    const detectedDuration = duration || resolvePlaybackDuration(audioRef.current.duration, current) || 0;
-    const currentPosition = audioRef.current.currentTime || 0;
-    const target = Math.min(Math.max(0, currentPosition + Number(deltaSeconds || 0)), detectedDuration || Math.max(0, currentPosition + Number(deltaSeconds || 0)));
-    audioRef.current.currentTime = target;
+    const audio = audioRef.current;
+    if (!audio) return;
+    const detectedDuration = resolveSeekDuration(audio, duration, current);
+    const currentPosition = Number(audio.currentTime || 0);
+    const requestedTarget = Math.max(0, currentPosition + Number(deltaSeconds || 0));
+    const target = detectedDuration > 0 ? Math.min(detectedDuration, requestedTarget) : requestedTarget;
+    audio.currentTime = target;
+    setDuration((currentDuration) => detectedDuration > 0 && Math.abs(Number(currentDuration || 0) - detectedDuration) >= 0.05 ? detectedDuration : currentDuration);
     setCurrentTime(target);
   }
 
   function seekFromEvent(event) {
-    if (!audioRef.current || !duration || !progressRef.current) return;
+    const audio = audioRef.current;
+    if (!audio || !progressRef.current) return;
+    const detectedDuration = resolveSeekDuration(audio, duration, current);
+    if (!(detectedDuration > 0)) return;
     const rect = progressRef.current.getBoundingClientRect();
-    const ratio = Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width));
-    const target = ratio * duration;
-    audioRef.current.currentTime = target;
+    const ratio = rect.width > 0 ? Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width)) : 0;
+    const target = Math.max(0, Math.min(detectedDuration, ratio * detectedDuration));
+    audio.currentTime = target;
+    setDuration((currentDuration) => Math.abs(Number(currentDuration || 0) - detectedDuration) >= 0.05 ? detectedDuration : currentDuration);
     setCurrentTime(target);
   }
 
@@ -918,6 +959,9 @@ export function MiniPlayer({ queue, currentIndex, loop, sidebarMode = 'open', mo
         onPlay={() => setIsPlaying(true)}
         onPause={() => setIsPlaying(false)}
         onLoadedMetadata={onLoadedMetadata}
+        onPlaying={() => syncAudioClock({ force: true })}
+        onSeeking={() => syncAudioClock({ force: true })}
+        onSeeked={() => syncAudioClock({ force: true })}
         onTimeUpdate={onTimeUpdate}
         onError={handleAudioError}
         preload="metadata"
@@ -969,7 +1013,7 @@ export function MiniPlayer({ queue, currentIndex, loop, sidebarMode = 'open', mo
               {displayedSrtSegment && <small>{formatClock(displayedSrtSegment.start)} → {formatClock(displayedSrtSegment.end)}</small>}
             </div>
           ) : (
-            <Waveform asset={current} audioRef={audioRef} currentTime={currentTime} durationSeconds={duration || current.duration_seconds} />
+            <Waveform asset={current} audioRef={audioRef} currentTime={currentTime} durationSeconds={duration || undefined} />
           )}
         </div>
       </div>

@@ -78,6 +78,17 @@ class Settings(BaseSettings):
     suno_opencli_max_imported_clips: int = 2
     suno_opencli_model_map_json: str = '{"V5_5":"chirp-fenix","V5":"chirp-fenix","V4_5ALL":"chirp-bluejay","V4_5PLUS":"chirp-bluejay","V4_5":"chirp-bluejay","V4":"chirp-v4"}'
 
+    # Lokaler MP4-Cache: SunoAPI.org Video-URLs sind zeitlich begrenzt.
+    # Videos werden deshalb als eigenes Modell gespeichert und niemals in audio_assets
+    # einsortiert, damit Audio-, SRT-, Stem- und Waveform-Rootfunktionen stabil bleiben.
+    suno_video_cache_enabled: bool = True
+    suno_video_storage_dir: str = "storage/videos"
+    suno_video_public_route: str = "/media/videos"
+    suno_video_download_timeout_seconds: float = 180.0
+    suno_video_max_download_mb: int = 250
+    suno_video_allowed_extensions: str = ".mp4"
+    suno_video_allowed_content_types: str = "video/mp4,application/mp4,application/octet-stream"
+
     # Lokaler Cover-Cache: Suno-Bild-URLs laufen extern nach einiger Zeit ab.
     # Covers werden deshalb separat und dauerhaft lokal unter /media/covers ausgeliefert.
     suno_cover_cache_enabled: bool = True
@@ -234,7 +245,7 @@ class Settings(BaseSettings):
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
-    @field_validator("default_callback_path", "suno_audio_public_route", "suno_cover_public_route")
+    @field_validator("default_callback_path", "suno_audio_public_route", "suno_cover_public_route", "suno_video_public_route")
     @classmethod
     def normalize_route_path(cls, value: str) -> str:
         cleaned = str(value or "").strip()
@@ -306,6 +317,31 @@ class Settings(BaseSettings):
         if value in allowed:
             return value
         return self.opencli_model_map.get(value)
+
+    @property
+    def video_storage_path(self) -> Path:
+        return Path(self.suno_video_storage_dir).resolve()
+
+    @property
+    def video_allowed_extensions_list(self) -> list[str]:
+        extensions: list[str] = []
+        for item in self.suno_video_allowed_extensions.split(","):
+            extension = item.strip().lower()
+            if not extension:
+                continue
+            if not extension.startswith("."):
+                extension = f".{extension}"
+            if extension not in extensions:
+                extensions.append(extension)
+        return extensions or [".mp4"]
+
+    @property
+    def video_allowed_content_types_list(self) -> list[str]:
+        return [item.strip().lower() for item in self.suno_video_allowed_content_types.split(",") if item.strip()]
+
+    @property
+    def video_max_download_bytes(self) -> int:
+        return max(1, int(self.suno_video_max_download_mb)) * 1024 * 1024
 
     @property
     def cover_storage_path(self) -> Path:

@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { ArrowLeft, ArrowRight, ChevronDown, ChevronRight, Clock3, Copy, Download, Edit3, ExternalLink, FileText, Filter, Headphones, ListMusic, Maximize2, Minimize2, MoreHorizontal, Pause, Play, Plus, Scissors, Star, Tag, ThumbsUp, Trash2, ZoomIn, ZoomOut } from 'lucide-react';
+import { ArrowLeft, ArrowRight, ChevronDown, ChevronRight, Clock3, Copy, Download, Edit3, ExternalLink, FileText, Film, Filter, Headphones, ListMusic, Maximize2, Minimize2, MoreHorizontal, Pause, Play, Plus, Scissors, Star, Tag, ThumbsUp, Trash2, ZoomIn, ZoomOut } from 'lucide-react';
 import { api } from '../api/client.js';
 import { EmptyState } from '../components/EmptyState.jsx';
 import { Modal } from '../components/Modal.jsx';
@@ -31,6 +31,7 @@ const bundleContentOptions = [
   { key: 'audio', label: 'Audio', description: 'lokale Audiodatei' },
   { key: 'wav', label: 'WAV', description: 'konvertierte WAV-Datei' },
   { key: 'cover', label: 'Cover', description: 'lokaler Cover-Cache' },
+  { key: 'video', label: 'MP4', description: 'lokal gespeicherte Musikvideos' },
   { key: 'srt', label: 'SRT', description: 'Untertiteldatei' },
   { key: 'timestamped_lyrics', label: 'Timestamped Lyrics', description: 'Suno-Timingdaten als JSON' },
   { key: 'stems', label: 'Stems', description: 'Vocals und Instrumental' },
@@ -528,6 +529,39 @@ function hasAssetHalfSrt(asset, srtByAsset = {}) {
   return Boolean(asset?.half_srt_cached || state.half_srt_exists || state.half_srt_text || state.half_download_url);
 }
 
+function hasAssetVideo(asset) {
+  return Boolean(asset?.has_video || Number(asset?.video_count || 0) > 0 || asset?.latest_video?.id);
+}
+
+function latestAssetVideo(asset) {
+  return asset?.latest_video && asset.latest_video.id ? asset.latest_video : null;
+}
+
+function videoIsLocallyPlayable(video) {
+  const status = String(video?.status || '').toLowerCase();
+  return Boolean(video?.video_local || video?.public_url || video?.local_path || video?.filename || status === 'cached');
+}
+
+function videoPlaybackUrl(asset, video) {
+  if (!asset?.id || !video?.id) return '';
+  // Lokale /media/videos-URLs bevorzugen: sie sind fuer <video> stabiler als
+  // geschuetzte API-Fetches, weil Browser-Media-Elemente keine Bearer-Header
+  // setzen koennen. Die API-Stream-Route bleibt Fallback und kann Remote-URLs
+  // serverseitig sicher weiterleiten, wenn noch keine lokale Datei existiert.
+  return video.public_url || video.stream_url || api.archive.videoStreamUrl(asset.id, video.id);
+}
+
+function videoDownloadUrl(asset, video) {
+  if (!asset?.id || !video?.id) return '';
+  return video.download_url || api.archive.videoDownloadUrl(asset.id, video.id);
+}
+
+function assetVideoSummary(asset) {
+  const latest = latestAssetVideo(asset);
+  const count = Math.max(Number(asset?.video_count || 0), latest?.id ? 1 : 0);
+  return { latest, count, isLocal: videoIsLocallyPlayable(latest) };
+}
+
 function assetContentBadges(asset, srtByAsset = {}) {
   const badges = [];
   const metadata = asset?.metadata_json && typeof asset.metadata_json === 'object' ? asset.metadata_json : {};
@@ -535,6 +569,7 @@ function assetContentBadges(asset, srtByAsset = {}) {
   const stemFiles = stems.files && typeof stems.files === 'object' ? stems.files : {};
   const wav = metadata.wav_conversion && typeof metadata.wav_conversion === 'object' ? metadata.wav_conversion : {};
   if (hasAssetSrt(asset, srtByAsset)) badges.push({ key: 'srt', label: 'SRT', className: 'cached' });
+  if (hasAssetVideo(asset)) badges.push({ key: 'mp4', label: 'MP4', className: 'cached' });
   if (stemFiles.vocals || stemFiles.instrumental) badges.push({ key: 'stems', label: 'STEMS', className: 'cached' });
   if (wav.available || wav.public_url || wav.download_url || wav.path) badges.push({ key: 'wav', label: 'WAV', className: 'cached' });
   if (metadata.timestamped_lyrics || metadata.timestampedLyrics) badges.push({ key: 'timestamped', label: 'TIMESTAMPED', className: 'cached' });
@@ -712,10 +747,12 @@ function parseSrtText(text) {
 }
 
 function srtSegmentsFromState(state) {
+  const fileSegments = parseSrtText(state?.srt_text || '');
+  if (fileSegments.length) return fileSegments;
   if (Array.isArray(state?.segments) && state.segments.length) {
     return state.segments.map(normalizeSrtSegment).filter((row) => row.text).sort((a, b) => a.start - b.start).map(normalizeSrtSegment);
   }
-  return parseSrtText(state?.srt_text || '');
+  return [];
 }
 
 function findActiveSrtSegment(segments, currentTime) {
@@ -730,26 +767,22 @@ function findActiveSrtSegment(segments, currentTime) {
   return active;
 }
 
-function findRecentlyEndedSrtSegment(segments, currentTime, holdSeconds = 0.45, bridgeGapSeconds = 1.8) {
-  const t = Number(currentTime || 0);
-  let previous = null;
-  const rows = segments || [];
-  for (const segment of rows) {
-    const start = Number(segment.start || 0);
-    const end = Number(segment.end || 0);
-    if (start > t) break;
-    if (end <= t && t - end <= holdSeconds) previous = segment;
-  }
-  if (previous) return previous;
 
-  for (let index = 0; index < rows.length; index += 1) {
-    const segment = rows[index];
-    const end = Number(segment.end || 0);
-    const next = rows[index + 1] || null;
-    const nextStart = Number(next?.start || 0);
-    if (end <= t && next && t < nextStart && nextStart - end <= bridgeGapSeconds) return segment;
+function isFrontendInteractionActive() {
+  if (typeof document === 'undefined') return false;
+  const activeElement = document.activeElement;
+  const tagName = String(activeElement?.tagName || '').toLowerCase();
+  if (['input', 'textarea', 'select'].includes(tagName)) return true;
+  if (activeElement?.isContentEditable) return true;
+  try {
+    const selection = typeof window !== 'undefined' && typeof window.getSelection === 'function' ? window.getSelection() : null;
+    if (selection && !selection.isCollapsed && String(selection.toString() || '').trim()) return true;
+  } catch {
+    // Selection-Abfrage ist nur ein Schutz gegen UI-Störungen; bei Browserfehlern ignorieren.
   }
-  return previous;
+  return Boolean(
+    document.querySelector('.audio-action-menu.is-open, .audio-action-menu-portal, .modal-backdrop, .modal, [role="dialog"], details[open]')
+  );
 }
 
 export function LibraryPage({ assets, loadError = '', voices = [], playlists = [], onReload, onPlay, notify, onUseLyric, onReusePrompt, openAssetId, openAssetRequestKey = 0, onOpenAssetHandled, resetSignal = 0, onOpenDaw, playbackState = {}, onToggleCurrentPlayback, onDetailTitleChange, routeDetailSlug = '', searchQuery = '', onTrashChanged }) {
@@ -777,6 +810,7 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
   const [selectedIds, setSelectedIds] = useState(() => new Set());
   const [timestampAsset, setTimestampAsset] = useState(null);
   const [timestampLoading, setTimestampLoading] = useState(false);
+  const [videoModal, setVideoModal] = useState({ asset: null, videos: [], loading: false, error: '' });
   const [manualImportOpen, setManualImportOpen] = useState(false);
   const [manualImportBusy, setManualImportBusy] = useState(false);
   const [lyricsEditorAssetId, setLyricsEditorAssetId] = useState(null);
@@ -830,7 +864,6 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
   const [srtRawOpenIds, setSrtRawOpenIds] = useState(() => new Set());
   const [srtDraftByAsset, setSrtDraftByAsset] = useState({});
   const [variantAccordionState, setVariantAccordionState] = useState({});
-  const playerSrtLineRef = useRef(null);
   const [srtLiveColor, setSrtLiveColor] = useState(() => {
     try {
       return localStorage.getItem('react-srt-live-color') || 'cyan';
@@ -1128,22 +1161,12 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
     };
   }, [activeProject?.id]);
 
-  useEffect(() => {
-    function handlePlayerSrtLine(event) {
-      const detail = event?.detail || {};
-      if (Date.now() < Number(detailScrollInteractionUntilRef.current || 0)) return;
-      playerSrtLineRef.current = {
-        assetId: detail.assetId || null,
-        text: String(detail.text || '').trim(),
-        start: Number(detail.start || 0),
-        end: Number(detail.end || 0),
-        hasSrt: detail.hasSrt !== false,
-        isPlaying: Boolean(detail.isPlaying),
-      };
-    }
-    window.addEventListener('player:srt-line', handlePlayerSrtLine);
-    return () => window.removeEventListener('player:srt-line', handlePlayerSrtLine);
-  }, []);
+  // WICHTIGER STABILITAETS-CONTRACT:
+  // Inhaltsseiten duerfen nicht mehr auf Live-SRT-Zeilenwechsel reagieren.
+  // Die aktive SRT-Zeile wird ausschliesslich im MiniPlayer live aktualisiert.
+  // Library/Editoren bleiben dadurch bei Wiedergabe stabil: keine Re-Renders bei
+  // Zeilenwechseln, keine springenden Dropdowns, keine zerstoerte Textauswahl.
+
 
   useEffect(() => () => {
     Object.values(srtTaskWatchersRef.current || {}).forEach((watcher) => {
@@ -1168,31 +1191,22 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
     const currentAssetId = String(playbackState?.currentAssetId || '');
     if (!currentAssetId || currentAssetId !== assetId) return null;
 
-    const playerSrtLine = playerSrtLineRef.current;
-    const eventLine = String(playerSrtLine?.assetId || '') === assetId ? playerSrtLine : null;
-    if (eventLine?.text) {
-      return {
-        assetId: asset.id,
-        text: String(eventLine.text || '').trim(),
-        start: Number(eventLine.start || 0),
-        end: Number(eventLine.end || 0),
-        isPlaying: Boolean(eventLine.isPlaying ?? playbackState?.isPlaying),
-        hasSrt: eventLine.hasSrt !== false,
-      };
-    }
-
+    // Nur Snapshot-Anzeige fuer Detail-/Editorbereiche: Die Live-Zeit wird nicht
+    // per globalem SRT-Zeilenwechsel nachgefuehrt. Echte Live-Untertitel bleiben
+    // ausschliesslich im MiniPlayer, damit alle anderen Seitenbereiche bedienbar
+    // bleiben (Textauswahl, Dropdowns, Scrollen, Modals).
+    const snapshotTime = Number(playbackState?.currentTime || 0);
     const state = srtByAsset[asset.id] || {};
     const segments = srtSegmentsFromState(state);
     if (!segments.length) return null;
-    const time = Number(playbackState?.currentTime || 0);
-    const active = findActiveSrtSegment(segments, time);
-    const visible = active || findRecentlyEndedSrtSegment(segments, time);
+    const visible = findActiveSrtSegment(segments, snapshotTime);
     if (!visible?.text) return null;
     return {
       assetId: asset.id,
       text: String(visible.text || '').trim(),
       start: Number(visible.start || 0),
       end: Number(visible.end || 0),
+      currentTime: snapshotTime,
       isPlaying: Boolean(playbackState?.isPlaying),
       hasSrt: true,
     };
@@ -1337,7 +1351,7 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
       window.removeEventListener('assistant:srt-focus-editor', focusEditor);
       window.removeEventListener('assistant:srt-add-segment', addSegmentFromAssistant);
     };
-  }, [visibleAssets, activeProject?.id, playbackState?.currentAssetId, playbackState?.currentTime, srtByAsset]);
+  }, [visibleAssets, activeProject?.id, playbackState?.currentAssetId, srtByAsset]);
 
   useEffect(() => {
     const requestedAssetId = String(openAssetId || '').trim();
@@ -2817,6 +2831,54 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
     );
   }
 
+  async function cacheVideoFromModal(asset, video) {
+    if (!asset?.id || !video?.id) return;
+    setVideoModal((current) => ({ ...current, loading: true, error: '' }));
+    try {
+      const cached = await api.archive.cacheVideo(asset.id, video.id);
+      setVideoModal((current) => {
+        const currentVideos = Array.isArray(current.videos) ? current.videos : [];
+        const nextVideos = currentVideos.length
+          ? currentVideos.map((item) => String(item.id) === String(cached.id) ? cached : item)
+          : [cached];
+        return { ...current, videos: nextVideos, loading: false, error: '' };
+      });
+      notify?.(t('library.video.cachedNow', 'MP4 wurde lokal gesichert.'), 'success');
+      onReload?.();
+    } catch (error) {
+      const message = error?.message || t('library.video.cacheError', 'MP4 konnte nicht lokal gesichert werden.');
+      setVideoModal((current) => ({ ...current, loading: false, error: message }));
+      notify?.(message, 'error');
+    }
+  }
+
+  function VideoSummaryCard({ asset }) {
+    const { latest: latestVideo, count: videoCount, isLocal } = assetVideoSummary(asset);
+    if (!hasAssetVideo(asset)) return null;
+    const playUrl = latestVideo?.id ? videoPlaybackUrl(asset, latestVideo) : '';
+    const downloadUrl = latestVideo?.id ? videoDownloadUrl(asset, latestVideo) : '';
+    return (
+      <div className="meta-card wide video-summary-card">
+        <div className="row between align-start">
+          <div>
+            <h4><Film size={16} /> {t('library.video.summaryTitle', 'MP4-Musikvideo')}</h4>
+            <p className="muted">{t('library.video.summaryText', 'Das Video ist an dieses AudioAsset gebunden und bleibt getrennt von der Audio-Kernlogik.')}</p>
+          </div>
+          <span className={`status ${isLocal ? 'cached' : 'warning'}`}>MP4 {isLocal ? t('library.status.localShort', 'lokal') : t('library.status.remoteShort', 'remote')}</span>
+        </div>
+        <p className="muted">
+          {t('library.video.summaryMeta', '{{count}} Video(s) · Status {{status}}', { count: videoCount || 1, status: latestVideo?.status || 'remote' })}
+          {latestVideo?.filename ? ` · ${latestVideo.filename}` : ''}
+        </p>
+        <div className="button-row wrap">
+          <button type="button" className="primary mp4-watch-button" onClick={(event) => openVideoModalFromEvent(event, asset)}><Film size={16} /> {t('library.video.watchMp4', 'MP4 ansehen')}</button>
+          {downloadUrl && <a className="button" href={downloadUrl} onClick={(event) => event.stopPropagation()}><Download size={15} /> {t('library.video.downloadMp4', 'MP4 herunterladen')}</a>}
+          {playUrl && <a className="button" href={playUrl} target="_blank" rel="noopener noreferrer" onClick={(event) => event.stopPropagation()}><ExternalLink size={15} /> {t('library.video.openDirect', 'Direkt öffnen')}</a>}
+        </div>
+      </div>
+    );
+  }
+
   function SrtCard({ asset }) {
     const state = srtByAsset[asset.id] || { exists: false, status: 'missing' };
     const busy = srtLoadingIds.has(asset.id);
@@ -2826,9 +2888,9 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
     const editorOpen = String(srtEditorAssetId || '') === String(asset.id);
     const rawOpen = srtRawOpenIds.has(asset.id);
     const segments = draftSegmentsForAsset(asset);
+    const liveLine = liveSrtLineForAsset(asset);
     const liveSegments = srtSegmentsFromState(state);
-    const activeSegment = isCurrentAsset(asset) ? findActiveSrtSegment(liveSegments, playbackState?.currentTime || 0) : null;
-    const visibleSegment = activeSegment || (isCurrentAsset(asset) ? findRecentlyEndedSrtSegment(liveSegments, playbackState?.currentTime || 0) : null);
+    const visibleSegment = liveLine || (!liveLine && isCurrentAsset(asset) ? findActiveSrtSegment(liveSegments, playbackState?.currentTime || 0) : null);
     const visibleText = String(visibleSegment?.text || '').trim();
     return (
       <div className="meta-card wide srt-card">
@@ -2896,9 +2958,9 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
     const hasSrt = hasAssetSrt(asset, srtByAsset);
     const hasHalfSrt = hasAssetHalfSrt(asset, srtByAsset);
     const segments = draftSegmentsForAsset(asset);
+    const liveLine = liveSrtLineForAsset(asset);
     const liveSegments = srtSegmentsFromState(state);
-    const activeSegment = isCurrentAsset(asset) ? findActiveSrtSegment(liveSegments, playbackState?.currentTime || 0) : null;
-    const visibleSegment = activeSegment || (isCurrentAsset(asset) ? findRecentlyEndedSrtSegment(liveSegments, playbackState?.currentTime || 0) : null);
+    const visibleSegment = liveLine || (!liveLine && isCurrentAsset(asset) ? findActiveSrtSegment(liveSegments, playbackState?.currentTime || 0) : null);
     const visibleText = String(visibleSegment?.text || '').trim();
     const rawOpen = srtRawOpenIds.has(asset.id);
     return (
@@ -3585,6 +3647,40 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
     });
   }
 
+  async function openVideoModal(asset) {
+    if (!asset?.id) return;
+    const optimisticVideo = latestAssetVideo(asset);
+    const optimisticVideos = optimisticVideo ? [optimisticVideo] : [];
+    // Sofort sichtbar machen. Die Detailabfrage darf das Modal nicht blockieren
+    // und darf keine Warnung erzeugen, solange die Library bereits latest_video
+    // mit valider Video-ID geliefert hat.
+    setVideoModal({ asset, videos: optimisticVideos, loading: true, error: '' });
+    try {
+      const videos = await api.archive.videos(asset.id);
+      const normalizedVideos = Array.isArray(videos) && videos.length ? videos : optimisticVideos;
+      setVideoModal({ asset, videos: normalizedVideos, loading: false, error: '' });
+    } catch (error) {
+      const message = error?.message || t('library.video.loadError', 'Videos konnten nicht geladen werden.');
+      setVideoModal({
+        asset,
+        videos: optimisticVideos,
+        loading: false,
+        error: optimisticVideos.length ? '' : message,
+      });
+      if (!optimisticVideos.length) notify?.(message, 'error');
+    }
+  }
+
+  function openVideoModalFromEvent(event, asset) {
+    event?.preventDefault?.();
+    event?.stopPropagation?.();
+    void openVideoModal(asset);
+  }
+
+  function closeVideoModal() {
+    setVideoModal({ asset: null, videos: [], loading: false, error: '' });
+  }
+
   function AudioActionMenu({ asset, label = 'Aktionen', compact = false, dropUp = false, playQueue = null, playIndex = 0, project = null } = {}) {
     if (!asset?.id) return null;
     const key = audioMenuKey(asset);
@@ -3663,6 +3759,8 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
         {audioAnalysis && <button role="menuitem" type="button" onClick={() => { closeAudioMenu(); openAudioAiAnalysisReport(asset); }} disabled={audioAnalysisBusy}><FileText size={15} /> {t('library.actions.openAudioAnalysisReport', 'Audioanalyse-Report öffnen')}</button>}
         <button role="menuitem" type="button" onClick={() => { closeAudioMenu(); convertAssetToWav(asset, { download: true }); }} disabled={wavBusy || !canConvertAssetToWav(asset)}><Download size={15} /> {wavBusy ? t('library.actions.converting', 'Konvertiere…') : t('library.actions.convertToWav', 'Convert to WAV')}</button>
         {wav.available && <a role="menuitem" className="button" href={api.archive.wavDownloadUrl(asset.id)} onClick={closeAudioMenu}><Download size={15} /> {t('library.actions.downloadWav', 'WAV herunterladen')}</a>}
+        {hasAssetVideo(asset) && <button role="menuitem" type="button" onClick={(event) => { event.preventDefault(); event.stopPropagation(); closeAudioMenu(); void openVideoModal(asset); }}><Film size={15} /> {t('library.video.open', 'MP4 ansehen')}</button>}
+        {hasAssetVideo(asset) && latestAssetVideo(asset)?.id && <a role="menuitem" className="button" href={api.archive.videoDownloadUrl(asset.id, latestAssetVideo(asset).id)} onClick={closeAudioMenu}><Download size={15} /> {t('library.video.downloadMp4', 'MP4 herunterladen')}</a>}
         <button role="menuitem" type="button" onClick={() => { closeAudioMenu(); setTimestampAsset(asset); }}><Clock3 size={15} /> {t('library.timestamped.title', 'Timestamped Lyrics')}</button>
         <button role="menuitem" type="button" onClick={() => { closeAudioMenu(); openWorkflowWizard(asset); }}><FileText size={15} /> {t('library.workflow.audioWizard', 'Audio-Wizard')}</button>
         <button role="menuitem" type="button" onClick={() => { closeAudioMenu(); onOpenDaw?.(asset); }}><Scissors size={15} /> {t('library.actions.openInMiniDaw', 'In Mini-DAW öffnen')}</button>
@@ -3728,6 +3826,62 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
           <button type="button" onClick={(event) => openLyricsEditor(asset, event)}><Edit3 size={14} /> {t('library.promptLyrics.correctForSrt', 'Für SRT korrigieren')}</button>
         </div>
       </div>
+    );
+  }
+
+  function VideoPlayerModal() {
+    const asset = videoModal.asset;
+    const videos = videoModal.videos || [];
+    const first = videos[0] || latestAssetVideo(asset);
+    const playUrl = first?.id ? videoPlaybackUrl(asset, first) : '';
+    const downloadUrl = first?.id ? videoDownloadUrl(asset, first) : '';
+    const firstIsLocal = videoIsLocallyPlayable(first);
+    return (
+      <Modal open={Boolean(asset)} title={asset ? t('library.video.titleForAsset', 'MP4-Video: {{title}}', { title: pickTitle(asset) }) : t('library.video.title', 'MP4-Video')} onClose={closeVideoModal} wide>
+        {asset && <div className="stack video-player-modal">
+          <p className="muted">audio_assets.id {asset.id} · Audio-ID {asset.audio_id || '—'} · {videos.length || Number(asset.video_count || 0)} MP4</p>
+          {videoModal.loading && <p className="muted">{t('common.loading', 'Lädt…')}</p>}
+          {videoModal.error && <p className="warning-text">{videoModal.error}</p>}
+          {!videoModal.loading && !videos.length && <p className="warning-text">{t('library.video.noneStored', 'Für diese Variante ist noch keine MP4-Datei gespeichert.')}</p>}
+          {first?.id && (
+            <>
+              {!firstIsLocal && <p className="warning-text">{t('library.video.remoteOnly', 'Dieses MP4 ist noch nicht lokal gesichert. Der Player versucht den Remote-Link; sichere das Video lokal, solange die SunoAPI-URL noch gültig ist.')}</p>}
+              <video
+                key={`${asset.id}-${first.id}-${playUrl}`}
+                className="library-video-player"
+                src={playUrl}
+                controls
+                preload="metadata"
+                playsInline
+                onError={() => setVideoModal((current) => ({
+                  ...current,
+                  error: t('library.video.playbackError', 'MP4 konnte nicht geladen werden. Prüfe, ob die Datei lokal existiert oder sichere den Remote-Link erneut.'),
+                }))}
+              />
+              <div className="button-row wrap">
+                {downloadUrl && <a className="button primary" href={downloadUrl}><Download size={15} /> {t('library.video.downloadMp4', 'MP4 herunterladen')}</a>}
+                {playUrl && <a className="button" href={playUrl} target="_blank" rel="noopener noreferrer"><ExternalLink size={15} /> {t('library.video.openDirect', 'Direkt öffnen')}</a>}
+                <button type="button" onClick={() => cacheVideoFromModal(asset, first)} disabled={videoModal.loading || !first?.source_url}><Download size={15} /> {t('library.video.cacheLocal', 'MP4 lokal sichern')}</button>
+              </div>
+            </>
+          )}
+          {videos.length > 1 && <div className="stack compact">
+            {videos.map((video, index) => {
+              const itemPlayUrl = videoPlaybackUrl(asset, video);
+              const itemDownloadUrl = videoDownloadUrl(asset, video);
+              return <div key={video.id} className="meta-card wide">
+                <strong>MP4 {index + 1}</strong>
+                <p className="muted">{formatDate(video.created_at)} · {video.status || 'cached'} · {video.filename || video.public_url || video.source_url}</p>
+                <div className="button-row wrap">
+                  {itemPlayUrl && <a className="button" href={itemPlayUrl} target="_blank" rel="noopener noreferrer"><ExternalLink size={14} /> {t('library.video.openDirect', 'Direkt öffnen')}</a>}
+                  {itemDownloadUrl && <a className="button" href={itemDownloadUrl}><Download size={14} /> MP4</a>}
+                  <button type="button" onClick={() => cacheVideoFromModal(asset, video)} disabled={videoModal.loading || !video?.source_url}>{t('library.video.cacheLocalShort', 'lokal sichern')}</button>
+                </div>
+              </div>;
+            })}
+          </div>}
+        </div>}
+      </Modal>
     );
   }
 
@@ -4628,10 +4782,13 @@ ${generationOptionsText(asset)}`,
                   return (
                     <article className={`variant-card horizontal variant-accordion-card ${variantOpen ? 'is-open' : 'is-collapsed'} ${isCurrentAsset(asset) ? 'is-playing-row' : ''}`} key={asset.id} data-react-asset-row={asset.id}>
                       <label className="select-box"><input type="checkbox" checked={selectedIds.has(asset.id)} onChange={() => toggleSelected(asset.id)} /></label>
-                      <button className={`variant-cover-button ${isCurrentAsset(asset) ? 'is-active-cover' : ''}`} type="button" onClick={() => playAsset(playbackAsset, projectQueue, index, activeProject)} disabled={!isPlayable(asset)} title={isPlayingAsset(asset) ? t('player.pause', 'Pause') : t('player.play', 'Abspielen')}>
-                        <img src={pickCover(asset)} alt="Cover" onError={handleCoverImageError} />
-                        <span>{isPlayingAsset(asset) ? <Pause size={18} /> : <Play size={18} fill="currentColor" />}</span>
-                      </button>
+                      <div className="variant-cover-column">
+                        <button className={`variant-cover-button ${isCurrentAsset(asset) ? 'is-active-cover' : ''}`} type="button" onClick={() => playAsset(playbackAsset, projectQueue, index, activeProject)} disabled={!isPlayable(asset)} title={isPlayingAsset(asset) ? t('player.pause', 'Pause') : t('player.play', 'Abspielen')}>
+                          <img src={pickCover(asset)} alt="Cover" onError={handleCoverImageError} />
+                          <span>{isPlayingAsset(asset) ? <Pause size={18} /> : <Play size={18} fill="currentColor" />}</span>
+                        </button>
+                        {hasAssetVideo(asset) && <button type="button" className="primary mp4-watch-button variant-cover-mp4-button" onClick={(event) => openVideoModalFromEvent(event, asset)}><Film size={14} /> {t('library.video.watchMp4Short', 'MP4')}</button>}
+                      </div>
                       <div className="variant-body">
                         <button className="variant-accordion-toggle" type="button" onClick={() => toggleVariantAccordion(asset, index)} aria-expanded={variantOpen}>
                           <span className="variant-accordion-title">
@@ -4685,6 +4842,7 @@ ${generationOptionsText(asset)}`,
                             <LibraryAiTagsCard asset={asset} />
                             <AudioAiAnalysisCard asset={asset} />
                             <StemCard asset={asset} />
+                            {hasAssetVideo(asset) && <VideoSummaryCard asset={asset} />}
                             <SrtCard asset={asset} />
                             <AssetContentManager asset={asset} />
                           </div>
@@ -4752,6 +4910,7 @@ ${generationOptionsText(asset)}`,
           </div>}
         </Modal>
         <AudioOperationModal />
+        <VideoPlayerModal />
         <ActionModal
           asset={actionAsset}
           onClose={() => setActionAsset(null)}
@@ -4935,6 +5094,7 @@ ${generationOptionsText(asset)}`,
         </div>}
       </Modal>
       <AudioOperationModal />
+      <VideoPlayerModal />
       <ActionModal
         asset={actionAsset}
         onClose={() => setActionAsset(null)}
@@ -4959,6 +5119,7 @@ ${generationOptionsText(asset)}`,
         onReplaceCover={openCoverReplaceModal}
         onOpenCoverViewer={openPictureViewer}
         onDownloadCover={downloadCoverImage}
+        onOpenVideo={openVideoModal}
         onToggleFavorite={toggleAssetFavorite}
         isAssetFavorite={isAssetFavorite}
         favoriteSavingIds={favoriteSavingIds}
@@ -4967,7 +5128,7 @@ ${generationOptionsText(asset)}`,
   );
 }
 
-function ActionModal({ asset, onClose, onAction, onDelete, onOpenDaw, onReuse, onPrepareExtend, onRename, onCopy, onSaveLyrics, onEditLyrics, onOpenWizard, onPlaylist, onTimestamp, onGenerateSrt, onGenerateStems, onGenerateAudioAnalysis, onGenerateAiTags, onOpenAudioAnalysisReport, onOpenAiCover, onReplaceCover, onOpenCoverViewer, onDownloadCover, onToggleFavorite, isAssetFavorite = () => false, favoriteSavingIds = new Set() }) {
+function ActionModal({ asset, onClose, onAction, onDelete, onOpenDaw, onReuse, onPrepareExtend, onRename, onCopy, onSaveLyrics, onEditLyrics, onOpenWizard, onPlaylist, onTimestamp, onGenerateSrt, onGenerateStems, onGenerateAudioAnalysis, onGenerateAiTags, onOpenAudioAnalysisReport, onOpenAiCover, onReplaceCover, onOpenCoverViewer, onDownloadCover, onOpenVideo, onToggleFavorite, isAssetFavorite = () => false, favoriteSavingIds = new Set() }) {
   const { t } = useI18n();
   const audioAnalysis = readAudioAiAnalysis(asset);
   const aiTags = readLibraryAiTags(asset);
@@ -4986,6 +5147,7 @@ function ActionModal({ asset, onClose, onAction, onDelete, onOpenDaw, onReuse, o
           <button type="button" onClick={() => { onReplaceCover?.(asset); onClose?.(); }}><Edit3 size={16} /> {t('library.actions.replaceUploadCover', 'Upload-Cover ersetzen')}</button>
           <button type="button" onClick={() => { onOpenCoverViewer?.(asset); onClose?.(); }} disabled={isFallbackCoverUrl(pickCover(asset))}><Maximize2 size={16} /> {t('library.actions.viewCoverLarge', 'Cover groß anzeigen')}</button>
           <button type="button" onClick={() => { onDownloadCover?.(asset); onClose?.(); }} disabled={isFallbackCoverUrl(pickCover(asset))}><Download size={16} /> {t('library.actions.downloadCover', 'Cover herunterladen')}</button>
+          {hasAssetVideo(asset) && <button type="button" className="primary mp4-watch-button" onClick={(event) => { event.preventDefault(); event.stopPropagation(); onClose?.(); window.setTimeout(() => onOpenVideo?.(asset), 0); }}><Film size={16} /> {t('library.video.watchMp4', 'MP4 ansehen')}</button>}
           <button type="button" onClick={() => { onGenerateSrt?.(asset); onClose?.(); }}><FileText size={16} /> {t('library.bulk.createSrt', 'SRT erzeugen')}</button>
           <button type="button" onClick={() => { onGenerateStems?.(asset); onClose?.(); }}><Headphones size={16} /> {t('library.bulk.createStems', 'Stems erzeugen')}</button>
           <button type="button" onClick={() => { onGenerateAiTags?.(asset, Boolean(aiTags)); onClose?.(); }}><Tag size={16} /> {aiTags ? t('library.actions.regenerateAiTags', 'KI-Tags neu erzeugen') : t('library.actions.generateAiTags', 'KI-Tags erzeugen')}</button>

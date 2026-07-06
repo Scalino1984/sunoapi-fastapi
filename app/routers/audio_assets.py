@@ -15,10 +15,11 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from urllib.parse import urlparse
 
 
-from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Request, Response, UploadFile
+from fastapi.responses import FileResponse, RedirectResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
@@ -26,8 +27,8 @@ from sqlalchemy.orm import Session
 from app.config import get_settings
 from app.services.portable_path_service import to_portable_path
 from app.database import SessionLocal, get_db
-from app.models import ActivityLog, AudioAsset, AudioProject, AudioTranscript, Song, StatusNotification, SunoTask
-from app.schemas import AudioAssetRead
+from app.models import ActivityLog, AudioAsset, AudioProject, AudioTranscript, Song, StatusNotification, SunoTask, VideoAsset
+from app.schemas import AudioAssetRead, VideoAssetRead
 from app.services.audio_metadata_service import normalize_audio_content_type, read_audio_duration_seconds
 from app.services.audio_asset_repair_service import active_usable_audio_assets
 from app.services.audio_ai_analysis_service import (
@@ -47,8 +48,16 @@ from app.services.library_ai_tagging_service import (
     read_saved_library_ai_tags,
 )
 from app.services.background_task_runner import run_detached_process
-from app.services.task_lifecycle_service import heartbeat_task, is_cancel_requested, mark_task_started, start_task_heartbeat
+from app.services.task_lifecycle_service import (
+    append_task_debug_event,
+    append_task_step_log,
+    heartbeat_task,
+    is_cancel_requested,
+    mark_task_started,
+    start_task_heartbeat,
+)
 from app.services.audio_cache_service import AudioCacheService, AudioCandidate
+from app.services.video_asset_service import VideoAssetService
 from app.services.srt_transcript_service import (
     generate_srt_for_audio_asset,
     get_saved_transcript,
@@ -295,28 +304,45 @@ def _is_external_http_url(value: Any) -> bool:
 
 def _first_remote_audio_url_from_asset(asset: AudioAsset) -> str | None:
     metadata = _safe_metadata(asset.metadata_json)
-    candidates: list[Any] = [
-        asset.source_url,
-        metadata.get("source_url"),
-        metadata.get("audio_url"),
-        metadata.get("sourceAudioUrl"),
-        metadata.get("streamAudioUrl"),
-        metadata.get("downloadUrl"),
-    ]
-    for nested_key in ("candidate", "request_payload", "response_payload", "result_payload"):
+    candidates: list[Any] = []
+
+    preferred_keys = (
+        "audioUrl",
+        "audio_url",
+        "downloadUrl",
+        "download_url",
+        "mp3Url",
+        "mp3_url",
+        "wavUrl",
+        "wav_url",
+        "sourceAudioUrl",
+        "source_audio_url",
+        "streamAudioUrl",
+        "stream_audio_url",
+        "sourceStreamAudioUrl",
+        "source_stream_audio_url",
+        "url",
+    )
+    for nested_key in ("candidate", "response_payload", "result_payload", "request_payload"):
         nested = metadata.get(nested_key)
         if isinstance(nested, dict):
-            candidates.extend([
-                nested.get("audioUrl"),
-                nested.get("audio_url"),
-                nested.get("sourceAudioUrl"),
-                nested.get("source_audio_url"),
-                nested.get("streamAudioUrl"),
-                nested.get("stream_audio_url"),
-                nested.get("downloadUrl"),
-                nested.get("download_url"),
-                nested.get("url"),
-            ])
+            candidates.extend(nested.get(key) for key in preferred_keys)
+
+    candidates.extend([
+        metadata.get("audioUrl"),
+        metadata.get("audio_url"),
+        metadata.get("downloadUrl"),
+        metadata.get("download_url"),
+        metadata.get("sourceAudioUrl"),
+        metadata.get("source_audio_url"),
+        metadata.get("streamAudioUrl"),
+        metadata.get("stream_audio_url"),
+        metadata.get("source_url"),
+        asset.source_audio_url,
+        asset.source_url,
+        asset.stream_audio_url,
+    ])
+
     for value in candidates:
         if _is_external_http_url(value):
             return str(value).strip()
@@ -613,6 +639,23 @@ def _create_wav_status_task(db: Session, asset: AudioAsset, *, force: bool) -> S
     db.add(task)
     db.commit()
     db.refresh(task)
+    append_task_debug_event(
+        db,
+        task,
+        event="wav_conversion_started",
+        detail="WAV-Konvertierung wurde gestartet.",
+        data={"audio_asset_id": asset.id, "title": title, "force": force, "backend": "ffmpeg"},
+        commit=False,
+    )
+    append_task_step_log(
+        db,
+        task,
+        phase="started",
+        phase_label="WAV-Konvertierung gestartet",
+        detail="Die lokale Audiodatei wird mit ffmpeg nach WAV konvertiert.",
+        data={"audio_asset_id": asset.id},
+        commit=False,
+    )
     db.add(StatusNotification(
         event_type="wav_conversion_started",
         title=f"WAV-Konvertierung läuft: {title}",
@@ -637,6 +680,24 @@ def _finish_wav_status_task(db: Session, task: SunoTask | None, asset: AudioAsse
         task.status = status
         task.error_message = None if status == "SUCCESS" else message
         task.result_payload = result_payload or {"audio_asset_id": asset.id, "status": status, "message": message}
+        append_task_debug_event(
+            db,
+            task,
+            event="wav_conversion_finished",
+            detail=message,
+            level="info" if status == "SUCCESS" else "error",
+            data={"audio_asset_id": asset.id, "status": status, "result": result_payload or {}},
+            commit=False,
+        )
+        append_task_step_log(
+            db,
+            task,
+            phase="completed" if status == "SUCCESS" else "failed",
+            phase_label="WAV-Konvertierung abgeschlossen" if status == "SUCCESS" else "WAV-Konvertierung fehlgeschlagen",
+            detail=message,
+            data={"audio_asset_id": asset.id, "status": status},
+            commit=False,
+        )
         db.add(task)
         running_rows = (
             db.query(StatusNotification)
@@ -820,6 +881,23 @@ def _create_stem_status_task(db: Session, asset: AudioAsset) -> SunoTask:
     db.add(task)
     db.commit()
     db.refresh(task)
+    append_task_debug_event(
+        db,
+        task,
+        event="stem_generation_started",
+        detail="Stem-Erzeugung wurde gestartet.",
+        data={"audio_asset_id": asset.id, "title": title, "backend": "demucs"},
+        commit=False,
+    )
+    append_task_step_log(
+        db,
+        task,
+        phase="started",
+        phase_label="Stem-Erzeugung gestartet",
+        detail="Vocals und Instrumental werden lokal mit Demucs erzeugt.",
+        data={"audio_asset_id": asset.id},
+        commit=False,
+    )
     db.add(StatusNotification(
         event_type="stem_generation_started",
         title=f"Stem-Erzeugung läuft: {title}",
@@ -844,6 +922,24 @@ def _finish_stem_status_task(db: Session, task: SunoTask | None, asset: AudioAss
         task.status = status
         task.error_message = None if status == "SUCCESS" else message
         task.result_payload = result_payload or {"audio_asset_id": asset.id, "status": status, "message": message}
+        append_task_debug_event(
+            db,
+            task,
+            event="stem_generation_finished",
+            detail=message,
+            level="info" if status == "SUCCESS" else "error",
+            data={"audio_asset_id": asset.id, "status": status, "result": result_payload or {}},
+            commit=False,
+        )
+        append_task_step_log(
+            db,
+            task,
+            phase="completed" if status == "SUCCESS" else "failed",
+            phase_label="Stem-Erzeugung abgeschlossen" if status == "SUCCESS" else "Stem-Erzeugung fehlgeschlagen",
+            detail=message,
+            data={"audio_asset_id": asset.id, "status": status},
+            commit=False,
+        )
         db.add(task)
         running_rows = (
             db.query(StatusNotification)
@@ -1077,6 +1173,7 @@ BUNDLE_CONTENT_TYPES = {
     "cover",
     "stems",
     "srt",
+    "video",
 }
 
 
@@ -1102,6 +1199,9 @@ def _parse_bundle_include(value: str | None) -> set[str] | None:
         "vocals": "stems",
         "instrumental": "stems",
         "untertitel": "srt",
+        "mp4": "video",
+        "videos": "video",
+        "video": "video",
     }
     for part in parts:
         mapped = aliases.get(part, part)
@@ -1234,6 +1334,22 @@ def _build_audio_asset_bundle(db: Session, asset: AudioAsset, include: set[str] 
                 manifest["missing"].append({"type": "cover", "reason": "Kein Cover vorhanden."})
         else:
             manifest["skipped"].append({"type": "cover"})
+
+        if wants("video"):
+            videos = VideoAssetService(db).list_for_audio_asset(asset.id)
+            video_count = 0
+            for video in videos:
+                video_path = VideoAssetService(db).resolve_local_path(video)
+                if not video_path:
+                    continue
+                arcname = f"video/{_safe_zip_part(video_path.stem, 'video')}{video_path.suffix.lower() or '.mp4'}"
+                zip_file.write(video_path, arcname)
+                video_count += 1
+                manifest["included"].append({"type": "video", "path": arcname, "video_asset_id": video.id, "source": str(video_path)})
+            if not video_count:
+                manifest["missing"].append({"type": "video", "reason": "Keine lokale MP4-Datei vorhanden."})
+        else:
+            manifest["skipped"].append({"type": "video"})
 
         if wants("stems"):
             stem_files = _stem_file_entries(asset)
@@ -1433,6 +1549,32 @@ def _finish_bulk_status_task(db: Session, task_id: int, *, task_type: str, title
             "errors": errors or [],
             "completed_at": now.isoformat(),
         }
+        final_phase = "completed" if status == "SUCCESS" else ("partial_success" if status == "PARTIAL_SUCCESS" else "failed")
+        append_task_debug_event(
+            db,
+            task,
+            event="bulk_task_finished",
+            detail=message,
+            level="info" if status == "SUCCESS" else ("warning" if status == "PARTIAL_SUCCESS" else "error"),
+            data={
+                "task_type": task_type,
+                "status": status,
+                "success": success,
+                "failed": failed,
+                "skipped": skipped,
+                "errors_preview": (errors or [])[:20],
+            },
+            commit=False,
+        )
+        append_task_step_log(
+            db,
+            task,
+            phase=final_phase,
+            phase_label="Sammellauf abgeschlossen" if status == "SUCCESS" else ("Sammellauf teilweise abgeschlossen" if status == "PARTIAL_SUCCESS" else "Sammellauf fehlgeschlagen"),
+            detail=message,
+            data={"task_type": task_type, "status": status, "success": success, "failed": failed, "skipped": skipped},
+            commit=False,
+        )
         db.add(task)
         running_rows = (
             db.query(StatusNotification)
@@ -1488,12 +1630,14 @@ async def _run_bulk_srt_generation_background(master_task_id: int, payload: dict
                 errors.append({"audio_asset_id": asset_id, "error": "SRT-Sammellauf wurde manuell abgebrochen."})
                 break
             try:
-                if generate_stems_first and payload.get("prefer_existing_vocal_stem", True):
-                    asset = db.query(AudioAsset).filter(AudioAsset.id == asset_id, AudioAsset.is_deleted.is_(False)).first()
-                    if asset:
-                        stem_files = _stem_file_entries(asset)
-                        if not isinstance(stem_files.get("vocals"), dict):
-                            generate_stems_for_asset(db, asset_id)
+                prefer_vocal_stem = bool(payload.get("prefer_existing_vocal_stem", True) or generate_stems_first)
+                if generate_stems_first:
+                    _ensure_vocal_stems_before_srt(
+                        db,
+                        asset_id,
+                        status_task=db.query(SunoTask).filter(SunoTask.id == master_task_id).first(),
+                        prefer_existing_vocal_stem=True,
+                    )
                 await generate_srt_for_audio_asset(
                     db=db,
                     audio_asset_id=asset_id,
@@ -1501,7 +1645,7 @@ async def _run_bulk_srt_generation_background(master_task_id: int, payload: dict
                     force=bool(payload.get("force", True)),
                     language_override=payload.get("language"),
                     backend_override=payload.get("backend"),
-                    prefer_existing_vocal_stem=bool(payload.get("prefer_existing_vocal_stem", True)),
+                    prefer_existing_vocal_stem=prefer_vocal_stem,
                 )
                 success += 1
             except Exception as exc:
@@ -2153,6 +2297,43 @@ def import_manual_audio_asset(
 
 
 
+def _existing_vocal_stem_available(asset: AudioAsset) -> bool:
+    stem_files = _stem_file_entries(asset)
+    return isinstance(stem_files.get("vocals"), dict)
+
+
+def _resolve_generate_vocal_stems_before_srt(db: Session, payload: GenerateSrtRequest | BulkGenerateSrtRequest | dict[str, Any]) -> bool:
+    if isinstance(payload, dict):
+        explicit = payload.get("generate_vocal_stems_before_transcription")
+    else:
+        explicit = payload.generate_vocal_stems_before_transcription
+    if explicit is not None:
+        return bool(explicit)
+    admin_settings = load_transcription_admin_settings(db)
+    return bool(admin_settings.get("srt_generate_vocal_stems_before_transcription", False))
+
+
+def _ensure_vocal_stems_before_srt(db: Session, audio_asset_id: int, *, status_task: SunoTask | None = None, prefer_existing_vocal_stem: bool = True) -> dict[str, Any]:
+    """Root-Fix fuer Admin-Schalter „Vocal-Stems vor SRT“.
+
+    Die SRT-Zeitstempel duerfen nicht nur bei Bulk-Laeufen besser werden.
+    Einzel-SRT und Bulk-SRT nutzen denselben Vorbereitungsweg: vorhandene
+    Vocals-Stems werden respektiert, fehlende Vocals-Stems vor der Transkription
+    erzeugt und der Status-Task dokumentiert die tatsaechliche Audioquelle.
+    """
+    asset = db.query(AudioAsset).filter(AudioAsset.id == audio_asset_id, AudioAsset.is_deleted.is_(False)).first()
+    if not asset:
+        raise HTTPException(status_code=404, detail="AudioAsset wurde nicht gefunden.")
+    if prefer_existing_vocal_stem and _existing_vocal_stem_available(asset):
+        append_task_step_log(db, status_task, phase="srt_vocal_stem_ready", detail="Vorhandener Vocal-Stem wird fuer SRT bevorzugt.", commit=True)
+        return {"ok": True, "created": False, "reason": "existing_vocal_stem"}
+    append_task_step_log(db, status_task, phase="srt_vocal_stem_generate", detail="Vocal-Stems werden vor SRT erzeugt.", commit=True)
+    result = generate_stems_for_asset(db, audio_asset_id, status_task=status_task)
+    append_task_step_log(db, status_task, phase="srt_vocal_stem_ready", detail="Vocal-Stems wurden vor SRT erzeugt.", data={"audio_asset_id": audio_asset_id}, commit=True)
+    return {"ok": True, "created": True, "result": result}
+
+
+
 def _run_single_srt_generation_background(task_id: int, audio_asset_id: int, payload_data: dict[str, Any]) -> None:
     async def _run() -> None:
         db = SessionLocal()
@@ -2162,6 +2343,15 @@ def _run_single_srt_generation_background(task_id: int, audio_asset_id: int, pay
             if is_cancel_requested(db, task_id):
                 raise RuntimeError("SRT-Erzeugung wurde vor dem Start abgebrochen.")
             payload = GenerateSrtRequest(**(payload_data or {}))
+            generate_stems_first = _resolve_generate_vocal_stems_before_srt(db, payload)
+            prefer_vocal_stem = bool(payload.prefer_existing_vocal_stem or generate_stems_first)
+            if generate_stems_first:
+                _ensure_vocal_stems_before_srt(
+                    db,
+                    audio_asset_id,
+                    status_task=task,
+                    prefer_existing_vocal_stem=True,
+                )
             await generate_srt_for_audio_asset(
                 db=db,
                 audio_asset_id=audio_asset_id,
@@ -2169,7 +2359,7 @@ def _run_single_srt_generation_background(task_id: int, audio_asset_id: int, pay
                 force=payload.force,
                 language_override=payload.language,
                 backend_override=payload.backend,
-                prefer_existing_vocal_stem=payload.prefer_existing_vocal_stem,
+                prefer_existing_vocal_stem=prefer_vocal_stem,
                 status_task=task,
             )
         except Exception:
@@ -2513,6 +2703,97 @@ def stream_single_stem(audio_asset_id: int, kind: str, request: Request, db: Ses
     )
 
 
+def _video_asset_or_404(db: Session, audio_asset_id: int, video_id: int) -> VideoAsset:
+    video = VideoAssetService(db).get_for_audio_asset(audio_asset_id, video_id)
+    if not video:
+        raise HTTPException(status_code=404, detail="Video wurde nicht gefunden.")
+    return video
+
+
+def _public_http_url(value: str | None) -> str | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    parsed = urlparse(text)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return None
+    return text
+
+
+def _video_file_or_404(db: Session, video: VideoAsset) -> Path:
+    path = VideoAssetService(db).resolve_local_path(video)
+    if not path or not path.exists() or not path.is_file():
+        raise HTTPException(status_code=404, detail="Lokale MP4-Datei wurde nicht gefunden.")
+    return path
+
+
+@router.get("/{audio_asset_id}/videos", response_model=list[VideoAssetRead])
+def list_audio_asset_videos(audio_asset_id: int, db: Session = Depends(get_db)):
+    asset = db.query(AudioAsset).filter(AudioAsset.id == audio_asset_id, AudioAsset.is_deleted.is_(False)).first()
+    if not asset:
+        raise HTTPException(status_code=404, detail="AudioAsset wurde nicht gefunden.")
+    return VideoAssetService(db).list_for_audio_asset(audio_asset_id)
+
+
+@router.get("/{audio_asset_id}/videos/{video_id}", response_model=VideoAssetRead)
+def get_audio_asset_video(audio_asset_id: int, video_id: int, db: Session = Depends(get_db)):
+    return _video_asset_or_404(db, audio_asset_id, video_id)
+
+
+@router.post("/{audio_asset_id}/videos/{video_id}/cache", response_model=VideoAssetRead)
+def cache_audio_asset_video(audio_asset_id: int, video_id: int, db: Session = Depends(get_db)):
+    video = _video_asset_or_404(db, audio_asset_id, video_id)
+    try:
+        return VideoAssetService(db).cache_video_asset(video)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"MP4 konnte nicht lokal gesichert werden: {exc}") from exc
+
+
+@router.get("/{audio_asset_id}/videos/{video_id}/stream")
+def stream_audio_asset_video(audio_asset_id: int, video_id: int, request: Request, db: Session = Depends(get_db)):
+    video = _video_asset_or_404(db, audio_asset_id, video_id)
+    path = VideoAssetService(db).resolve_local_path(video)
+    if not path or not path.exists() or not path.is_file():
+        remote_url = _public_http_url(video.source_url)
+        if remote_url:
+            return RedirectResponse(remote_url, status_code=307)
+        raise HTTPException(status_code=404, detail="Lokale MP4-Datei wurde nicht gefunden.")
+    file_size = path.stat().st_size
+    range_header = request.headers.get("range")
+    media_type = video.content_type or mimetypes.guess_type(path.name)[0] or "video/mp4"
+    if range_header and range_header.startswith("bytes="):
+        try:
+            range_spec = range_header.split("=", 1)[1].split(",", 1)[0]
+            start_text, end_text = range_spec.split("-", 1)
+            start = int(start_text) if start_text else 0
+            end = int(end_text) if end_text else file_size - 1
+            start = max(0, min(start, file_size - 1))
+            end = max(start, min(end, file_size - 1))
+        except Exception:
+            start, end = 0, file_size - 1
+        headers = {
+            "Content-Range": f"bytes {start}-{end}/{file_size}",
+            "Accept-Ranges": "bytes",
+            "Content-Length": str(end - start + 1),
+        }
+        return StreamingResponse(_iter_file_range(path, start, end), status_code=206, headers=headers, media_type=media_type)
+    return FileResponse(path, media_type=media_type, headers={"Accept-Ranges": "bytes"})
+
+
+@router.get("/{audio_asset_id}/videos/{video_id}/download")
+def download_audio_asset_video(audio_asset_id: int, video_id: int, db: Session = Depends(get_db)):
+    video = _video_asset_or_404(db, audio_asset_id, video_id)
+    path = VideoAssetService(db).resolve_local_path(video)
+    if not path or not path.exists() or not path.is_file():
+        remote_url = _public_http_url(video.source_url)
+        if remote_url:
+            return RedirectResponse(remote_url, status_code=307)
+        raise HTTPException(status_code=404, detail="Lokale MP4-Datei wurde nicht gefunden.")
+    title = video.title or f"video_{video.id}"
+    filename = f"{_safe_zip_part(title, f'video_{video.id}')}.mp4"
+    return FileResponse(path, media_type=video.content_type or "video/mp4", filename=filename)
+
+
 @router.post("/{audio_asset_id}/srt/generate")
 def generate_srt(audio_asset_id: int, payload: GenerateSrtRequest | None = None, db: Session = Depends(get_db)):
     payload = payload or GenerateSrtRequest()
@@ -2530,6 +2811,29 @@ def generate_srt(audio_asset_id: int, payload: GenerateSrtRequest | None = None,
 
 @router.get("/{audio_asset_id}/srt")
 def read_srt(audio_asset_id: int, db: Session = Depends(get_db)):
+    # Status-Probe statt harter Resource-Download:
+    # Die React-Library fragt SRT-Zustände automatisch für sichtbare/aktive Assets ab.
+    # Fehlende SRTs dürfen deshalb keine Browser-404-Geräusche erzeugen und dürfen
+    # nicht mit MP4-/Detailaktionen verwechselt werden. Downloads bleiben weiterhin
+    # strikt und liefern 404, wenn keine Datei existiert.
+    asset = db.query(AudioAsset).filter(AudioAsset.id == audio_asset_id, AudioAsset.is_deleted.is_(False)).first()
+    if not asset:
+        return {
+            "audio_asset_id": audio_asset_id,
+            "exists": False,
+            "status": "missing_asset",
+            "error_message": "AudioAsset wurde nicht gefunden.",
+            "srt_text": "",
+            "srt_url": None,
+            "srt_filename": None,
+            "half_srt_exists": False,
+            "half_srt_text": "",
+            "half_srt_url": None,
+            "half_srt_filename": None,
+            "segments": [],
+            "generated_at": None,
+            "updated_at": None,
+        }
     return get_saved_transcript(db, audio_asset_id)
 
 

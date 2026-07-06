@@ -15,6 +15,7 @@ from app.models import AudioAsset, AudioProject, AudioTranscript, Song, SunoTask
 from app.services.audio_metadata_service import normalize_audio_content_type, read_audio_duration_seconds
 from app.services.audio_cache_service import parse_source_datetime
 from app.services.waveform_service import sanitize_waveform_payload_for_asset
+from app.services.video_asset_service import attach_video_summaries_to_assets
 from app.utils.time_utils import utc_now_naive
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".avif"}
@@ -26,21 +27,25 @@ AUDIO_MIME_ALIASES = {
     "audio/x-wav": "audio/wav",
     "audio/x-flac": "audio/flac",
 }
+# Offizielle SunoAPI.org-Reihenfolge fuer erzeugte Musik:
+# audio_url/audioUrl ist die fertige Download-Datei. source_audio_url/sourceAudioUrl
+# und stream_* sind nur Fallbacks, weil sie je nach Callback-Stufe/Provider eine
+# andere bzw. gestreamte Quelle liefern koennen.
 AUDIO_URL_PREFERENCE = (
-    "sourceAudioUrl",
-    "source_audio_url",
     "audioUrl",
     "audio_url",
-    "sourceStreamAudioUrl",
-    "source_stream_audio_url",
-    "streamAudioUrl",
-    "stream_audio_url",
     "downloadUrl",
     "download_url",
     "mp3Url",
     "mp3_url",
     "wavUrl",
     "wav_url",
+    "sourceAudioUrl",
+    "source_audio_url",
+    "streamAudioUrl",
+    "stream_audio_url",
+    "sourceStreamAudioUrl",
+    "source_stream_audio_url",
 )
 IMAGE_URL_PREFERENCE = (
     "sourceImageUrl",
@@ -1015,5 +1020,6 @@ def active_usable_audio_assets(db: Session, limit: int = 500) -> list[AudioAsset
         setattr(row, "library_sort_at", sort_dt.isoformat() if sort_dt else None)
     attach_audio_asset_identity_context(db, result)
     _attach_transcript_flags(db, result)
+    attach_video_summaries_to_assets(db, result)
     _attach_display_safe_waveform_segments(result)
     return result

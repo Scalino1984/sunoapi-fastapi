@@ -28,10 +28,11 @@ from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
 from app.config import get_settings
-from app.models import AudioAsset, Persona, Song, StatusNotification, SunoTask
+from app.models import AudioAsset, LyricDraft, Persona, Song, StatusNotification, SunoTask, VideoAsset
 from app.services.audio_cache_service import AudioCacheService, CoverCacheService, collect_audio_candidates, collect_image_urls, extract_source_created_at
 from app.services.audio_asset_materialization_service import AudioAssetMaterializationService
 from app.services.song_library_sync_service import song_sort_datetime
+from app.services.video_asset_service import VideoAssetService, extract_video_status, extract_video_url, is_video_success_status, is_video_terminal_status
 from app.suno_client import SunoAPIClient
 from app.utils.time_utils import utc_now_naive
 
@@ -260,13 +261,23 @@ def _extract_title(payload: Any) -> str | None:
 
 
 def _extract_first_text(payload: Any) -> str | None:
-    for item in _walk_values(payload):
-        if not isinstance(item, dict):
-            continue
-        for key in LYRICS_KEYS:
-            value = item.get(key)
-            if isinstance(value, str) and value.strip() and len(value.strip()) >= 20:
-                return value.strip()
+    # SunoAPI.org record-info legt Nutzdaten je nach Endpoint entweder direkt
+    # als Objekt oder als JSON-String in data/response/param ab. Lyrics-Importe
+    # duerfen deshalb nicht nur die oberste JSON-Ebene lesen, sonst landet der
+    # Task zwar in suno_tasks, aber nie als sichtbarer Eintrag unter /texts.
+    seen_ids: set[int] = set()
+    for walker in (_walk_values, _walk_values_with_json_strings):
+        for item in walker(payload):
+            if not isinstance(item, dict):
+                continue
+            marker = id(item)
+            if marker in seen_ids:
+                continue
+            seen_ids.add(marker)
+            for key in LYRICS_KEYS:
+                value = item.get(key)
+                if isinstance(value, str) and value.strip() and len(value.strip()) >= 20:
+                    return value.strip()
     return None
 
 
@@ -581,6 +592,32 @@ class MusicService:
         wav_url = _extract_url(source, ("wav_url", "wavUrl"))
         image_urls = collect_image_urls(source)
         cover_image_url = image_urls[0] if image_urls else None
+
+        # MP4-Import-Vertrag: create_video darf keine verwaisten Song-Datensaetze
+        # erzeugen, nur weil eine videoUrl existiert. Videos werden an vorhandene
+        # AudioAssets gebunden; falls kein AudioAsset existiert, bleibt der Hinweis
+        # am Task und der Audio-Import muss zuerst nachgezogen werden.
+        if task.task_type == "create_video":
+            linked_asset = VideoAssetService(self.db).find_audio_asset_for_task(task)
+            if linked_asset and linked_asset.song_id:
+                song = self.db.query(Song).filter(Song.id == linked_asset.song_id, Song.is_deleted.is_(False)).first()
+                if song:
+                    song.video_url = video_url or song.video_url
+                    metadata = dict(song.metadata_json or {}) if isinstance(song.metadata_json, dict) else {}
+                    metadata["video_task_payload"] = {
+                        "task_local_id": task.id,
+                        "suno_task_id": task.task_id,
+                        "request_payload": request_payload,
+                        "result_payload": task.result_payload,
+                    }
+                    song.metadata_json = metadata
+                    self.db.add(song)
+                    flag_modified(song, "metadata_json")
+                    self.db.commit()
+                    self.db.refresh(song)
+                    return song
+            if video_url and not any([lyrics, audio_url, midi_url, wav_url, cover_image_url]):
+                return None
 
         if not any([lyrics, audio_url, video_url, midi_url, wav_url, cover_image_url]):
             return None
@@ -926,6 +963,22 @@ class MusicService:
                 .order_by(AudioAsset.id.asc())
                 .all()
             )
+        video_rows: list[VideoAsset] = []
+        if task.task_type == "create_video":
+            video_query = self.db.query(VideoAsset).filter(VideoAsset.is_deleted.is_(False))
+            if task.task_id:
+                video_rows = video_query.filter(VideoAsset.suno_task_id == task.task_id).order_by(VideoAsset.id.asc()).all()
+            if not video_rows and task.id:
+                video_rows = video_query.filter(VideoAsset.task_local_id == task.id).order_by(VideoAsset.id.asc()).all()
+            if not asset_rows and video_rows:
+                linked_asset_ids = [row.audio_asset_id for row in video_rows if getattr(row, "audio_asset_id", None)]
+                if linked_asset_ids:
+                    asset_rows = (
+                        self.db.query(AudioAsset)
+                        .filter(AudioAsset.id.in_(linked_asset_ids), AudioAsset.is_deleted.is_(False))
+                        .order_by(AudioAsset.id.asc())
+                        .all()
+                    )
         first_asset = asset_rows[0] if asset_rows else None
 
         title_candidates = [
@@ -951,6 +1004,7 @@ class MusicService:
         state_label = "fertig" if ok else "teilweise fertig" if warn else "fehlgeschlagen"
 
         audio_asset_ids = [int(asset.id) for asset in asset_rows if getattr(asset, "id", None)]
+        video_asset_ids = [int(video.id) for video in video_rows if getattr(video, "id", None)]
         target_payload = {
             "task_local_id": task.id,
             "suno_task_id": task.task_id,
@@ -959,6 +1013,8 @@ class MusicService:
             "audio_asset_id": first_asset.id if first_asset else None,
             "primary_audio_asset_id": first_asset.id if first_asset else None,
             "audio_asset_ids": audio_asset_ids,
+            "video_asset_id": video_asset_ids[0] if video_asset_ids else None,
+            "video_asset_ids": video_asset_ids,
             "song_id": song.id if song else None,
             "project_id": first_asset.project_id if first_asset else (song.project_id if song else None),
         }
@@ -1018,6 +1074,146 @@ class MusicService:
         setattr(task, "import_message", import_message)
         return task
 
+    def _import_status_from_details(self, task_type: str, details: dict[str, Any]) -> str | None:
+        # MP4-Root-Vertrag: Bei SunoAPI.org-Video-Record-Info ist msg=success nur
+        # der HTTP-Envelope. Der echte Status ist data.successFlag. Diese Funktion
+        # muss fuer Import, Re-Import und Provider-Backfill identisch verwendet werden.
+        if task_type == "create_video":
+            status = extract_video_status(details)
+            if status:
+                return status
+            if extract_video_url(details):
+                return "SUCCESS"
+            return "PENDING"
+        if task_type == "generate_lyrics":
+            if _extract_first_text(details):
+                return "SUCCESS"
+            for preferred_key in ("successFlag", "status", "state"):
+                for item in _walk_values_with_json_strings(details):
+                    if not isinstance(item, dict):
+                        continue
+                    value = item.get(preferred_key)
+                    if value:
+                        return str(value)
+            return "PENDING"
+        status = _extract_status(details)
+        if not status and collect_audio_candidates(details):
+            return "SUCCESS"
+        return status
+
+    def _append_import_warning(self, task: SunoTask, message: str) -> None:
+        payload = dict(task.result_payload or {}) if isinstance(task.result_payload, dict) else {"raw_result_payload": task.result_payload}
+        warnings = list(payload.get("import_warnings") or [])
+        if message not in warnings:
+            warnings.append(message)
+        payload["import_warnings"] = warnings
+        task.result_payload = payload
+        flag_modified(task, "result_payload")
+        self.db.add(task)
+
+    def _materialize_imported_video_if_ready(self, task: SunoTask, *, song: Song | None = None, cache_video: bool = True) -> VideoAsset | None:
+        if task.task_type != "create_video" or not is_video_success_status(task.status):
+            return None
+
+        service = VideoAssetService(self.db)
+        video = service.materialize_video_task(task, song=song, cache=cache_video)
+        if video:
+            setattr(task, "import_video_asset_id", video.id)
+            setattr(task, "import_audio_asset_id", video.audio_asset_id)
+            return video
+
+        video_url = extract_video_url([task.result_payload, task.response_payload])
+        if not video_url:
+            warning = "MP4-Task ist erfolgreich, aber SunoAPI.org lieferte keine videoUrl."
+        elif service.find_audio_asset_for_task(task) is None:
+            warning = (
+                "MP4-Task ist erfolgreich, aber kein passendes AudioAsset wurde ueber "
+                "audioId/musicId/sourceTaskId gefunden. Bitte zuerst den zugehoerigen Audio-Task importieren."
+            )
+        else:
+            warning = "MP4-Task ist erfolgreich, aber das VideoAsset konnte nicht materialisiert werden."
+        self._append_import_warning(task, warning)
+        return None
+
+    def _lyrics_only_payload_text(self, task: SunoTask) -> str | None:
+        text = _extract_first_text([task.result_payload, task.response_payload, task.request_payload])
+        if not text:
+            return None
+        source = [task.result_payload, task.response_payload]
+        has_audio = bool(collect_audio_candidates(source))
+        has_cover = bool(collect_image_urls(source))
+        has_video = bool(extract_video_url(source))
+        has_midi = bool(_extract_url(source, ("midi_url", "midiUrl")))
+        has_wav = bool(_extract_url(source, ("wav_url", "wavUrl")))
+        if task.task_type == "generate_lyrics" or not any([has_audio, has_cover, has_video, has_midi, has_wav]):
+            return text
+        return None
+
+    def _materialize_imported_lyrics_if_ready(self, task: SunoTask) -> LyricDraft | None:
+        # /texts-Vertrag: sichtbare Songtexte liegen in lyric_drafts.
+        # SunoAPI.org generate_lyrics-Tasks duerfen nicht nur als suno_tasks/Songs
+        # abgelegt werden, sonst erkennt der Re-Import zwar das Duplikat, die
+        # React-Seite /texts bleibt aber leer.
+        lyrics = self._lyrics_only_payload_text(task)
+        if not lyrics:
+            if task.task_type == "generate_lyrics" and str(task.status or "").upper() in {"SUCCESS", "COMPLETED", "COMPLETE", "DONE"}:
+                self._append_import_warning(task, "Lyrics-Task ist erfolgreich, aber es wurde kein Songtext im Record-Info-Payload gefunden.")
+            return None
+
+        task_id = str(task.task_id or "").strip()
+        existing = None
+        if task_id:
+            existing = (
+                self.db.query(LyricDraft)
+                .filter(LyricDraft.is_deleted.is_(False), LyricDraft.metadata_json.like(f"%{task_id}%"))
+                .order_by(LyricDraft.updated_at.desc(), LyricDraft.id.desc())
+                .first()
+            )
+        if existing is None:
+            existing = (
+                self.db.query(LyricDraft)
+                .filter(LyricDraft.is_deleted.is_(False), LyricDraft.content == lyrics)
+                .order_by(LyricDraft.updated_at.desc(), LyricDraft.id.desc())
+                .first()
+            )
+
+        request_payload = task.request_payload if isinstance(task.request_payload, dict) else {}
+        title = (
+            request_payload.get("title")
+            or _extract_title([task.result_payload, task.response_payload, request_payload])
+            or (f"Suno Lyrics {task_id[:10]}" if task_id else "Suno Lyrics Import")
+        )
+        metadata = {
+            "source": "sunoapi_generate_lyrics_import",
+            "task_local_id": task.id,
+            "suno_task_id": task_id or None,
+            "task_type": task.task_type,
+            "request_payload": request_payload,
+        }
+
+        if existing is not None:
+            merged = dict(existing.metadata_json or {}) if isinstance(existing.metadata_json, dict) else {}
+            merged.update({key: value for key, value in metadata.items() if value is not None})
+            existing.metadata_json = merged
+            existing.status = existing.status or "imported"
+            self.db.add(existing)
+            flag_modified(existing, "metadata_json")
+            setattr(task, "import_lyric_draft_id", existing.id)
+            return existing
+
+        draft = LyricDraft(
+            title=str(title)[:255],
+            content=lyrics[:50000],
+            status="imported",
+            language=request_payload.get("language") or request_payload.get("locale") or None,
+            tags="sunoapi, imported, lyrics",
+            metadata_json=metadata,
+        )
+        self.db.add(draft)
+        self.db.flush()
+        setattr(task, "import_lyric_draft_id", draft.id)
+        return draft
+
     def _find_existing_imported_task(self, task_id: str) -> SunoTask | None:
         existing_task = (
             self.db.query(SunoTask)
@@ -1042,8 +1238,14 @@ class MusicService:
             .order_by(AudioAsset.id.desc())
             .first()
         )
+        existing_video = (
+            self.db.query(VideoAsset)
+            .filter(VideoAsset.suno_task_id == task_id, VideoAsset.is_deleted.is_(False))
+            .order_by(VideoAsset.id.desc())
+            .first()
+        )
 
-        if not existing_song and not existing_asset:
+        if not existing_song and not existing_asset and not existing_video:
             return None
 
         recovered = SunoTask(
@@ -1055,7 +1257,8 @@ class MusicService:
                 "task_id": task_id,
                 "duplicate_detected": True,
                 "song_id": existing_song.id if existing_song else None,
-                "audio_asset_id": existing_asset.id if existing_asset else None,
+                "audio_asset_id": existing_asset.id if existing_asset else (existing_video.audio_asset_id if existing_video else None),
+                "video_asset_id": existing_video.id if existing_video else None,
             },
             response_payload={
                 "source": "manual_sunoapi_import",
@@ -1136,7 +1339,12 @@ class MusicService:
             .filter(AudioAsset.suno_task_id == task_id, AudioAsset.is_deleted.is_(False))
             .first()
         )
-        if existing_song or existing_asset:
+        existing_video = (
+            self.db.query(VideoAsset.id)
+            .filter(VideoAsset.suno_task_id == task_id, VideoAsset.is_deleted.is_(False))
+            .first()
+        )
+        if existing_song or existing_asset or existing_video:
             return False
         task.is_deleted = True
         task.deleted_at = utc_now_naive()
@@ -1295,10 +1503,21 @@ class MusicService:
             task.request_payload = merged_request
             flag_modified(task, "request_payload")
             changed = True
-        next_status = _extract_status(details)
+        next_status = self._import_status_from_details(resolved_task_type, details)
         if next_status and task.status != next_status:
             task.status = next_status
             changed = True
+        if resolved_task_type == "create_video" and is_video_success_status(task.status):
+            song = self._upsert_song_from_task(task)
+            before_video_id = getattr(task, "import_video_asset_id", None)
+            video = self._materialize_imported_video_if_ready(task, song=song, cache_video=bool(merged_request.get("cache_video", True)))
+            if video or getattr(task, "import_video_asset_id", None) != before_video_id:
+                changed = True
+        if resolved_task_type == "generate_lyrics" or self._lyrics_only_payload_text(task):
+            before_lyric_id = getattr(task, "import_lyric_draft_id", None)
+            lyric = self._materialize_imported_lyrics_if_ready(task)
+            if lyric or getattr(task, "import_lyric_draft_id", None) != before_lyric_id:
+                changed = True
         source_created_at = extract_source_created_at(details)
         if source_created_at and task.created_at and task.created_at > source_created_at:
             task.created_at = source_created_at
@@ -1362,6 +1581,7 @@ class MusicService:
         requested_task_type = str(payload.get("task_type") or "auto").strip() or "auto"
         task_type = requested_task_type
         cache_audio = bool(payload.get("cache_audio", True))
+        cache_video = bool(payload.get("cache_video", True))
 
         if not task_id:
             raise ValueError("Task-ID fehlt.")
@@ -1374,6 +1594,8 @@ class MusicService:
             "prompt": payload.get("prompt") or None,
             "style": payload.get("style") or None,
             "model": payload.get("model") or None,
+            "cache_audio": cache_audio,
+            "cache_video": cache_video,
         }
 
         existing = self._find_existing_imported_task(task_id)
@@ -1384,14 +1606,26 @@ class MusicService:
                 await self._refresh_existing_imported_task_details(existing, task_type=refresh_type, base_request_payload=request_payload)
             except Exception:
                 self._repair_imported_task_generation_options(existing)
+            existing_video = None
+            existing_lyric = None
+            if existing.task_type == "create_video" and is_video_success_status(existing.status):
+                song = self._upsert_song_from_task(existing)
+                existing_video = self._materialize_imported_video_if_ready(existing, song=song, cache_video=cache_video)
+            if existing.task_type == "generate_lyrics" or self._lyrics_only_payload_text(existing):
+                existing_lyric = self._materialize_imported_lyrics_if_ready(existing)
             self._create_import_duplicate_notification(existing)
             self.db.commit()
             self.db.refresh(existing)
+            duplicate_message = "Dieser Suno-Task ist bereits importiert. Es wurde nichts doppelt erstellt."
+            if existing.task_type == "create_video" and existing_video:
+                duplicate_message = "Dieser Suno-MP4-Task war bereits vorhanden; das VideoAsset wurde aktualisiert/lokal nachgezogen."
+            elif existing_lyric:
+                duplicate_message = "Dieser Suno-Lyrics-Task war bereits vorhanden; der Songtext ist unter /texts verknuepft."
             return self._attach_import_result(
                 existing,
                 already_imported=True,
                 import_status="already_imported",
-                import_message="Dieser Suno-Task ist bereits importiert. Es wurde nichts doppelt erstellt.",
+                import_message=duplicate_message,
             )
 
         task_type, details = await self._fetch_external_task_details_with_type(task_id, requested_task_type)
@@ -1402,9 +1636,7 @@ class MusicService:
         request_payload = _merge_generation_options_into_request(request_payload, details)
 
         source_created_at = extract_source_created_at(details)
-        extracted_status = _extract_status(details)
-        if not extracted_status and collect_audio_candidates(details):
-            extracted_status = "SUCCESS"
+        extracted_status = self._import_status_from_details(task_type, details)
 
         old_status = existing.status if existing else None
 
@@ -1451,7 +1683,13 @@ class MusicService:
         if task.task_type == "create_custom_voice":
             self._upsert_voice_from_payload(task.request_payload or {}, task.result_payload or {})
 
-        if cache_audio:
+        video = None
+        lyric_draft = None
+        if task.task_type == "create_video":
+            video = self._materialize_imported_video_if_ready(task, song=song, cache_video=cache_video)
+        elif task.task_type == "generate_lyrics" or self._lyrics_only_payload_text(task):
+            lyric_draft = self._materialize_imported_lyrics_if_ready(task)
+        elif cache_audio:
             await self._cache_audio_if_configured(task, song=song)
         else:
             try:
@@ -1469,11 +1707,22 @@ class MusicService:
         self._create_task_status_notification(task, old_status, song=song)
         self.db.commit()
         self.db.refresh(task)
+        if task.task_type == "create_video":
+            if video:
+                import_message = "Suno-MP4-Task wurde importiert, an das AudioAsset gebunden und lokal abgelegt."
+            elif is_video_success_status(task.status):
+                import_message = "Suno-MP4-Task wurde importiert; MP4 konnte noch nicht an ein vorhandenes AudioAsset gebunden werden."
+            else:
+                import_message = f"Suno-MP4-Task wurde importiert. Aktueller Status: {task.status or 'PENDING'}."
+        elif task.task_type == "generate_lyrics" or lyric_draft:
+            import_message = "Suno-Lyrics-Task wurde importiert und unter /texts abgelegt." if lyric_draft else "Suno-Lyrics-Task wurde importiert; Songtext ist noch nicht im Record-Info-Payload vorhanden."
+        else:
+            import_message = "Suno-Task wurde importiert und lokal abgelegt."
         return self._attach_import_result(
             task,
             already_imported=False,
             import_status="imported",
-            import_message="Suno-Task wurde importiert und lokal abgelegt.",
+            import_message=import_message,
         )
 
 
@@ -1529,9 +1778,18 @@ class MusicService:
             details = await self.client.get_details(task.task_id)
 
         task.result_payload = details
-        task.status = _extract_status(details) or task.status
+        if task.task_type == "create_video":
+            # SunoAPI MP4: msg=success bedeutet nur erfolgreiche HTTP-Abfrage.
+            # Der echte Taskstatus liegt in data.successFlag. PENDING darf nicht
+            # als SUCCESS behandelt werden, sonst endet das Polling vor videoUrl.
+            task.status = extract_video_status(details) or task.status
+        else:
+            task.status = _extract_status(details) or task.status
         task.heartbeat_at = utc_now_naive()
-        if str(task.status or "").upper() in {"SUCCESS", "COMPLETED", "COMPLETE", "DONE", "FAILED", "ERROR"}:
+        if task.task_type == "create_video":
+            if is_video_terminal_status(task.status):
+                task.completed_at = task.completed_at or utc_now_naive()
+        elif str(task.status or "").upper() in {"SUCCESS", "COMPLETED", "COMPLETE", "DONE", "FAILED", "ERROR"}:
             task.completed_at = task.completed_at or utc_now_naive()
         task.error_message = None
 
@@ -1543,7 +1801,14 @@ class MusicService:
         if task.task_type == "create_custom_voice":
             self._upsert_voice_from_payload(task.request_payload or {}, task.result_payload or {})
 
-        await self._cache_audio_if_configured(task, song=song)
+        if task.task_type == "create_video":
+            if is_video_success_status(task.status):
+                request_payload = task.request_payload if isinstance(task.request_payload, dict) else {}
+                self._materialize_imported_video_if_ready(task, song=song, cache_video=bool(request_payload.get("cache_video", True)))
+        elif task.task_type == "generate_lyrics" or self._lyrics_only_payload_text(task):
+            self._materialize_imported_lyrics_if_ready(task)
+        else:
+            await self._cache_audio_if_configured(task, song=song)
 
         self._create_task_status_notification(task, old_status, song=song)
 

@@ -31,6 +31,7 @@ from app.services.audio_asset_repair_service import AUDIO_URL_PREFERENCE, is_aud
 from app.services.audio_asset_materialization_service import AudioAssetMaterializationService
 from app.services.audio_cache_service import AudioCacheService, AudioCandidate, CoverCacheService
 from app.services.music_service import MusicService
+from app.services.task_lifecycle_service import append_task_debug_event, append_task_step_log
 from app.utils.time_utils import utc_now_naive
 
 IMAGE_URL_KEYS = (
@@ -327,20 +328,20 @@ def _known_audio_urls(db: Session, asset: AudioAsset, song: Song | None = None, 
     seen: set[str] = set()
 
     preferred_order = (
-        "sourceAudioUrl",
-        "source_audio_url",
+        "audioUrl",
+        "audio_url",
         "downloadUrl",
         "download_url",
         "mp3Url",
         "mp3_url",
-        "audioUrl",
-        "audio_url",
-        "sourceStreamAudioUrl",
-        "source_stream_audio_url",
-        "streamAudioUrl",
-        "stream_audio_url",
         "wavUrl",
         "wav_url",
+        "sourceAudioUrl",
+        "source_audio_url",
+        "streamAudioUrl",
+        "stream_audio_url",
+        "sourceStreamAudioUrl",
+        "source_stream_audio_url",
         "url",
     )
     direct_sources = [candidate, metadata, request_payload]
@@ -937,6 +938,31 @@ async def cache_missing_library_content_once(
     )
     db.add(local_task)
     db.flush()
+    append_task_debug_event(
+        db,
+        local_task,
+        event="library_content_cache_finished",
+        detail=message,
+        level="info" if failed == 0 else "warning",
+        data=result_payload,
+        commit=False,
+    )
+    append_task_step_log(
+        db,
+        local_task,
+        phase="completed" if failed == 0 else "partial_success",
+        phase_label="Library-Inhalte geprüft",
+        detail=message,
+        data={
+            "audio_cached": audio_cached,
+            "cover_cached": cover_cached,
+            "stale_metadata_fixed": stale_metadata_fixed,
+            "materialization_changed": materialization_changed,
+            "failed": failed,
+            "unavailable": unavailable,
+        },
+        commit=False,
+    )
 
     db.add(ActivityLog(
         action="background_cache_missing_library_content" if background else "cache_missing_library_content",

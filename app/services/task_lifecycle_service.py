@@ -1,5 +1,13 @@
 from __future__ import annotations
 
+# CORE CONTRACT
+# Zweck: Zentrale Status-/Heartbeat-/Debug-Log-Schicht fuer lokale App-Tasks.
+# Debug-Konvention: response_payload.debug_log enthaelt technische Ereignisse,
+# response_payload.steps_log enthaelt nutzernahe Ablaufphasen. Werte werden
+# vor Speicherung gekuerzt und sensible Keys redigiert.
+# Neue lokale Task-Funktionen sollen diese Helper nutzen statt eigene inkompatible
+# Debug-Strukturen in response_payload/result_payload zu schreiben.
+
 import threading
 from contextlib import contextmanager
 from datetime import datetime, timedelta
@@ -10,6 +18,20 @@ from sqlalchemy.orm import Session
 
 from app.models import StatusNotification, SunoTask
 from app.utils.time_utils import utc_now_naive
+
+TASK_DEBUG_LOG_LIMIT = 200
+TASK_STEP_LOG_LIMIT = 200
+TASK_DEBUG_REDACT_KEYS = {
+    "authorization",
+    "api_key",
+    "apikey",
+    "token",
+    "access_token",
+    "refresh_token",
+    "password",
+    "secret",
+    "bearer",
+}
 
 ACTIVE_TASK_STATUSES = {
     "SUBMITTED",
@@ -47,10 +69,13 @@ LOCAL_APP_TASK_TYPES = {
     "convert_to_wav_local",
     "manual_audio_import",
     "library_repair",
+    "library_content_cache",
     "import_suno_song",
     "import_suno_song_batch",
     "import_sunoapi_task_batch",
     "opencli_generate_music",
+    "generate_music_opencli",
+    "daw_arrangement_render",
 }
 
 
@@ -88,6 +113,105 @@ def _merge_payload(original: dict[str, Any] | None, patch: dict[str, Any] | None
     return base
 
 
+def _safe_debug_value(value: Any, *, depth: int = 0) -> Any:
+    if depth > 5:
+        return "<max-depth>"
+    if isinstance(value, dict):
+        result: dict[str, Any] = {}
+        for key, item in value.items():
+            key_text = str(key)
+            if key_text.lower() in TASK_DEBUG_REDACT_KEYS or any(part in key_text.lower() for part in ("token", "secret", "password", "authorization")):
+                result[key_text] = "<redacted>"
+            else:
+                result[key_text] = _safe_debug_value(item, depth=depth + 1)
+        return result
+    if isinstance(value, list):
+        limit = 80
+        result = [_safe_debug_value(item, depth=depth + 1) for item in value[:limit]]
+        if len(value) > limit:
+            result.append(f"<truncated {len(value) - limit} items>")
+        return result
+    if isinstance(value, tuple):
+        return [_safe_debug_value(item, depth=depth + 1) for item in value[:80]]
+    if isinstance(value, str):
+        return value if len(value) <= 4000 else f"{value[:4000]}... <truncated {len(value) - 4000} chars>"
+    return value
+
+
+def _append_payload_list(payload: dict[str, Any] | None, key: str, item: dict[str, Any], limit: int) -> dict[str, Any]:
+    base = dict(payload) if isinstance(payload, dict) else {}
+    rows = list(base.get(key) or []) if isinstance(base.get(key), list) else []
+    rows.append(item)
+    if len(rows) > limit:
+        rows = rows[-limit:]
+    base[key] = rows
+    return base
+
+
+def append_task_debug_event(
+    db: Session,
+    task_or_id: SunoTask | int | None,
+    *,
+    event: str,
+    detail: str | None = None,
+    level: str = "info",
+    data: dict[str, Any] | None = None,
+    commit: bool = True,
+) -> SunoTask | None:
+    if task_or_id is None:
+        return None
+    task = task_or_id if isinstance(task_or_id, SunoTask) else db.query(SunoTask).filter(SunoTask.id == int(task_or_id)).first()
+    if not task:
+        return None
+    now = utcnow()
+    item = {
+        "at": now.isoformat(),
+        "level": str(level or "info").lower(),
+        "event": str(event or "debug_event"),
+        "detail": str(detail or ""),
+    }
+    if data:
+        item["data"] = _safe_debug_value(data)
+    task.response_payload = _append_payload_list(task.response_payload, "debug_log", item, TASK_DEBUG_LOG_LIMIT)
+    task.response_payload["last_debug_event"] = item
+    db.add(task)
+    if commit:
+        db.commit()
+        db.refresh(task)
+    return task
+
+
+def append_task_step_log(
+    db: Session,
+    task_or_id: SunoTask | int | None,
+    *,
+    phase: str,
+    phase_label: str | None = None,
+    detail: str | None = None,
+    data: dict[str, Any] | None = None,
+    commit: bool = True,
+) -> SunoTask | None:
+    if task_or_id is None:
+        return None
+    task = task_or_id if isinstance(task_or_id, SunoTask) else db.query(SunoTask).filter(SunoTask.id == int(task_or_id)).first()
+    if not task:
+        return None
+    item = {
+        "at": utcnow().isoformat(),
+        "phase": str(phase or "step"),
+        "phase_label": str(phase_label or phase or "Schritt"),
+        "detail": str(detail or ""),
+    }
+    if data:
+        item["data"] = _safe_debug_value(data)
+    task.response_payload = _append_payload_list(task.response_payload, "steps_log", item, TASK_STEP_LOG_LIMIT)
+    db.add(task)
+    if commit:
+        db.commit()
+        db.refresh(task)
+    return task
+
+
 def mark_task_started(db: Session, task: SunoTask, *, payload: dict[str, Any] | None = None) -> SunoTask:
     now = utcnow()
     task.status = "RUNNING"
@@ -96,6 +220,23 @@ def mark_task_started(db: Session, task: SunoTask, *, payload: dict[str, Any] | 
     task.completed_at = None
     task.cancel_requested = False
     task.response_payload = _merge_payload(task.response_payload, {"background": True, "status": "RUNNING", **(payload or {})})
+    append_task_debug_event(
+        db,
+        task,
+        event="task_started",
+        detail="Task wurde gestartet.",
+        data={"task_type": task.task_type, "status": task.status, "payload": payload or {}},
+        commit=False,
+    )
+    append_task_step_log(
+        db,
+        task,
+        phase="started",
+        phase_label="Task gestartet",
+        detail="Task wurde in den RUNNING-Status gesetzt.",
+        data={"task_type": task.task_type},
+        commit=False,
+    )
     db.add(task)
     db.commit()
     db.refresh(task)
@@ -216,6 +357,24 @@ def mark_task_finished(
     if result_payload is not None:
         task.result_payload = result_payload
     task.response_payload = _merge_payload(task.response_payload, {"status": status, "completed_at": now.isoformat(), **(response_payload or {})})
+    append_task_debug_event(
+        db,
+        task,
+        event="task_finished",
+        detail=message or f"Task abgeschlossen: {status}",
+        level="info" if status in {"SUCCESS", "PARTIAL_SUCCESS", "COMPLETED", "COMPLETE", "DONE", "CANCELLED"} else "error",
+        data={"task_type": task.task_type, "status": status, "result_payload": result_payload or {}},
+        commit=False,
+    )
+    append_task_step_log(
+        db,
+        task,
+        phase="completed" if status in {"SUCCESS", "COMPLETED", "COMPLETE", "DONE"} else str(status).lower(),
+        phase_label="Task abgeschlossen",
+        detail=message or status,
+        data={"task_type": task.task_type, "status": status},
+        commit=False,
+    )
     finish_open_task_notifications(db, task, message=f"Abgeschlossen: {message or status}")
     db.add(task)
     if notify:

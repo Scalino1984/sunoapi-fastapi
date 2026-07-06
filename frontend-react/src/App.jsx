@@ -307,6 +307,10 @@ export default function App() {
   const [showMobileScrollTop, setShowMobileScrollTop] = useState(false);
   const showMobileScrollTopRef = useRef(false);
   const playbackRefreshLockRef = useRef(false);
+  // Content-Refreshes waehrend aktiver Audiowiedergabe werden gesammelt und
+  // erst nach Pause/Stop ausgefuehrt. So bleiben Markierungen, Dropdowns und
+  // Scrollpositionen stabil, waehrend Tasks/Notifications weiter gepollt werden.
+  const pendingContentRefreshRef = useRef(false);
   const cachedRefreshStateRef = useRef({ assets: [], tasks: [], notifications: [] });
   const lastPlaybackCommitRef = useRef({ currentAssetId: null, isPlaying: false, currentTime: 0, duration: 0, committedAt: 0 });
   const notificationSessionStartedAtRef = useRef(Date.now());
@@ -581,12 +585,14 @@ export default function App() {
       silent = false,
       forceContentRefresh = false,
       deferContentWhilePlaying = true,
+      ignorePlaybackLock = false,
       content = true,
       tasks: fetchTasks = true,
       credits: fetchCredits = true,
       notifications: fetchNotifications = true
     } = options;
-    const contentLocked = Boolean(content) && !forceContentRefresh && deferContentWhilePlaying && playbackRefreshLockRef.current;
+    const contentLocked = Boolean(content) && deferContentWhilePlaying && playbackRefreshLockRef.current && !ignorePlaybackLock;
+    if (contentLocked && forceContentRefresh) pendingContentRefreshRef.current = true;
     const shouldFetchContent = Boolean(content) && !contentLocked;
     const shouldFetchTasks = Boolean(fetchTasks);
     const shouldFetchCredits = Boolean(fetchCredits);
@@ -643,6 +649,13 @@ export default function App() {
       if (!silent) setRefreshing(false);
     }
   }, []);
+
+
+  useEffect(() => {
+    if (!user || playerState.isPlaying || !pendingContentRefreshRef.current) return;
+    pendingContentRefreshRef.current = false;
+    refreshAll({ silent: true, forceContentRefresh: true, deferContentWhilePlaying: false, ignorePlaybackLock: true }).catch(() => null);
+  }, [user, playerState.isPlaying, refreshAll]);
 
   const refreshTrashIndicator = useCallback(async () => {
     try {
@@ -900,6 +913,10 @@ export default function App() {
     }
 
     if (!shouldRefreshContent) return;
+    if (playbackRefreshLockRef.current) {
+      pendingContentRefreshRef.current = true;
+      return;
+    }
     refreshAll({ silent: true, forceContentRefresh: true, deferContentWhilePlaying: true }).catch(() => null);
   }, [notifications, tasks, user, refreshAll]);
 
@@ -1675,7 +1692,10 @@ export default function App() {
 
   const libraryRouteDetailSlug = useMemo(() => (activeTab === 'library' ? routeDetailSegment(routePathname, 'library') : ''), [activeTab, routePathname]);
 
-  const stablePlaybackTime = playerState.isPlaying ? 0 : Number(playerState.currentTime || 0);
+  // Fuer Inhaltsseiten ist die Playerzeit waehrend laufender Wiedergabe bewusst
+  // eingefroren. Der MiniPlayer rendert die Live-Zeit selbst; Library/Details
+  // duerfen nicht mit jedem Audiotick neu rendern.
+  const stablePlaybackTime = Number(playerState.currentTime || 0);
   const stablePlaybackState = useMemo(() => ({
     currentAssetId: playerState.currentAssetId || null,
     isPlaying: Boolean(playerState.isPlaying),

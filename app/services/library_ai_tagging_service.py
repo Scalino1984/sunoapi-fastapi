@@ -21,6 +21,7 @@ from sqlalchemy.orm.attributes import flag_modified
 from app.config import get_settings
 from app.models import ActivityLog, AiAssistantProfile, AiAssistantProfileFile, AiInstructionFile, AppSetting, AudioAsset, Song, StatusNotification, SunoTask
 from app.services.ai_chat_service import AiChatService, AiProviderError
+from app.services.task_lifecycle_service import append_task_debug_event, append_task_step_log
 from app.utils.time_utils import utc_now_naive
 
 
@@ -322,6 +323,23 @@ def create_library_ai_tagging_status_task(db: Session, asset: AudioAsset | None,
     db.add(task)
     db.commit()
     db.refresh(task)
+    append_task_debug_event(
+        db,
+        task,
+        event="library_ai_tagging_started",
+        detail="KI-Tagging wurde gestartet.",
+        data={"task_type": task_type, "audio_asset_ids": asset_ids, "force": force},
+        commit=False,
+    )
+    append_task_step_log(
+        db,
+        task,
+        phase="started",
+        phase_label="KI-Tagging gestartet",
+        detail=f"KI-Tagging fuer {len(asset_ids)} Library-Inhalt{'e' if len(asset_ids) != 1 else ''} laeuft im Hintergrund.",
+        data={"task_type": task_type, "audio_asset_ids": asset_ids},
+        commit=False,
+    )
     db.add(StatusNotification(
         event_type=f"{task_type}_started",
         title=title,
@@ -354,6 +372,33 @@ def finish_library_ai_tagging_status_task(db: Session, task_id: int, *, success:
         task.heartbeat_at = now
         task.error_message = None if failed == 0 else message
         task.result_payload = {"status": status, "success": success, "failed": failed, "skipped": skipped, "errors": errors, "tagged_audio_asset_ids": tagged_ids, "completed_at": now.isoformat()}
+        final_phase = "completed" if status == "SUCCESS" else ("partial_success" if status == "PARTIAL_SUCCESS" else "failed")
+        append_task_debug_event(
+            db,
+            task,
+            event="library_ai_tagging_finished",
+            detail=message,
+            level="info" if status == "SUCCESS" else ("warning" if status == "PARTIAL_SUCCESS" else "error"),
+            data={
+                "task_type": task_type,
+                "status": status,
+                "success": success,
+                "failed": failed,
+                "skipped": skipped,
+                "errors_preview": errors[:20],
+                "tagged_audio_asset_ids": tagged_ids,
+            },
+            commit=False,
+        )
+        append_task_step_log(
+            db,
+            task,
+            phase=final_phase,
+            phase_label="KI-Tagging abgeschlossen" if status == "SUCCESS" else ("KI-Tagging teilweise abgeschlossen" if status == "PARTIAL_SUCCESS" else "KI-Tagging fehlgeschlagen"),
+            detail=message,
+            data={"task_type": task_type, "status": status, "success": success, "failed": failed, "skipped": skipped},
+            commit=False,
+        )
         db.add(task)
         for row in db.query(StatusNotification).filter(StatusNotification.task_local_id == task.id, StatusNotification.status != "done", StatusNotification.is_deleted.is_(False)).all():
             row.status = "done"
