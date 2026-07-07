@@ -46,6 +46,7 @@ test-suno/
 *.gif
 
 # Local/generated root artifacts
+bck/
 input*.png
 referenz.png
 palette.png
@@ -77,7 +78,12 @@ README_DATABASE_MAINTENANCE_STARTUP.md
 README_FEATURE_ROOT_*.md
 README_LOCAL_MASTER_UNIFIED_AUDIO.md
 README_PORTABLE_BACKUP_RESTORE.md
+GAMECHANGER_UMSETZUNG.md
 analyses/
+baseline.json
+tests/golden_set/
+tests/test_golden_set.py
+tools/golden_set_report.py
 
 # Local/personal deployment and repository management helpers
 scripts/rsync-to-vserver.sh

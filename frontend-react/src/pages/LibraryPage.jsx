@@ -826,7 +826,7 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
   const [workflowWizardBusy, setWorkflowWizardBusy] = useState(false);
   const [aiCoverAsset, setAiCoverAsset] = useState(null);
   const [aiCoverBusy, setAiCoverBusy] = useState(false);
-  const [aiCoverForm, setAiCoverForm] = useState({ model: 'pro', note: '', referenceFile: null });
+  const [aiCoverForm, setAiCoverForm] = useState({ model: 'pro', note: '', referenceFile: null, titleTextEnabled: false });
   const [coverReplaceAsset, setCoverReplaceAsset] = useState(null);
   const [coverReplaceFile, setCoverReplaceFile] = useState(null);
   const [coverReplacePreviewUrl, setCoverReplacePreviewUrl] = useState('');
@@ -1039,19 +1039,41 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
     return { x: window.scrollX || 0, y: window.scrollY || 0 };
   }
 
-  function restoreWindowScrollSoon(snapshot) {
+  function restoreWindowScrollSoon(snapshot, options = {}) {
     if (!snapshot || typeof window === 'undefined') return;
-    const restore = () => window.scrollTo(snapshot.x || 0, snapshot.y || 0);
+    const strong = Boolean(options?.strong);
+    const restore = () => {
+      try {
+        window.scrollTo({ left: snapshot.x || 0, top: snapshot.y || 0, behavior: 'auto' });
+      } catch {
+        window.scrollTo(snapshot.x || 0, snapshot.y || 0);
+      }
+    };
     window.requestAnimationFrame?.(restore);
     if (scrollRestoreTimerRef.current) window.clearTimeout(scrollRestoreTimerRef.current);
-    scrollRestoreTimerRef.current = window.setTimeout(restore, 80);
+    const delays = strong ? [0, 40, 120, 260, 520] : [80];
+    delays.forEach((delay, index) => {
+      const timer = window.setTimeout(restore, delay);
+      if (index === delays.length - 1) scrollRestoreTimerRef.current = timer;
+    });
   }
 
-  function preserveWindowScroll(action) {
+  function preserveWindowScroll(action, options = {}) {
     const snapshot = windowScrollSnapshot();
     const result = action?.();
-    restoreWindowScrollSoon(snapshot);
+    restoreWindowScrollSoon(snapshot, options);
     return result;
+  }
+
+  // Schutzregel: Wiedergabeaktionen in Inhaltsbereichen duerfen niemals die
+  // Seitenposition veraendern. Der MiniPlayer darf reagieren, aber Library-
+  // Listen, Cover-Ansichten und Songdetails muessen beim Play/Pause-Klick
+  // scrollstabil bleiben.
+  function preservePlaybackClick(event, action) {
+    event?.preventDefault?.();
+    event?.stopPropagation?.();
+    try { event?.currentTarget?.blur?.(); } catch { /* Fokus darf keine Scroll-Korrektur ausloesen. */ }
+    return preserveWindowScroll(action, { strong: true });
   }
 
   async function preserveWindowScrollAsync(action) {
@@ -1550,29 +1572,33 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
   }
 
   function playProject(project) {
-    if (isCurrentProject(project)) {
-      onToggleCurrentPlayback?.();
-      return;
-    }
-    const list = visiblePlayableQueue();
-    const firstId = (project.playable[0] || project.assets.find(isPlayable))?.id;
-    const startIndex = Math.max(0, list.findIndex((item) => item.id === firstId));
-    const fallbackQueue = project.assets.filter(isPlayable).map((asset) => withVariantPlaybackMeta(asset, project));
-    onPlay(list.length ? list : fallbackQueue, startIndex);
+    preserveWindowScroll(() => {
+      if (isCurrentProject(project)) {
+        onToggleCurrentPlayback?.();
+        return;
+      }
+      const list = visiblePlayableQueue();
+      const firstId = (project.playable[0] || project.assets.find(isPlayable))?.id;
+      const startIndex = Math.max(0, list.findIndex((item) => item.id === firstId));
+      const fallbackQueue = project.assets.filter(isPlayable).map((asset) => withVariantPlaybackMeta(asset, project));
+      onPlay(list.length ? list : fallbackQueue, startIndex);
+    }, { strong: true });
   }
 
   function playAsset(asset, queue = null, index = 0, project = activeProject) {
-    if (isCurrentAsset(asset)) {
-      onToggleCurrentPlayback?.();
-      return;
-    }
-    const playbackAsset = project ? withVariantPlaybackMeta(asset, project) : asset;
-  const explicitQueue = Array.isArray(queue) ? queue.filter(isPlayable) : [];
-  const libraryQueue = visiblePlayableQueue();
-  const preferredQueue = explicitQueue.length ? explicitQueue : libraryQueue;
-    const safeQueue = (preferredQueue.length ? preferredQueue : [playbackAsset]).filter(isPlayable);
-    const safeIndex = Math.max(0, safeQueue.findIndex((item) => String(item.id) === String(asset.id)));
-    onPlay(safeQueue, safeIndex >= 0 ? safeIndex : Math.max(0, index));
+    preserveWindowScroll(() => {
+      if (isCurrentAsset(asset)) {
+        onToggleCurrentPlayback?.();
+        return;
+      }
+      const playbackAsset = project ? withVariantPlaybackMeta(asset, project) : asset;
+      const explicitQueue = Array.isArray(queue) ? queue.filter(isPlayable) : [];
+      const libraryQueue = visiblePlayableQueue();
+      const preferredQueue = explicitQueue.length ? explicitQueue : libraryQueue;
+      const safeQueue = (preferredQueue.length ? preferredQueue : [playbackAsset]).filter(isPlayable);
+      const safeIndex = Math.max(0, safeQueue.findIndex((item) => String(item.id) === String(asset.id)));
+      onPlay(safeQueue, safeIndex >= 0 ? safeIndex : Math.max(0, index));
+    }, { strong: true });
   }
 
   async function addToPlaylist(asset, playlistId) {
@@ -3449,14 +3475,14 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
 
   function openAiCoverModal(asset) {
     if (!asset?.id) return;
-    setAiCoverForm({ model: 'pro', note: '', referenceFile: null });
+    setAiCoverForm({ model: 'pro', note: '', referenceFile: null, titleTextEnabled: false });
     setAiCoverAsset(asset);
   }
 
   function closeAiCoverModal() {
     if (aiCoverBusy) return;
     setAiCoverAsset(null);
-    setAiCoverForm({ model: 'pro', note: '', referenceFile: null });
+    setAiCoverForm({ model: 'pro', note: '', referenceFile: null, titleTextEnabled: false });
   }
 
   function handleAiCoverReferenceFileChange(event) {
@@ -3472,11 +3498,15 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
       const formData = new FormData();
       formData.append('model', String(aiCoverForm.model || 'pro'));
       if (String(aiCoverForm.note || '').trim()) formData.append('note', String(aiCoverForm.note || '').trim());
+      // Cover-Titeltext ist bewusst standardmaessig deaktiviert: Bildmodelle
+      // erzeugen haeufig fehlerhafte Buchstaben. Nur dieses explizite UI-Feld
+      // darf den Text-Prompt wieder aktivieren.
+      formData.append('title_text_enabled', aiCoverForm.titleTextEnabled ? 'true' : 'false');
       if (aiCoverForm.referenceFile) formData.append('reference_image', aiCoverForm.referenceFile, aiCoverForm.referenceFile.name || 'reference-image');
       const result = await api.archive.generateAiCover(aiCoverAsset.id, formData);
       notify?.(t('library.messages.aiCoverStarted', 'KI-Cover gestartet: {{task}}', { task: result.task_id || result.id || t('library.messages.taskCreated', 'Task erstellt') }), 'success');
       setAiCoverAsset(null);
-      setAiCoverForm({ model: 'pro', note: '', referenceFile: null });
+      setAiCoverForm({ model: 'pro', note: '', referenceFile: null, titleTextEnabled: false });
       await onReload?.({ forceContentRefresh: true });
     } catch (err) {
       notify?.(err?.message || t('library.messages.aiCoverFailed', 'KI-Cover konnte nicht gestartet werden.'), 'error');
@@ -3958,6 +3988,18 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
         {asset && (
           <div className="stack ai-cover-modal">
             <p className="muted">{t('library.cover.aiText', 'Erstellt ein professionelleres Titel-Cover aus Titel, Prompt/Lyrics und Style/Tags dieses Songs. Optional kannst du Zusatzanweisungen wie --note und ein Referenzbild wie --ref mitgeben.')}</p>
+            <label className="checkbox-row ai-cover-title-text-toggle">
+              <input
+                type="checkbox"
+                checked={Boolean(aiCoverForm.titleTextEnabled)}
+                onChange={(event) => setAiCoverForm((state) => ({ ...state, titleTextEnabled: event.target.checked }))}
+                disabled={aiCoverBusy}
+              />
+              <span>
+                <strong>{t('library.cover.titleTextToggle', 'Titeltext im Cover erzeugen')}</strong>
+                <small>{t('library.cover.titleTextToggleHint', 'Standard: aus. Empfohlen, weil Bildmodelle Text oft falsch schreiben. Einschalten nur, wenn der Titel bewusst ins Bild soll.')}</small>
+              </span>
+            </label>
             <label>{t('music.fields.model', 'Modell')}
               <select value={aiCoverForm.model} onChange={(event) => setAiCoverForm((state) => ({ ...state, model: event.target.value }))}>
                 <option value="pro">{t('library.cover.modelPro', 'pro · bester Allrounder')}</option>
@@ -4473,7 +4515,7 @@ ${generationOptionsText(asset)}`,
           <label className="gallery-select-checkbox" title={t('library.selectAsset', '{{title}} auswählen', { title: pickTitle(asset) })} onPointerDown={(event) => event.stopPropagation()} onClick={(event) => event.stopPropagation()}>
             <input type="checkbox" checked={selectedIds.has(asset.id)} onChange={() => toggleSelected(asset.id)} aria-label={t('library.selectAsset', '{{title}} auswählen', { title: pickTitle(asset) })} />
           </label>
-          <button className="gallery-single-cover" type="button" onClick={() => playAsset(asset, projectQueue, queueIndex)} title={isPlayingAsset(asset) ? t('player.pause', 'Pause') : t('player.play', 'Abspielen')}>
+          <button className="gallery-single-cover" type="button" onClick={(event) => preservePlaybackClick(event, () => playAsset(asset, projectQueue, queueIndex, project))} title={isPlayingAsset(asset) ? t('player.pause', 'Pause') : t('player.play', 'Abspielen')}>
             <img src={pickCover(asset)} alt={pickTitle(asset)} onError={handleCoverImageError} />
             <span className="cover-play">{isPlayingAsset(asset) ? <Pause size={18} /> : <Play size={18} fill="currentColor" />}</span>
           </button>
@@ -4493,7 +4535,7 @@ ${generationOptionsText(asset)}`,
           <small>{label} · {formatDuration(asset.duration_seconds)}</small>
         </div>
         <div className="gallery-tile-actions">
-          <button type="button" onClick={() => playAsset(asset, projectQueue, queueIndex)}>{isPlayingAsset(asset) ? t('player.pause', 'Pause') : t('player.play', 'Play')}</button>
+          <button type="button" onClick={(event) => preservePlaybackClick(event, () => playAsset(asset, projectQueue, queueIndex, project))}>{isPlayingAsset(asset) ? t('player.pause', 'Pause') : t('player.play', 'Play')}</button>
           <button type="button" onClick={() => openWorkflowWizard(asset)}>Wizard</button>
           <AudioActionMenu asset={asset} compact label="" dropUp playQueue={projectQueue} playIndex={queueIndex} project={project} />
         </div>
@@ -4513,7 +4555,7 @@ ${generationOptionsText(asset)}`,
         <label className="asset-flat-select" title={t('library.selectAsset', '{{title}} auswählen', { title: pickTitle(asset) })} onPointerDown={(event) => event.stopPropagation()} onClick={(event) => event.stopPropagation()}>
           <input type="checkbox" checked={selectedIds.has(asset.id)} onChange={() => toggleSelected(asset.id)} aria-label={t('library.selectAsset', '{{title}} auswählen', { title: pickTitle(asset) })} />
         </label>
-        <button className={`asset-flat-cover ${active ? 'is-active-cover' : ''}`} type="button" onClick={() => playAsset(asset, projectQueue, queueIndex, project)} disabled={!isPlayable(asset)} title={isPlayingAsset(asset) ? t('player.pause', 'Pause') : t('player.play', 'Abspielen')}>
+        <button className={`asset-flat-cover ${active ? 'is-active-cover' : ''}`} type="button" onClick={(event) => preservePlaybackClick(event, () => playAsset(asset, projectQueue, queueIndex, project))} disabled={!isPlayable(asset)} title={isPlayingAsset(asset) ? t('player.pause', 'Pause') : t('player.play', 'Abspielen')}>
           <img src={pickCover(asset)} alt={pickTitle(asset)} onError={handleCoverImageError} />
           <span className="cover-play">{isPlayingAsset(asset) ? <Pause size={16} /> : <Play size={16} fill="currentColor" />}</span>
         </button>
@@ -4541,7 +4583,7 @@ ${generationOptionsText(asset)}`,
           {badges.map((badge) => <span key={badge.key} className={`status ${badge.className || 'cached'}`}>{badge.label}</span>)}
         </div>}
         <div className="asset-flat-actions">
-          <button type="button" onClick={() => playAsset(asset, projectQueue, queueIndex, project)} disabled={!isPlayable(asset)}>{isPlayingAsset(asset) ? <Pause size={15} /> : <Play size={15} fill="currentColor" />}</button>
+          <button type="button" onClick={(event) => preservePlaybackClick(event, () => playAsset(asset, projectQueue, queueIndex, project))} disabled={!isPlayable(asset)}>{isPlayingAsset(asset) ? <Pause size={15} /> : <Play size={15} fill="currentColor" />}</button>
           <button type="button" className={isAssetFavorite(asset) ? 'favorite-action is-favorite' : 'favorite-action'} onClick={() => toggleAssetFavorite(asset)} disabled={favoriteSavingIds.has(asset.id)} title={isAssetFavorite(asset) ? t('library.actions.removeFavorite', 'Favorit entfernen') : t('library.actions.saveFavorite', 'Als Favorit speichern')}>
             <ThumbsUp size={15} fill={isAssetFavorite(asset) ? 'currentColor' : 'none'} />
           </button>
@@ -4590,7 +4632,7 @@ ${generationOptionsText(asset)}`,
           ))}
         </div>
         <div className="button-row wrap compact">
-          <button type="button" onClick={() => playProject(project)}>{projectPlaying ? t('player.pause', 'Pause') : t('player.play', 'Play')}</button>
+          <button type="button" onClick={(event) => preservePlaybackClick(event, () => playProject(project))}>{projectPlaying ? t('player.pause', 'Pause') : t('player.play', 'Play')}</button>
           <button type="button" onClick={(event) => openProjectDetails(project, event)}>{t('library.details', 'Details')}</button>
           {bestAsset && <button type="button" onClick={() => openWorkflowWizard(bestAsset)}>Wizard</button>}
         </div>
@@ -4715,7 +4757,7 @@ ${generationOptionsText(asset)}`,
           </div>
         </div>
         <div className="detail-hero library-hero">
-          <button className={`hero-cover-button ${isCurrentProject(activeProject) ? 'is-active-cover' : ''}`} type="button" onClick={() => playProject(activeProject)} title={isPlayingProject(activeProject) ? t('player.pause', 'Pause') : t('library.detail.playBestVersion', 'Beste Version abspielen')}>
+          <button className={`hero-cover-button ${isCurrentProject(activeProject) ? 'is-active-cover' : ''}`} type="button" onClick={(event) => preservePlaybackClick(event, () => playProject(activeProject))} title={isPlayingProject(activeProject) ? t('player.pause', 'Pause') : t('library.detail.playBestVersion', 'Beste Version abspielen')}>
             <img src={activeProject.cover || '/static/favicon.ico'} alt="Cover" onError={handleCoverImageError} />
             <span>{isPlayingProject(activeProject) ? <Pause size={18} /> : <Play size={18} fill="currentColor" />}</span>
           </button>
@@ -4726,7 +4768,7 @@ ${generationOptionsText(asset)}`,
             <p className="muted">{summarizeStyle(pickStyle(activeProject.assets.find((asset) => pickStyle(asset))), 220, t)}</p>
             {activeProject.assets.some((asset) => voiceLabelForAsset(asset)) && <p className="muted voice-detail-line">{t('library.detail.voice', 'Stimme')}: <strong>{voiceLabelForAsset(activeProject.assets.find((asset) => voiceLabelForAsset(asset)))}</strong></p>}
             <div className="button-row wrap">
-              <button className="primary" type="button" onClick={() => playProject(activeProject)}><Headphones size={16} /> {isPlayingProject(activeProject) ? t('player.pause', 'Pause') : t('library.detail.playBestVersion', 'Beste Version abspielen')}</button>
+              <button className="primary" type="button" onClick={(event) => preservePlaybackClick(event, () => playProject(activeProject))}><Headphones size={16} /> {isPlayingProject(activeProject) ? t('player.pause', 'Pause') : t('library.detail.playBestVersion', 'Beste Version abspielen')}</button>
               <button type="button" onClick={() => openPictureViewer(projectCoverAsset)} disabled={!projectCoverAsset}><Maximize2 size={16} /> {t('library.actions.viewCoverLarge', 'Cover groß anzeigen')}</button>
               <button type="button" onClick={() => downloadCoverImage(projectCoverAsset)} disabled={!projectCoverAsset}><Download size={16} /> {t('library.actions.downloadCover', 'Cover herunterladen')}</button>
               <button type="button" onClick={() => { const best = activeProject.assets.find((item) => isAssetFavorite(item)) || activeProject.playable?.[0] || activeProject.assets[0]; if (best) toggleAssetFavorite(best, !isAssetFavorite(best)); }} disabled={!activeProject.assets.length || Boolean(favoriteSavingIds.size)}><ThumbsUp size={16} fill={activeProject.assets.some((item) => isAssetFavorite(item)) ? 'currentColor' : 'none'} /> {activeProject.assets.some((item) => isAssetFavorite(item)) ? t('library.actions.removeFavorite', 'Favorit entfernen') : t('library.actions.saveFavorite', 'Als Favorit speichern')}</button>
@@ -4783,7 +4825,7 @@ ${generationOptionsText(asset)}`,
                     <article className={`variant-card horizontal variant-accordion-card ${variantOpen ? 'is-open' : 'is-collapsed'} ${isCurrentAsset(asset) ? 'is-playing-row' : ''}`} key={asset.id} data-react-asset-row={asset.id}>
                       <label className="select-box"><input type="checkbox" checked={selectedIds.has(asset.id)} onChange={() => toggleSelected(asset.id)} /></label>
                       <div className="variant-cover-column">
-                        <button className={`variant-cover-button ${isCurrentAsset(asset) ? 'is-active-cover' : ''}`} type="button" onClick={() => playAsset(playbackAsset, projectQueue, index, activeProject)} disabled={!isPlayable(asset)} title={isPlayingAsset(asset) ? t('player.pause', 'Pause') : t('player.play', 'Abspielen')}>
+                        <button className={`variant-cover-button ${isCurrentAsset(asset) ? 'is-active-cover' : ''}`} type="button" onClick={(event) => preservePlaybackClick(event, () => playAsset(playbackAsset, projectQueue, index, activeProject))} disabled={!isPlayable(asset)} title={isPlayingAsset(asset) ? t('player.pause', 'Pause') : t('player.play', 'Abspielen')}>
                           <img src={pickCover(asset)} alt="Cover" onError={handleCoverImageError} />
                           <span>{isPlayingAsset(asset) ? <Pause size={18} /> : <Play size={18} fill="currentColor" />}</span>
                         </button>
@@ -4810,7 +4852,7 @@ ${generationOptionsText(asset)}`,
                         <p className="muted">{formatDuration(asset.duration_seconds)} · songs.id {songDatabaseId(asset) ?? '—'} · audio_assets.id {asset.id} · Audio-ID {shortId(asset.audio_id, 14)} · Task {shortId(asset.suno_task_id, 14)}{voiceLabelForAsset(asset) ? ` · ${t('library.detail.voice', 'Stimme')} ${voiceLabelForAsset(asset)}` : ''}</p>
                           {isCurrentAsset(asset) && <div className="library-inline-waveform"><span>{playbackState?.isPlaying ? t('library.playback.running', 'Läuft') : t('library.playback.ready', 'Bereit')} · {formatDuration(playbackState?.currentTime || 0)} / {formatDuration(playbackState?.duration || asset.duration_seconds)}</span><Waveform asset={asset} compact currentTime={playbackState?.currentTime || 0} durationSeconds={playbackState?.duration || asset.duration_seconds} interactive={false} /></div>}
                           <div className="button-row wrap">
-                            <button type="button" onClick={() => playAsset(playbackAsset, projectQueue, index, activeProject)}>{isPlayingAsset(asset) ? t('player.pause', 'Pause') : t('player.play', 'Abspielen')}</button>
+                            <button type="button" onClick={(event) => preservePlaybackClick(event, () => playAsset(playbackAsset, projectQueue, index, activeProject))}>{isPlayingAsset(asset) ? t('player.pause', 'Pause') : t('player.play', 'Abspielen')}</button>
                             <button type="button" className={isAssetFavorite(asset) ? 'favorite-action is-favorite' : 'favorite-action'} onClick={() => toggleAssetFavorite(asset)} disabled={favoriteSavingIds.has(asset.id)}><ThumbsUp size={15} fill={isAssetFavorite(asset) ? 'currentColor' : 'none'} /> {t('library.favorites', 'Favoriten')}</button>
                             <button type="button" className="stable-detail-action-button" onClick={() => setActionAsset(playbackAsset)}><MoreHorizontal size={15} /> {t('library.actionModal.title', 'Aktionen')}</button>
                             <button type="button" onClick={() => openPictureViewer(asset)} disabled={isFallbackCoverUrl(pickCover(asset))}><Maximize2 size={15} /> {t('library.actions.viewCoverLarge', 'Cover groß anzeigen')}</button>
@@ -4861,7 +4903,7 @@ ${generationOptionsText(asset)}`,
                               )}
                             </div>
                             <div className="button-row wrap">
-                              <button type="button" onClick={() => playAsset(playbackAsset, projectQueue, index, activeProject)}>{isPlayingAsset(asset) ? t('player.pause', 'Pause') : t('player.play', 'Abspielen')}</button>
+                              <button type="button" onClick={(event) => preservePlaybackClick(event, () => playAsset(playbackAsset, projectQueue, index, activeProject))}>{isPlayingAsset(asset) ? t('player.pause', 'Pause') : t('player.play', 'Abspielen')}</button>
                               <button type="button" className={isAssetFavorite(asset) ? 'favorite-action is-favorite' : 'favorite-action'} onClick={() => toggleAssetFavorite(asset)} disabled={favoriteSavingIds.has(asset.id)}><ThumbsUp size={15} fill={isAssetFavorite(asset) ? 'currentColor' : 'none'} /></button>
                               <AudioActionMenu asset={playbackAsset} compact label="" dropUp />
                               <button type="button" onClick={() => toggleVariantAccordion(asset, index)}>{t('library.detail.showDetails', 'Details anzeigen')}</button>

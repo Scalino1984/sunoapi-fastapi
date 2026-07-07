@@ -112,6 +112,9 @@ export function AdminPage({ notify }) {
         srt_output_enabled: next.srt_output_enabled !== false,
         srt_auto_regenerate: Boolean(next.srt_auto_regenerate),
         srt_generate_vocal_stems_before_transcription: Boolean(next.srt_generate_vocal_stems_before_transcription),
+        srt_alignment_engine: next.srt_alignment_engine === 'forced_alignment' ? 'forced_alignment' : 'heuristic',
+        srt_quality_gate_enabled: Boolean(next.srt_quality_gate_enabled),
+        srt_quality_gate_min_score: Math.max(0.3, Math.min(0.95, Number(next.srt_quality_gate_min_score || 0.7))),
         srt_ai_cleanup_enabled: next.srt_ai_display_optimization_enabled !== false && next.srt_ai_cleanup_enabled !== false,
         srt_ai_display_optimization_enabled: next.srt_ai_display_optimization_enabled !== false && next.srt_ai_cleanup_enabled !== false,
         library_content_polling_enabled: Boolean(next.library_content_polling_enabled),
@@ -367,6 +370,16 @@ export function AdminPage({ notify }) {
                   <label className="check"><input type="checkbox" checked={settings.srt_output_enabled !== false} onChange={(event) => setSettings({ ...settings, srt_output_enabled: event.target.checked })} /> {t('admin.srt.enabled', 'SRT-Erzeugung aktiv')}</label>
                   <label className="check"><input type="checkbox" checked={Boolean(settings.srt_auto_regenerate)} onChange={(event) => setSettings({ ...settings, srt_auto_regenerate: event.target.checked })} /> {t('admin.srt.autoRegenerate', 'Bestehende SRTs bei Bedarf überschreiben')}</label>
                   <label className="check"><input type="checkbox" checked={Boolean(settings.srt_generate_vocal_stems_before_transcription)} onChange={(event) => setSettings({ ...settings, srt_generate_vocal_stems_before_transcription: event.target.checked })} /> {t('admin.srt.generateVocalStems', 'Vocal-Stems vor SRT automatisch erzeugen')}</label>
+                  <label>{t('admin.srt.alignmentEngine', 'Alignment-Engine')}
+                    <select value={settings.srt_alignment_engine === 'forced_alignment' ? 'forced_alignment' : 'heuristic'} onChange={(event) => setSettings({ ...settings, srt_alignment_engine: event.target.value })}>
+                      <option value="heuristic">{t('admin.srt.engineHeuristic', 'Heuristik (ASR-Anker + Interpolation)')}</option>
+                      <option value="forced_alignment">{t('admin.srt.engineForced', 'Forced Alignment (MMS/CTC, benötigt torch/torchaudio)')}</option>
+                    </select>
+                  </label>
+                  <label className="check"><input type="checkbox" checked={Boolean(settings.srt_quality_gate_enabled)} onChange={(event) => setSettings({ ...settings, srt_quality_gate_enabled: event.target.checked })} /> {t('admin.srt.qualityGate', 'Quality-Gate mit Auto-Eskalation (Vocal-Stem → Forced Alignment)')}</label>
+                  <label>{t('admin.srt.qualityGateMinScore', 'Quality-Gate Mindest-Score (0.3–0.95)')}
+                    <input type="number" min="0.3" max="0.95" step="0.05" value={settings.srt_quality_gate_min_score ?? 0.7} onChange={(event) => setSettings({ ...settings, srt_quality_gate_min_score: Number(event.target.value) })} />
+                  </label>
                   <label className="check srt-ai-display-option">
                     <input
                       type="checkbox"

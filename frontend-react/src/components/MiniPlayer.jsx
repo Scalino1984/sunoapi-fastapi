@@ -195,7 +195,11 @@ export function MiniPlayer({ queue, currentIndex, loop, sidebarMode = 'open', mo
   const queueItems = Array.isArray(queue) ? queue : [];
   const current = queueItems[currentIndex] || null;
   const currentAssetId = current?.id ? String(current.id) : '';
-  const preferHalfSrtDisplay = useMediaQuery(MOBILE_SRT_MEDIA_QUERY);
+  const isMobileSrtViewport = useMediaQuery(MOBILE_SRT_MEDIA_QUERY);
+  const [srtDisplayPreference, setSrtDisplayPreference] = useState(() => {
+    const stored = typeof window !== 'undefined' ? localStorage.getItem('react-mini-player-srt-display-mode') : null;
+    return ['srt', 'half'].includes(stored) ? stored : 'auto';
+  });
 
   const src = useMemo(() => stableStreamUrl(currentAssetId), [currentAssetId]);
 
@@ -595,9 +599,23 @@ export function MiniPlayer({ queue, currentIndex, loop, sidebarMode = 'open', mo
     if (action === 'stop') { closePlayer(); }
   }, [playerCommand]);
 
-  const srtSegments = useMemo(() => srtSegmentsFromState(srtState, { preferHalf: preferHalfSrtDisplay }), [srtState, preferHalfSrtDisplay]);
+  const fullSrtSegments = useMemo(() => srtSegmentsFromState(srtState, { preferHalf: false }), [srtState]);
+  const halfSrtSegments = useMemo(() => srtSegmentsFromState(srtState, { preferHalf: true }), [srtState]);
+  const requestedSrtDisplayMode = srtDisplayPreference === 'auto'
+    ? (isMobileSrtViewport ? 'half' : 'srt')
+    : srtDisplayPreference;
+  const hasFullSrt = fullSrtSegments.length > 0;
+  const hasHalfSrt = halfSrtSegments.length > 0;
+  const effectiveSrtDisplayMode = requestedSrtDisplayMode === 'half' && hasHalfSrt
+    ? 'half'
+    : hasFullSrt
+      ? 'srt'
+      : hasHalfSrt
+        ? 'half'
+        : 'srt';
+  const srtSegments = effectiveSrtDisplayMode === 'half' ? halfSrtSegments : fullSrtSegments;
   const srtDisplayTime = Math.max(0, Number(currentTime || 0) + SRT_DISPLAY_LEAD_SECONDS);
-  const hasSrt = srtSegments.length > 0;
+  const hasSrt = hasFullSrt || hasHalfSrt;
   const displayedSrtSegment = findActiveSrtSegment(srtSegments, srtDisplayTime);
   const displayedSrtText = displayedSrtSegment?.text || '';
   const displayedSrtLength = displayedSrtText.replace(/\s+/g, ' ').trim().length;
@@ -613,6 +631,17 @@ export function MiniPlayer({ queue, currentIndex, loop, sidebarMode = 'open', mo
   // werden, weil jeder Zeilenwechsel sonst alle aktiven Tabs/Editoren indirekt
   // neu rendert und Textauswahl, Dropdowns sowie Scrollbereiche zerstoert.
   // Nur dieser Komponentenbereich darf die laufende SRT-Zeile live aktualisieren.
+
+  function setSrtDisplayMode(mode) {
+    const nextMode = mode === 'half' ? 'half' : 'srt';
+    setSrtDisplayPreference(nextMode);
+    try { localStorage.setItem('react-mini-player-srt-display-mode', nextMode); } catch { /* ignore */ }
+  }
+
+  function toggleSrtDisplayMode() {
+    if (!hasFullSrt || !hasHalfSrt) return;
+    setSrtDisplayMode(effectiveSrtDisplayMode === 'half' ? 'srt' : 'half');
+  }
 
   function handleAudioError() {
     if (!current?.id || !audioRef.current) {
@@ -1008,7 +1037,25 @@ export function MiniPlayer({ queue, currentIndex, loop, sidebarMode = 'open', mo
         <div className={`mini-player-visual ${playerView === 'srt' && hasSrt ? 'is-srt' : 'is-waveform'}`}>
           {playerView === 'srt' && hasSrt ? (
             <div className="mini-player-srt-live" style={{ '--srt-live-font-size': displayedSrtFontSize }}>
-              <span className="mini-player-srt-label">{t('player.liveSrt', 'Live-SRT')}</span>
+              <button
+                type="button"
+                className={`mini-player-srt-mode-switch ${effectiveSrtDisplayMode === 'half' ? 'is-half' : 'is-srt'}`}
+                onClick={toggleSrtDisplayMode}
+                disabled={!hasFullSrt || !hasHalfSrt}
+                aria-pressed={effectiveSrtDisplayMode === 'half'}
+                title={
+                  hasFullSrt && hasHalfSrt
+                    ? effectiveSrtDisplayMode === 'half'
+                      ? t('player.switchToFullSrt', 'Auf normale SRT umschalten')
+                      : t('player.switchToHalfSrt', 'Auf HALF-SRT umschalten')
+                    : hasHalfSrt
+                      ? t('player.onlyHalfSrtAvailable', 'Nur HALF-SRT ist für diesen Song vorhanden')
+                      : t('player.halfSrtMissing', 'HALF-SRT ist für diesen Song nicht vorhanden')
+                }
+              >
+                <span>{effectiveSrtDisplayMode === 'half' ? 'HALF-SRT' : 'SRT'}</span>
+                {hasFullSrt && hasHalfSrt && <small aria-hidden="true">↔</small>}
+              </button>
               <strong title={displayedSrtText}>{displayedSrtText || '\u00a0'}</strong>
               {displayedSrtSegment && <small>{formatClock(displayedSrtSegment.start)} → {formatClock(displayedSrtSegment.end)}</small>}
             </div>

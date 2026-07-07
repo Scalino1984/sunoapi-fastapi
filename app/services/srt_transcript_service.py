@@ -1767,6 +1767,48 @@ def _script_protect_early_gap_before_anchor(
 
     return current_start, None
 
+def _script_early_hyp_resembles_intro(lines: list[LyricLine], first: int, hyp: list[HypWord] | None, *, before_time: float) -> bool:
+    """True, wenn fruehe ASR-Tokens textlich zu den Intro-Zeilen passen."""
+    if not hyp:
+        return False
+    intro_tokens = {token for index in range(first) for token in lines[index].match_tokens if len(token) >= 3}
+    if not intro_tokens:
+        return False
+    for word in hyp:
+        if float(word.start) >= before_time:
+            break
+        for token in intro_tokens:
+            if _script_word_similarity(word.norm, token) >= 0.62:
+                return True
+    return False
+
+
+def _script_onset_adjusted_window_start(
+    hyp: list[HypWord] | None,
+    window_start: float,
+    window_end: float,
+    required_seconds: float,
+) -> float | None:
+    """Verschiebt den Start eines Schaetz-Fensters auf den ASR-Vokal-Onset.
+
+    Ursachen-Fix: Ungematchte Zeilen zwischen zwei Ankern wurden bisher direkt
+    ab dem Ende der Vorgaengerzeile verteilt. Liegt im Fenster erst Stille oder
+    Instrumental und die Stimme setzt spaeter wieder ein (ASR-Woerter vorhanden,
+    nur textlich nicht gematcht), erschienen die Zeilen mehrere Sekunden zu
+    frueh. Der Fensterstart folgt jetzt dem ersten ASR-Wort im Fenster; damit
+    die Zeilen lesbar bleiben, wird nie weiter verschoben, als das Fenster
+    Platz fuer `required_seconds` laesst.
+    """
+    onset = _script_first_hyp_onset_in_window(hyp, window_start, window_end)
+    if onset is None:
+        return None
+    latest_start = window_end - max(0.6, required_seconds)
+    adjusted = min(onset, max(window_start, latest_start))
+    if adjusted <= window_start + 0.75:
+        return None
+    return adjusted
+
+
 def _script_resolve_timeline(
     lines: list[LyricLine],
     warn_factor: float,
@@ -1808,10 +1850,21 @@ def _script_resolve_timeline(
         # sondern nur die Schaetzung fuer nicht gematchte Zeilen vor dem ersten
         # Wort-Anker.
         if end >= 2.0:
-            protected_window = max(need, min(4.75, end * 0.62))
+            # Ursachen-Fix: Das Schutzfenster richtet sich nach dem tatsaechlichen
+            # Textumfang der fehlenden Intro-Zeilen (Lesbarkeitsfenster), nicht
+            # mehr pauschal nach 62% der Ankerzeit. Eine kurze Intro-Zeile wie
+            # "Yeah. Absolute Dunkelheit." wurde sonst ~3s vor ihren echten
+            # Einsatz gezogen.
+            content_window = max(need, _script_min_intro_gap_seconds(lines, 0, first))
+            protected_window = min(content_window, max(need, min(4.75, end * 0.62)))
             protected_start = max(0.0, end - protected_window)
             if hyp_first_start is not None and 0.75 <= hyp_first_start < end - 0.20:
-                protected_start = min(protected_start, max(0.0, float(hyp_first_start)))
+                # Der erste ASR-Wortbeginn darf das Fenster nur nach vorne ziehen,
+                # wenn die fruehen ASR-Tokens den Intro-Zeilen textlich aehneln;
+                # Halluzinationen/fremde Adlibs am Songanfang pinnen die Zeile
+                # sonst faelschlich auf den ersten ASR-Onset.
+                if _script_early_hyp_resembles_intro(lines, first, hyp, before_time=end - 0.20):
+                    protected_start = min(protected_start, max(0.0, float(hyp_first_start)))
             start = min(default_start, protected_start)
 
         _script_spread(lines, 0, first, start, end)
@@ -1842,7 +1895,15 @@ def _script_resolve_timeline(
             if tail_report:
                 report.append(tail_report)
         else:
-            _script_spread(lines, anchor_a + 1, anchor_b, window_start, window_end)
+            onset_start = _script_onset_adjusted_window_start(hyp, window_start, window_end, expected)
+            if onset_start is not None:
+                _script_spread(lines, anchor_a + 1, anchor_b, onset_start, window_end)
+                report.append(
+                    f"INFO: Zeilen {anchor_a + 2}-{anchor_b} am ASR-Vokal-Onset gestartet "
+                    f"({window_start:.1f}s -> {onset_start:.1f}s, Fensterende {window_end:.1f}s)."
+                )
+            else:
+                _script_spread(lines, anchor_a + 1, anchor_b, window_start, window_end)
         per_line = window / gap if gap else 0.0
         if expected > 0 and window < expected * warn_factor:
             report.append(
@@ -2420,6 +2481,81 @@ def _script_has_ambiguous_skipped_prefix(lines: list[LyricLine], match: _AsrLyri
     return False
 
 
+def _script_refine_review_anchor(
+    line: LyricLine,
+    hyp: list[HypWord],
+    block_start: float,
+    block_end: float,
+) -> tuple[float, float, list[float | None], list[float | None]] | None:
+    """Verfeinert einen Review-Anker auf die Zeilenwoerter innerhalb des Blocks.
+
+    Ursachen-Fix: ASR-Kandidatenbloecke folgen Gesangspausen, nicht
+    Zeilengrenzen. Wird durchgesungen, enthaelt ein Block haeufig den Schluss
+    der Vorgaengerzeile ("... in dein Fledermausland CHRONISCH GENIALER ...").
+    Die bisherige Uebernahme der Blockgrenzen zog solche Zeilen sekundenweise
+    nach vorn. Hier werden die Zeilen-Tokens gegen die Blockwoerter
+    sub-aligned (exakt + Fuzzy wie im Hauptalignment); Start/Ende kommen dann
+    von den tatsaechlich zur Zeile gehoerenden Woertern. Liefert None, wenn zu
+    wenige Tokens sicher zuordenbar sind -- dann bleibt das bisherige
+    Blockgrenzen-Verhalten als Fallback bestehen.
+    """
+    block_words = [
+        word for word in hyp
+        if float(word.start) >= block_start - 0.02 and float(word.end) <= block_end + 0.02
+    ]
+    if len(block_words) < 2:
+        return None
+    tokens = list(line.match_tokens)
+    if not tokens:
+        return None
+
+    starts: list[float | None] = [None] * len(tokens)
+    ends: list[float | None] = [None] * len(tokens)
+    matcher = difflib.SequenceMatcher(a=[word.norm for word in block_words], b=tokens, autojunk=False)
+    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+        if tag == "equal":
+            for offset in range(i2 - i1):
+                starts[j1 + offset] = float(block_words[i1 + offset].start)
+                ends[j1 + offset] = float(block_words[i1 + offset].end)
+        elif tag == "replace":
+            span = min(i2 - i1, j2 - j1)
+            for offset in range(span):
+                j = j1 + offset
+                if starts[j] is None and _script_word_similarity(block_words[i1 + offset].norm, tokens[j]) >= SCRIPT_FUZZY_WORD_THRESHOLD:
+                    starts[j] = float(block_words[i1 + offset].start)
+                    ends[j] = float(block_words[i1 + offset].end)
+            for offset in range(1, span + 1):
+                j = j2 - offset
+                if starts[j] is None and _script_word_similarity(block_words[i2 - offset].norm, tokens[j]) >= SCRIPT_FUZZY_WORD_THRESHOLD:
+                    starts[j] = float(block_words[i2 - offset].start)
+                    ends[j] = float(block_words[i2 - offset].end)
+
+    matched_positions = [index for index, value in enumerate(starts) if value is not None and ends[index] is not None]
+    if len(tokens) == 1:
+        required = 1
+    elif len(tokens) <= 5:
+        required = 2
+    else:
+        required = max(2, int(round(len(tokens) * 0.34)))
+    if len(matched_positions) < required:
+        return None
+    refined_start = min(starts[index] for index in matched_positions)
+    refined_end = max(ends[index] for index in matched_positions)
+    if refined_end - refined_start < 0.30:
+        return None
+
+    word_starts: list[float | None] = []
+    word_ends: list[float | None] = []
+    cursor = 0
+    for count in line.tok_counts:
+        slice_starts = [starts[cursor + k] for k in range(count) if cursor + k < len(tokens) and starts[cursor + k] is not None]
+        slice_ends = [ends[cursor + k] for k in range(count) if cursor + k < len(tokens) and ends[cursor + k] is not None]
+        word_starts.append(min(slice_starts) if slice_starts else None)
+        word_ends.append(max(slice_ends) if slice_ends else None)
+        cursor += count
+    return refined_start, refined_end, word_starts, word_ends
+
+
 def _script_apply_asr_line_review(lines: list[LyricLine], hyp: list[HypWord]) -> list[str]:
     candidates = _script_build_asr_line_candidates(hyp)
     matches = _script_match_asr_candidates_to_lyrics(candidates, lines)
@@ -2431,6 +2567,7 @@ def _script_apply_asr_line_review(lines: list[LyricLine], hyp: list[HypWord]) ->
         "per fuzzy Block-Alignment."
     ]
     changed = 0
+    refined_count = 0
     for match in matches:
         if match.line_index < 0 or match.line_index >= len(lines):
             continue
@@ -2457,6 +2594,21 @@ def _script_apply_asr_line_review(lines: list[LyricLine], hyp: list[HypWord]) ->
         )
         if not should_apply:
             continue
+        refined = _script_refine_review_anchor(line, hyp, match.start, match.end)
+        if refined is not None:
+            refined_start, refined_end, word_starts, word_ends = refined
+            line.start = round(refined_start, 3)
+            line.end = round(max(refined_end, refined_start + 0.6), 3)
+            line.matched = True
+            if len(word_starts) == len(line.words) and any(value is not None for value in word_starts):
+                line.wstart = word_starts  # type: ignore[assignment]
+                line.wend = word_ends  # type: ignore[assignment]
+            else:
+                line.wstart = None
+                line.wend = None
+            refined_count += 1
+            changed += 1
+            continue
         line.start = round(match.start, 3)
         line.end = round(max(match.end, match.start + 0.6), 3)
         line.matched = True
@@ -2464,7 +2616,7 @@ def _script_apply_asr_line_review(lines: list[LyricLine], hyp: list[HypWord]) ->
         line.wend = None
         changed += 1
     if changed:
-        report.append(f"INFO: ASR-Zeilenabgleich: {changed} Lyrics-Zeile(n) als Timing-Anker korrigiert.")
+        report.append(f"INFO: ASR-Zeilenabgleich: {changed} Lyrics-Zeile(n) als Timing-Anker korrigiert ({refined_count} per Block-Subalignment verfeinert).")
     return report
 
 
@@ -4041,6 +4193,13 @@ def load_transcription_admin_settings(db: Session) -> dict[str, Any]:
         "srt_auto_regenerate": bool(value.get("srt_auto_regenerate", False)),
         "srt_generate_vocal_stems_before_transcription": bool(value.get("srt_generate_vocal_stems_before_transcription", False)),
         "srt_ai_cleanup_enabled": bool(value.get("srt_ai_cleanup_enabled", True)),
+        "srt_alignment_engine": (
+            str(value.get("srt_alignment_engine") or "heuristic").strip().lower()
+            if str(value.get("srt_alignment_engine") or "heuristic").strip().lower() in {"heuristic", "forced_alignment"}
+            else "heuristic"
+        ),
+        "srt_quality_gate_enabled": bool(value.get("srt_quality_gate_enabled", False)),
+        "srt_quality_gate_min_score": max(0.3, min(0.95, float(value.get("srt_quality_gate_min_score", 0.7) or 0.7))),
     }
 
 
@@ -5218,7 +5377,17 @@ def align_lyrics_to_timeline_bundle(lyrics: str, asr: AsrResult, duration_second
         report.extend(repeated_block_report)
         _script_enforce_monotonic(lines, min_dur=0.6, gap=0.04)
     _script_compute_word_times(lines)
+    return _finalize_alignment_bundle(lines, report, effective_info, alignment_method="lyrics_align_srt_reference")
 
+
+def _finalize_alignment_bundle(
+    lines: list[LyricLine],
+    report: list[str],
+    effective_info: dict[str, Any],
+    *,
+    alignment_method: str,
+    extra: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     segments: list[dict[str, Any]] = []
     for idx, line in enumerate(lines, start=1):
         start_value = round(float(line.start or 0.0), 3)
@@ -5231,7 +5400,7 @@ def align_lyrics_to_timeline_bundle(lyrics: str, asr: AsrResult, duration_second
             "text": line.display,
             "alignment_confidence": 1.0 if line.matched else 0.0,
             "matched": bool(line.matched),
-            "alignment_method": "lyrics_align_srt_reference",
+            "alignment_method": alignment_method,
         })
 
     if report:
@@ -5242,15 +5411,154 @@ def align_lyrics_to_timeline_bundle(lyrics: str, asr: AsrResult, duration_second
     if gapless_changed:
         report.append(f"INFO: Karaoke-SRT: {gapless_changed} Segment-Endzeiten bis zur naechsten Zeile verlaengert.")
     segments, _ = _extend_srt_segments_to_next_start(segments)
+    # Quality VOR der Normalisierung berechnen: externe Normalizer duerfen
+    # Zusatzfelder wie `matched` verwerfen, ohne den Score zu zerstoeren.
+    alignment_quality = compute_alignment_quality({"segments": segments, "alignment_report": report})
     normalized_segments = validate_and_normalize_srt_segments(segments)
     half_srt_text = _gapless_srt_text(_script_to_portrait_srt(lines, max_chars=22, min_dur=0.6))
-    return {
+    bundle = {
         "segments": normalized_segments,
         "half_srt_text": half_srt_text,
         "alignment_report": report,
         "half_max_chars": 22,
         "effective_srt_lyrics": effective_info,
     }
+    if extra:
+        bundle.update(extra)
+    bundle["alignment_quality"] = alignment_quality
+    return bundle
+
+
+def compute_alignment_quality(bundle: dict[str, Any]) -> dict[str, Any]:
+    """Qualitaets-Score eines Alignment-Laufs fuer Golden-Set und Quality-Gate.
+
+    Kombiniert Anker-Dichte (gematchte Zeilen), Schaetzanteil und WARN-Signale
+    zu einem Score in [0, 1]. Deterministisch und rein aus dem Bundle ableitbar.
+    """
+    segments = bundle.get("segments") or []
+    report = bundle.get("alignment_report") or []
+    total = len(segments)
+    matched = sum(1 for segment in segments if segment.get("matched"))
+    matched_ratio = matched / total if total else 0.0
+    estimated_lines = total - matched
+    warn_lines = [line for line in report if str(line).startswith("WARN")]
+    squeeze_warns = sum(1 for line in warn_lines if "gequetscht" in str(line))
+    word_source_degraded = any("KEINE Wort-Timestamps" in str(line) for line in warn_lines)
+
+    score = matched_ratio
+    score -= 0.06 * min(len(warn_lines), 5)
+    score -= 0.05 * min(squeeze_warns, 4)
+    if word_source_degraded:
+        score -= 0.25
+    score = max(0.0, min(1.0, round(score, 3)))
+    return {
+        "score": score,
+        "matched_ratio": round(matched_ratio, 3),
+        "matched_lines": matched,
+        "estimated_lines": estimated_lines,
+        "total_lines": total,
+        "warn_count": len(warn_lines),
+        "squeeze_warn_count": squeeze_warns,
+        "word_source_degraded": word_source_degraded,
+    }
+
+
+def align_lyrics_with_forced_alignment_bundle(
+    lyrics: str,
+    asr: AsrResult,
+    audio_path: Path,
+    duration_seconds: float,
+    source_lyrics: str | None = None,
+) -> dict[str, Any]:
+    """Alternative Alignment-Engine: CTC-Forced-Alignment (MMS) statt Heuristik.
+
+    Der Songtext ist bekannt; Forced Alignment richtet die bekannten Zeilen
+    direkt auf das Audio aus (Wortgrenzen ~20-50ms), ohne dass Woerter vom ASR
+    korrekt erkannt werden muessen. Das Groq/ASR-Transkript wird weiterhin fuer
+    die Effective-Lyrics-Erkennung (Suno-Wiederholungen) genutzt. Der komplette
+    Heuristik-Turm (tail_spread, gap_protection, Interpolation) entfaellt fuer
+    gematchte Zeilen. Faellt bei fehlender torch/torchaudio-Installation oder
+    Alignment-Fehlern kontrolliert auf die Heuristik-Engine zurueck (Aufrufer).
+    """
+    from app.services.forced_alignment_service import force_align_tokens
+
+    raw_hyp_tokens: list[tuple[str, float | None, float | None]] = []
+    for word in asr.words:
+        if word.end < word.start:
+            continue
+        raw_hyp_tokens += _script_expand_word(str(word.word or ""), word.start, word.end)
+    hyp = _script_finalize_hyp(raw_hyp_tokens)
+
+    effective_lyrics, effective_source_lyrics, effective_report, effective_info = _build_effective_srt_lyrics_from_asr(lyrics, source_lyrics, hyp)
+    lines = _script_parse_lyrics_text(effective_lyrics, skip_prefixes=("#", "/", ";"), skip_parens=False, source_lyrics=effective_source_lyrics or source_lyrics)
+    if not lines:
+        raise HTTPException(status_code=422, detail="Der Songtext enthält keine sichtbaren Zeilen.")
+
+    report = list(effective_report)
+    flat_tokens: list[str] = []
+    token_line_index: list[int] = []
+    for line_index, line in enumerate(lines):
+        for token in line.match_tokens:
+            flat_tokens.append(token)
+            token_line_index.append(line_index)
+
+    spans = force_align_tokens(audio_path, flat_tokens)
+    if len(spans) != len(flat_tokens):
+        raise RuntimeError(
+            f"Forced Alignment lieferte {len(spans)} Spans fuer {len(flat_tokens)} Tokens."
+        )
+
+    aligned_tokens = 0
+    low_confidence_tokens = 0
+    for line_index, line in enumerate(lines):
+        line_positions = [i for i in range(len(flat_tokens)) if token_line_index[i] == line_index]
+        line_spans = [spans[i] for i in line_positions]
+        usable = [span for span in line_spans if span is not None and span.end > span.start]
+        if not usable:
+            continue
+        line.start = round(min(span.start for span in usable), 3)
+        line.end = round(max(span.end for span in usable), 3)
+        line.matched = True
+        aligned_tokens += len(usable)
+        low_confidence_tokens += sum(1 for span in usable if span.score < 0.20)
+        word_starts: list[float | None] = []
+        word_ends: list[float | None] = []
+        cursor = 0
+        for count in line.tok_counts:
+            slice_spans = [line_spans[cursor + k] for k in range(count) if cursor + k < len(line_spans)]
+            slice_usable = [span for span in slice_spans if span is not None and span.end > span.start]
+            word_starts.append(min(span.start for span in slice_usable) if slice_usable else None)
+            word_ends.append(max(span.end for span in slice_usable) if slice_usable else None)
+            cursor += count
+        if len(word_starts) == len(line.words) and any(value is not None for value in word_starts):
+            line.wstart = word_starts  # type: ignore[assignment]
+            line.wend = word_ends  # type: ignore[assignment]
+
+    coverage = aligned_tokens / max(1, len(flat_tokens))
+    report.append(
+        f"INFO: Forced Alignment (MMS): {aligned_tokens}/{len(flat_tokens)} Tokens ausgerichtet "
+        f"({coverage:.0%}), {low_confidence_tokens} mit niedriger Konfidenz."
+    )
+    if coverage < 0.55:
+        raise RuntimeError(
+            f"Forced Alignment deckte nur {coverage:.0%} der Tokens ab; Heuristik-Fallback wird verwendet."
+        )
+
+    _script_enforce_monotonic(lines, min_dur=0.6, gap=0.04)
+    squeezed_repeat_report = _script_drop_squeezed_unmatched_repeats(lines)
+    if squeezed_repeat_report:
+        report.extend(squeezed_repeat_report)
+        _script_enforce_monotonic(lines, min_dur=0.6, gap=0.04)
+    _script_resolve_timeline(lines, warn_factor=0.6, hyp_first_start=None, hyp=hyp)
+    _script_enforce_monotonic(lines, min_dur=0.6, gap=0.04)
+    _script_compute_word_times(lines)
+    return _finalize_alignment_bundle(
+        lines,
+        report,
+        effective_info,
+        alignment_method="forced_alignment_mms",
+        extra={"engine": "forced_alignment"},
+    )
 
 
 def align_lyrics_to_timeline(lyrics: str, asr: AsrResult, duration_seconds: float) -> list[dict[str, Any]]:
@@ -5428,6 +5736,7 @@ def build_transcription_only_srt_bundle(asr: AsrResult, duration_seconds: float)
 
     segments = _sanitize_transcription_only_segments(segments)
     segments, _ = _extend_srt_segments_to_next_start(segments)
+    alignment_quality = compute_alignment_quality({"segments": segments, "alignment_report": []})
     normalized_segments = validate_and_normalize_srt_segments(segments)
     if not normalized_segments:
         raise HTTPException(status_code=422, detail="Transkription lieferte keinen verwertbaren Text fuer SRT.")
@@ -5438,6 +5747,7 @@ def build_transcription_only_srt_bundle(asr: AsrResult, duration_seconds: float)
         "half_max_chars": 22,
         "mode": "transcription_only_no_lyrics",
         "source": source,
+        "alignment_quality": alignment_quality,
     }
 
 
@@ -6835,6 +7145,7 @@ async def generate_srt_for_audio_asset(
     backend_override: str | None = None,
     prefer_existing_vocal_stem: bool = True,
     status_task: SunoTask | None = None,
+    alignment_engine_override: str | None = None,
 ) -> dict[str, Any]:
     asset = db.query(AudioAsset).filter(AudioAsset.id == audio_asset_id, AudioAsset.is_deleted.is_(False)).first()
     if not asset:
@@ -7104,15 +7415,50 @@ async def generate_srt_for_audio_asset(
             asr.raw["songstudio_transcription_audio_source"] = transcription_audio_source
             asr.raw["songstudio_lyrics_cleanup"] = lyrics_cleanup_info
 
+        alignment_engine = str(alignment_engine_override or admin_settings.get("srt_alignment_engine") or "heuristic").strip().lower()
+        if alignment_engine not in {"heuristic", "forced_alignment"}:
+            alignment_engine = "heuristic"
         _update_srt_status_step(
             db,
             srt_task,
             asset,
             "alignment_started",
             detail="Lyrics werden auf die Transkriptionszeiten ausgerichtet." if has_alignment_lyrics else "Keine Lyrics vorhanden; ASR-Text wird direkt als SRT segmentiert.",
-            extra={"mode": "lyrics_alignment" if has_alignment_lyrics else "transcription_only_no_lyrics"},
+            extra={
+                "mode": "lyrics_alignment" if has_alignment_lyrics else "transcription_only_no_lyrics",
+                "engine": alignment_engine if has_alignment_lyrics else None,
+            },
         )
-        alignment_bundle = align_lyrics_to_timeline_bundle(lyrics, asr, duration, source_lyrics=source_lyrics) if has_alignment_lyrics else build_transcription_only_srt_bundle(asr, duration)
+        alignment_bundle: dict[str, Any] | None = None
+        if has_alignment_lyrics and alignment_engine == "forced_alignment":
+            try:
+                alignment_bundle = align_lyrics_with_forced_alignment_bundle(
+                    lyrics, asr, transcription_audio_path, duration, source_lyrics=source_lyrics,
+                )
+                _append_srt_debug_event(
+                    db, srt_task, asset, "forced_alignment_completed",
+                    detail="Forced Alignment (MMS) erfolgreich.",
+                    data={"quality": alignment_bundle.get("alignment_quality")},
+                )
+            except Exception as forced_exc:  # noqa: BLE001
+                alignment_bundle = None
+                _append_srt_debug_event(
+                    db, srt_task, asset, "forced_alignment_failed",
+                    detail=f"Forced Alignment fehlgeschlagen; Heuristik-Fallback: {forced_exc}",
+                    data={"error": str(forced_exc)[:400]},
+                )
+        if alignment_bundle is None:
+            alignment_bundle = align_lyrics_to_timeline_bundle(lyrics, asr, duration, source_lyrics=source_lyrics) if has_alignment_lyrics else build_transcription_only_srt_bundle(asr, duration)
+            if has_alignment_lyrics and alignment_engine == "forced_alignment":
+                alignment_bundle.setdefault("alignment_report", []).append(
+                    "WARN: Forced-Alignment-Engine nicht verfuegbar/fehlgeschlagen; Heuristik-Engine verwendet."
+                )
+                fallback_quality = alignment_bundle.get("alignment_quality") if isinstance(alignment_bundle.get("alignment_quality"), dict) else {}
+                fallback_quality["warn_count"] = int(fallback_quality.get("warn_count") or 0) + 1
+                fallback_quality["score"] = max(0.0, round(float(fallback_quality.get("score") or 0.0) - 0.06, 3))
+                alignment_bundle["alignment_quality"] = fallback_quality
+        if "alignment_quality" not in alignment_bundle:
+            alignment_bundle["alignment_quality"] = compute_alignment_quality(alignment_bundle)
         segments = alignment_bundle["segments"]
         half_srt_text = str(alignment_bundle.get("half_srt_text") or "")
         srt_text = segments_to_srt(segments)
@@ -7123,6 +7469,8 @@ async def generate_srt_for_audio_asset(
             "alignment_completed",
             detail="Alignment abgeschlossen.",
             extra={
+                "engine": alignment_bundle.get("engine") or "heuristic",
+                "alignment_quality": alignment_bundle.get("alignment_quality"),
                 "segments": len(segments or []),
                 "alignment_warnings": len(alignment_bundle.get("alignment_report") or []),
                 "half_srt": bool(half_srt_text.strip()),
@@ -7215,6 +7563,8 @@ async def generate_srt_for_audio_asset(
         result["transcription_audio_source"] = transcription_audio_source
         result["lyrics_cleanup"] = lyrics_cleanup_info
         result["alignment_report"] = alignment_bundle.get("alignment_report") or []
+        result["alignment_quality"] = alignment_bundle.get("alignment_quality") or {}
+        result["alignment_engine"] = alignment_bundle.get("engine") or "heuristic"
         result["half_max_chars"] = alignment_bundle.get("half_max_chars", 22)
         result["srt_generation_mode"] = alignment_bundle.get("mode") or "lyrics_alignment"
         if alignment_bundle.get("source"):

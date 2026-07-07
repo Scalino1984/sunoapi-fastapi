@@ -90,9 +90,6 @@ code { color: #c7f9ff; background: rgba(255,255,255,0.06); border: 1px solid var
 .variant-card { display: grid; grid-template-columns: 150px 1fr; gap: 18px; }
 .variant-card.horizontal { grid-template-columns: auto 118px 1fr; align-items: start; }
 .variant-cover-button { width: 118px; height: 118px; border-radius: 17px; }
-.variant-cover-column { display: grid; gap: 8px; width: 118px; align-self: start; }
-.variant-cover-column .variant-cover-button { width: 100%; }
-.variant-cover-mp4-button { width: 100%; min-height: 36px; justify-content: center; padding: 8px 10px; font-size: .86rem; }
 .select-box { padding-top: 12px; }
 .select-box input { width: auto; }
 .variant-body { display: grid; gap: 10px; }
@@ -272,12 +269,7 @@ code { color: #c7f9ff; background: rgba(255,255,255,0.06); border: 1px solid var
 .variant-meta-grid .meta-card { border: 1px solid var(--line); border-radius: 14px; padding: 12px; background: rgba(255,255,255,0.035); }
 .variant-meta-grid .meta-card.wide { grid-column: 1 / -1; }
 .variant-meta-grid h4 { margin: 0 0 8px; color: var(--accent-2); }
-/* Scroll-Vertrag: Read-only-Metadatenkarten duerfen keine eigenen Wheel-Scrollcontainer sein.
-   Sonst blockieren lange Style-/Prompt-Felder das Scrollen der Songdetails, sobald
-   der Mauszeiger darueber steht. Nur explizite keyboard-scroll-region-Elemente
-   behalten internes Scrollen. */
-.variant-meta-grid p, .variant-meta-grid pre { color: var(--muted); max-height: none; overflow: visible; }
-.variant-meta-grid .keyboard-scroll-region { max-height: 420px; overflow: auto; }
+.variant-meta-grid p, .variant-meta-grid pre { color: var(--muted); max-height: 260px; overflow: auto; }
 @media (max-width: 1050px) { .variant-meta-grid { grid-template-columns: 1fr; } }
 .admin-table-row { grid-template-columns: 1fr auto auto auto; }
 @media (max-width: 760px) { .admin-table-row { grid-template-columns: 1fr; } }
@@ -2399,7 +2391,6 @@ button.danger.ghost {
 .status-detail-hero,
 .status-detail-item,
 .status-live-box,
-.status-error-assistant,
 .production-monitor-card,
 .workflow-template-panel,
 .safe-check-panel,
@@ -2434,14 +2425,6 @@ button.danger.ghost {
 .production-monitor-card small { color: var(--muted); }
 .production-monitor-card.active { border-color: rgba(55,213,255,.44); box-shadow: inset 3px 0 0 rgba(55,213,255,.85); }
 .production-monitor-card.failed { border-color: rgba(255,92,122,.48); box-shadow: inset 3px 0 0 rgba(255,92,122,.9); }
-.status-error-assistant {
-  display: grid;
-  gap: 12px;
-  padding: 14px;
-  border: 1px solid rgba(255, 205, 86, .32);
-  border-radius: 16px;
-}
-.status-error-assistant ul,
 .compact-advice-list {
   margin: 8px 0 0;
   padding-left: 18px;
@@ -3529,11 +3512,13 @@ body[data-theme="light"] .language-toggle-button {
   position: sticky;
   top: var(--topbar-height);
   z-index: 50;
-  min-height: calc(100vh - var(--topbar-height));
+  align-self: start;
+  height: calc(100vh - var(--topbar-height));
+  max-height: calc(100vh - var(--topbar-height));
   min-width: 0;
   display: grid;
-  grid-template-rows: auto auto auto;
-  align-content: start;
+  grid-template-rows: minmax(0, 1fr) auto auto;
+  align-content: stretch;
   gap: 14px;
   padding: 16px 12px 18px;
   border-right: 1px solid var(--line);
@@ -3541,7 +3526,7 @@ body[data-theme="light"] .language-toggle-button {
     linear-gradient(180deg, rgba(15, 19, 32, 0.88), rgba(8, 10, 16, 0.78)),
     var(--panel-3);
   backdrop-filter: blur(18px) saturate(1.15);
-  overflow: visible;
+  overflow: hidden;
   transition: width .18s ease, transform .18s ease, opacity .18s ease, padding .18s ease;
 }
 
@@ -3549,7 +3534,11 @@ body[data-theme="light"] .language-toggle-button {
   display: grid;
   align-content: start;
   gap: 12px;
-  overflow: visible;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
   padding-right: 2px;
 }
 .sidebar-section {
@@ -4186,6 +4175,34 @@ textarea {
   display: none;
 }
 
+/* Desktop: Der Nach-oben-Button bleibt im Hauptheader und wird erst nach Scrollstatus eingeblendet. */
+.header-scroll-top-button {
+  display: inline-flex;
+  width: 0 !important;
+  min-width: 0 !important;
+  height: 42px;
+  padding: 0;
+  border-width: 0;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-4px) scale(.92);
+  overflow: hidden;
+  transition: width .16s ease, min-width .16s ease, opacity .16s ease, transform .16s ease, border-color .16s ease, background .16s ease;
+}
+
+.header-scroll-top-button.is-visible {
+  width: 42px !important;
+  min-width: 42px !important;
+  padding: 0;
+  border-width: 1px;
+  opacity: 1;
+  pointer-events: auto;
+  transform: none;
+  color: var(--accent-2);
+  border-color: color-mix(in srgb, var(--accent-2) 45%, var(--line) 55%);
+  background: color-mix(in srgb, var(--accent-2) 14%, rgba(0, 0, 0, 0.42));
+}
+
 .studio-topbar {
   isolation: isolate;
 }
@@ -4299,6 +4316,10 @@ textarea {
     align-items: center;
     justify-content: flex-end;
     gap: 6px;
+  }
+
+  .studio-top-actions .header-scroll-top-button {
+    display: none !important;
   }
 
   .studio-mobile-actions .mobile-scroll-top-button {
@@ -7896,22 +7917,12 @@ body.audio-player-open {
     justify-self: center;
   }
 
-  .library-detail-page .variant-card.horizontal > .variant-cover-column {
+  .library-detail-page .variant-card.horizontal > .variant-cover-button {
     grid-column: 2;
     grid-row: 1;
     width: 62px;
-    align-self: center;
-  }
-
-  .library-detail-page .variant-card.horizontal > .variant-cover-column .variant-cover-button {
-    width: 62px;
     height: 62px;
-  }
-
-  .library-detail-page .variant-card.horizontal > .variant-cover-column .variant-cover-mp4-button {
-    min-height: 30px;
-    padding: 6px;
-    font-size: 11px;
+    align-self: center;
   }
 
   .library-detail-page .variant-card.horizontal > .variant-body {
@@ -8084,11 +8095,7 @@ body.audio-player-open {
     gap: 8px;
   }
 
-  .library-detail-page .variant-card.horizontal > .variant-cover-column {
-    width: 56px;
-  }
-
-  .library-detail-page .variant-card.horizontal > .variant-cover-column .variant-cover-button {
+  .library-detail-page .variant-card.horizontal > .variant-cover-button {
     width: 56px;
     height: 56px;
   }
@@ -8790,6 +8797,26 @@ body.audio-player-open {
   color: var(--muted);
   font-size: 0.78rem;
   font-weight: 600;
+}
+
+
+.ai-cover-title-text-toggle {
+  align-items: flex-start;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: rgba(255,255,255,.035);
+}
+
+.ai-cover-title-text-toggle span {
+  display: grid;
+  gap: 4px;
+}
+
+.ai-cover-title-text-toggle small {
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.35;
 }
 
 /* Patch: manuelles Cover ersetzen + Upload-Fluss direkt bei Musik-Operationen */
@@ -15349,142 +15376,4 @@ body[data-theme="light"] .daw-timeline-stage {
 @media (max-width: 820px) {
   .daw-render-task-strip { grid-template-columns: 1fr; }
   .daw-render-task-progress { width: 100%; }
-}
-
-/* MP4-Library-Integration: Video bleibt eigenes Asset und wird nur als Anzeige-/Download-Funktion an AudioAsset gebunden. */
-.library-video-player {
-  width: 100%;
-  max-height: 70vh;
-  border-radius: 16px;
-  background: #000;
-}
-.video-player-modal .meta-card {
-  overflow-wrap: anywhere;
-}
-
-/* MP4-UI-Fix 2026-07-06: MP4-Aktion sichtbar und klar vom SRT-Status-Probing getrennt halten. */
-.video-summary-card {
-  border-color: rgba(34, 211, 238, .28);
-  background: linear-gradient(135deg, rgba(34, 211, 238, .10), rgba(99, 102, 241, .08));
-}
-.video-summary-card h4 {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-}
-.mp4-watch-button {
-  box-shadow: 0 0 0 1px rgba(34, 211, 238, .25), 0 14px 34px rgba(34, 211, 238, .14);
-  font-weight: 800;
-}
-.action-grid .mp4-watch-button {
-  grid-column: 1 / -1;
-}
-.variant-card .mp4-watch-button {
-  min-height: 40px;
-  padding-inline: 14px;
-}
-
-
-/* Patch 2026-07-06: MP4-Aktion in Songdetails gehoert direkt zum Cover. */
-.variant-cover-column { display: grid; gap: 8px; width: 118px; align-self: start; }
-.variant-cover-column .variant-cover-button { width: 100%; }
-.variant-cover-mp4-button { width: 100%; justify-content: center; }
-@media (max-width: 760px) {
-  .library-detail-page .variant-card.horizontal > .variant-cover-column { grid-column: 2; grid-row: 1; align-self: center; }
-}
-
-/* /texts view isolation: card/list switcher only affects the songtext archive, not global Library playback state. */
-.texts-page .texts-toolbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 14px;
-  flex-wrap: wrap;
-}
-
-.texts-page .text-count-summary span {
-  min-width: 86px;
-}
-
-.text-search-hint {
-  margin: 0;
-}
-
-.texts-list-view {
-  display: grid;
-  gap: 10px;
-  padding: 12px;
-}
-
-.texts-list-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 14px;
-  padding: 12px;
-  border: 1px solid var(--line);
-  border-radius: 16px;
-  background: rgba(255, 255, 255, 0.035);
-}
-
-.texts-list-main {
-  min-width: 0;
-  display: grid;
-  gap: 5px;
-}
-
-.texts-list-title-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-width: 0;
-}
-
-.texts-list-title-row h3 {
-  margin: 0;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.texts-list-meta,
-.texts-list-preview {
-  margin: 0;
-}
-
-.texts-list-preview {
-  color: var(--muted);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.text-list-actions {
-  justify-content: flex-end;
-  flex-wrap: nowrap;
-}
-
-.compact-pill {
-  display: inline-flex;
-  align-items: center;
-  flex: 0 0 auto;
-  padding: 5px 8px;
-  border-radius: 999px;
-  font-size: 12px;
-  color: var(--muted);
-  background: rgba(255, 255, 255, 0.055);
-  border: 1px solid var(--line);
-}
-
-@media (max-width: 860px) {
-  .texts-list-row {
-    grid-template-columns: 1fr;
-    align-items: stretch;
-  }
-
-  .text-list-actions {
-    justify-content: flex-start;
-    flex-wrap: wrap;
-  }
 }

@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { Copy, Download, Edit3, FileText, LayoutGrid, List, Music2, Save, Trash2, Upload } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Copy, Download, Edit3, Eye, FileText, LayoutGrid, List, Music2, Save, Trash2, Upload } from 'lucide-react';
 import { api } from '../api/client.js';
 import { EmptyState } from '../components/EmptyState.jsx';
 import { Modal } from '../components/Modal.jsx';
@@ -48,9 +48,32 @@ function lyricPreview(content, maxLength = 360) {
   return `${normalized.slice(0, maxLength).trimEnd()}\n…`;
 }
 
+function formatNumber(value) {
+  return new Intl.NumberFormat('de-DE').format(Number(value || 0));
+}
+
+function sanitizeFileName(value, fallback = 'songtext') {
+  const cleaned = String(value || fallback)
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-zA-Z0-9._ -]+/g, '-')
+    .replace(/\s+/g, '_')
+    .replace(/-+/g, '-')
+    .replace(/^[-_.\s]+|[-_.\s]+$/g, '')
+    .slice(0, 90);
+  return cleaned || fallback;
+}
+
+function lyricDownloadName(item) {
+  const title = sanitizeFileName(item?.title, 'songtext');
+  const id = item?.id ? `-${item.id}` : '';
+  return `${title}${id}.txt`;
+}
+
 export function LibraryTextPage({ lyrics, notify, onReload, useForMusic, searchQuery = '' }) {
   const { t } = useI18n();
   const [editor, setEditor] = useState(null);
+  const [viewerId, setViewerId] = useState(null);
   const [textViewMode, setTextViewMode] = useState(readStoredTextViewMode);
 
   const filtered = useMemo(() => {
@@ -70,6 +93,15 @@ export function LibraryTextPage({ lyrics, notify, onReload, useForMusic, searchQ
     return { count: filtered.length, ...totals };
   }, [filtered]);
 
+
+  const viewerIndex = useMemo(() => {
+    if (viewerId == null) return -1;
+    return filtered.findIndex((item) => String(item.id) === String(viewerId));
+  }, [filtered, viewerId]);
+
+  const viewerItem = viewerIndex >= 0 ? filtered[viewerIndex] : null;
+  const viewerStats = viewerItem ? lyricStats(viewerItem) : null;
+
   function setViewMode(value) {
     setTextViewMode(value);
     storeTextViewMode(value);
@@ -77,6 +109,38 @@ export function LibraryTextPage({ lyrics, notify, onReload, useForMusic, searchQ
 
   function openEditor(item = null) {
     setEditor(item ? { ...item, content: lyricContent(item) } : { title: '', content: '' });
+  }
+
+
+  function openViewer(item) {
+    if (!item) return;
+    setViewerId(item.id);
+  }
+
+  function closeViewer() {
+    setViewerId(null);
+  }
+
+  function navigateViewer(direction) {
+    if (!filtered.length) return;
+    const current = viewerIndex >= 0 ? viewerIndex : 0;
+    const nextIndex = (current + direction + filtered.length) % filtered.length;
+    setViewerId(filtered[nextIndex]?.id ?? null);
+  }
+
+  function handleViewerKey(event, item) {
+    if (event.target?.closest?.('button, a, input, textarea, select, [contenteditable="true"]')) return;
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      openViewer(item);
+    }
+  }
+
+  function downloadLyricTxt(item) {
+    if (!item) return;
+    const content = lyricContent(item);
+    downloadTextFile(lyricDownloadName(item), content, 'text/plain;charset=utf-8');
+    notify(t('texts.messages.txtDownloaded', 'Songtext als TXT heruntergeladen.'), 'success');
   }
 
   async function save() {
@@ -102,7 +166,8 @@ export function LibraryTextPage({ lyrics, notify, onReload, useForMusic, searchQ
 
   function renderTextActions(item, compact = false) {
     return (
-      <div className={`button-row wrap ${compact ? 'compact text-list-actions' : ''}`}>
+      <div className={`button-row wrap ${compact ? 'compact text-list-actions' : ''}`} onClick={(event) => event.stopPropagation()}>
+        <button type="button" className="ghost" onClick={() => openViewer(item)}><Eye size={15} /> {t('texts.view', 'Ansehen')}</button>
         <button type="button" onClick={() => openEditor(item)}><Edit3 size={15} /> {t('texts.edit', 'Bearbeiten')}</button>
         <button type="button" onClick={() => useForMusic(item)}><Music2 size={15} /> {t('texts.createMusic', 'Musik erstellen')}</button>
         <button type="button" onClick={() => copyLyric(item)}><Copy size={15} /> {t('common.copy', 'Kopieren')}</button>
@@ -152,9 +217,9 @@ export function LibraryTextPage({ lyrics, notify, onReload, useForMusic, searchQ
             <button type="button" className={textViewMode === 'list' ? 'active' : ''} onClick={() => setViewMode('list')}><List size={15} /> {t('texts.views.list', 'Liste')}</button>
           </div>
           <div className="library-count-pill text-count-summary" title={t('texts.statsTitle', '{{count}} Songtexte · {{lines}} Zeilen · {{characters}} Zeichen', textStats)}>
-            <span><strong>{textStats.count}</strong><small>{t('texts.stats.texts', 'Songtexte')}</small></span>
-            <span><strong>{textStats.lines}</strong><small>{t('texts.stats.lines', 'Zeilen')}</small></span>
-            <span><strong>{textStats.characters}</strong><small>{t('texts.stats.characters', 'Zeichen')}</small></span>
+            <span><strong>{formatNumber(textStats.count)}</strong><small>{t('texts.stats.texts', 'Songtexte')}</small></span>
+            <span><strong>{formatNumber(textStats.lines)}</strong><small>{t('texts.stats.lines', 'Zeilen')}</small></span>
+            <span><strong>{formatNumber(textStats.characters)}</strong><small>{t('texts.stats.characters', 'Zeichen')}</small></span>
           </div>
         </div>
         {searchQuery && <p className="muted text-search-hint">{t('texts.searchActive', 'Gefiltert nach: {{query}}', { query: searchQuery })}</p>}
@@ -167,7 +232,7 @@ export function LibraryTextPage({ lyrics, notify, onReload, useForMusic, searchQ
           {filtered.map((item) => {
             const stats = lyricStats(item);
             return (
-              <article className="panel text-card" key={item.id}>
+              <article className="panel text-card text-card-clickable" key={item.id} role="button" tabIndex={0} onClick={() => openViewer(item)} onKeyDown={(event) => handleViewerKey(event, item)} aria-label={t('texts.openViewerAria', 'Songtext vollständig anzeigen')}>
                 <div className="row between align-start">
                   <div>
                     <h3>{item.title}</h3>
@@ -183,25 +248,71 @@ export function LibraryTextPage({ lyrics, notify, onReload, useForMusic, searchQ
       )}
 
       {Boolean(filtered.length) && textViewMode === 'list' && (
-        <div className="texts-list-view panel">
-          {filtered.map((item) => {
+        <div className="texts-list-view panel" role="table" aria-label={t('texts.listAria', 'Songtexte als Listenansicht')}>
+          <div className="texts-list-header" role="row">
+            <span>{t('texts.listColumns.title', 'Songtext')}</span>
+            <span>{t('texts.listColumns.scope', 'Umfang')}</span>
+            <span>{t('texts.listColumns.updated', 'Geändert')}</span>
+            <span>{t('texts.listColumns.preview', 'Vorschau')}</span>
+            <span>{t('texts.listColumns.actions', 'Aktionen')}</span>
+          </div>
+          {filtered.map((item, index) => {
             const stats = lyricStats(item);
+            const preview = lyricPreview(stats.content, 280).replace(/\n+/g, ' · ');
             return (
-              <article className="texts-list-row" key={item.id}>
-                <div className="texts-list-main">
-                  <div className="texts-list-title-row">
-                    <h3>{item.title}</h3>
-                    <span className="pill compact-pill">{t('texts.lines', '{{count}} Zeilen', { count: stats.lines })}</span>
+              <article className="texts-list-row" key={item.id} role="row" tabIndex={0} onClick={() => openViewer(item)} onKeyDown={(event) => handleViewerKey(event, item)} aria-label={t('texts.openViewerAria', 'Songtext vollständig anzeigen')}>
+                <div className="texts-list-title-cell" role="cell">
+                  <span className="texts-list-index">{String(index + 1).padStart(2, '0')}</span>
+                  <div className="texts-list-title-copy">
+                    <h3>{item.title || t('texts.untitled', 'Ohne Titel')}</h3>
+                    <p>{t('texts.listDraftType', 'Songtext-Entwurf')}</p>
                   </div>
-                  <p className="muted texts-list-meta">{t('texts.characters', '{{count}} Zeichen', { count: stats.characters })} · {formatDate(stats.updatedAt)}</p>
-                  <p className="texts-list-preview">{lyricPreview(stats.content, 220).replace(/\n+/g, ' · ')}</p>
                 </div>
-                {renderTextActions(item, true)}
+                <div className="texts-list-stat-cell" role="cell">
+                  <span className="texts-stat-badge primary"><strong>{formatNumber(stats.lines)}</strong><small>{t('texts.stats.lines', 'Zeilen')}</small></span>
+                  <span className="texts-stat-badge"><strong>{formatNumber(stats.characters)}</strong><small>{t('texts.stats.characters', 'Zeichen')}</small></span>
+                </div>
+                <div className="texts-list-date-cell" role="cell">
+                  <span>{formatDate(stats.updatedAt)}</span>
+                </div>
+                <div className="texts-list-preview-cell" role="cell">
+                  <p>{preview || t('texts.emptyPreview', 'Keine Vorschau vorhanden.')}</p>
+                </div>
+                <div className="texts-list-action-cell" role="cell">
+                  {renderTextActions(item, true)}
+                </div>
               </article>
             );
           })}
         </div>
       )}
+
+      <Modal open={Boolean(viewerItem)} title={viewerItem?.title || t('texts.untitled', 'Ohne Titel')} onClose={closeViewer} wide cardClassName="lyric-viewer-modal" contentClassName="lyric-viewer-content">
+        {viewerItem && viewerStats && (
+          <div className="lyric-viewer stack">
+            <div className="lyric-viewer-toolbar">
+              <button type="button" className="icon-button" onClick={() => navigateViewer(-1)} aria-label={t('texts.viewer.previous', 'Vorheriger Songtext')} disabled={filtered.length < 2}><ChevronLeft size={20} /></button>
+              <div className="lyric-viewer-position">
+                <strong>{t('texts.viewer.position', '{{current}} / {{total}}', { current: viewerIndex + 1, total: filtered.length })}</strong>
+                <span>{t('texts.statsTitle', '{{count}} Songtexte · {{lines}} Zeilen · {{characters}} Zeichen', { count: 1, lines: viewerStats.lines, characters: viewerStats.characters })}</span>
+              </div>
+              <button type="button" className="icon-button" onClick={() => navigateViewer(1)} aria-label={t('texts.viewer.next', 'Nächster Songtext')} disabled={filtered.length < 2}><ChevronRight size={20} /></button>
+              <div className="lyric-viewer-actions">
+                <button type="button" onClick={() => downloadLyricTxt(viewerItem)}><Download size={15} /> {t('texts.viewer.downloadTxt', 'TXT herunterladen')}</button>
+                <button type="button" onClick={() => copyLyric(viewerItem)}><Copy size={15} /> {t('common.copy', 'Kopieren')}</button>
+                <button type="button" onClick={() => openEditor(viewerItem)}><Edit3 size={15} /> {t('texts.edit', 'Bearbeiten')}</button>
+                <button type="button" className="primary" onClick={() => useForMusic(viewerItem)}><Music2 size={15} /> {t('texts.createMusic', 'Musik erstellen')}</button>
+              </div>
+            </div>
+            <div className="lyric-viewer-meta">
+              <span>{t('texts.lines', '{{count}} Zeilen', { count: viewerStats.lines })}</span>
+              <span>{t('texts.characters', '{{count}} Zeichen', { count: formatNumber(viewerStats.characters) })}</span>
+              <span>{formatDate(viewerStats.updatedAt)}</span>
+            </div>
+            <pre className="lyric-viewer-pre">{viewerStats.content || t('texts.emptyPreview', 'Keine Vorschau vorhanden.')}</pre>
+          </div>
+        )}
+      </Modal>
 
       <Modal open={Boolean(editor)} title={editor?.id ? t('texts.editText', 'Songtext bearbeiten') : t('texts.newText', 'Neuer Songtext')} onClose={() => setEditor(null)} wide>
         {editor && <div className="stack"><input placeholder={t('texts.titlePlaceholder', 'Titel')} value={editor.title} onChange={(event) => setEditor({ ...editor, title: event.target.value })} /><textarea className="large" value={editor.content} onChange={(event) => setEditor({ ...editor, content: event.target.value })} /><button type="button" className="primary" onClick={save}><Save size={16} /> {t('texts.save', 'Speichern')}</button></div>}

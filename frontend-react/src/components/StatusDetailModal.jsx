@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { AlertTriangle, Bell, CheckCircle, Clock, Copy, Download, ExternalLink, FileText, RefreshCw, StopCircle, Wand2 } from 'lucide-react';
+import { AlertTriangle, Bell, CheckCircle, Clock, Copy, Download, ExternalLink, FileText, RefreshCw, StopCircle } from 'lucide-react';
 import { Modal } from './Modal.jsx';
 import { copyToClipboard, downloadTextFile, formatDate, safeFilename, shortId } from '../utils.js';
 import { useI18n } from '../i18n/I18nContext.jsx';
@@ -204,23 +204,12 @@ function statusSteps(task, localTask = false, t = null) {
 }
 
 
-function buildErrorAssistant(task, notification, t = null) {
-  const request = task?.request_payload || {};
-  const status = normalizeStatus(task?.status || notification?.severity || '');
-  const error = String(task?.error_message || notification?.message || '').toUpperCase();
-  const hasVoice = Boolean(request.voice_id || request.persona_id || request.personaId);
-  const items = [];
-  if (status.includes('SENSITIVE') || error.includes('SENSITIVE')) {
-    items.push(t?.('statusDetail.assistantItems.sensitive', 'Suno hat den Inhalt wegen Inhaltsprüfung blockiert. Mit Voice/Persona ist die Prüfung oft strenger.') || 'Suno hat den Inhalt wegen Inhaltsprüfung blockiert. Mit Voice/Persona ist die Prüfung oft strenger.');
-    if (hasVoice) items.push(t?.('statusDetail.assistantItems.withoutVoice', 'Schnellster Test: denselben Prompt ohne Voice erneut vorbereiten.') || 'Schnellster Test: denselben Prompt ohne Voice erneut vorbereiten.');
-    items.push(t?.('statusDetail.assistantItems.soften', 'Alternativ: Text entschärfen, direkte 18+/Gewalt-/Körper-Disses reduzieren und erneut prüfen.') || 'Alternativ: Text entschärfen, direkte 18+/Gewalt-/Körper-Disses reduzieren und erneut prüfen.');
-  } else if (status.includes('FAIL') || error.includes('FAIL') || error.includes('ERROR')) {
-    items.push(t?.('statusDetail.assistantItems.failed', 'Fehlerdetails prüfen, Task erneut abrufen und danach entweder Retry oder Import per Task-ID nutzen.') || 'Fehlerdetails prüfen, Task erneut abrufen und danach entweder Retry oder Import per Task-ID nutzen.');
-  } else if (ACTIVE_STATUSES.has(status)) {
-    items.push(t?.('statusDetail.assistantItems.active', 'Task läuft noch. Statusprüfung erneut ausführen oder automatische Prüfung abwarten.') || 'Task läuft noch. Statusprüfung erneut ausführen oder automatische Prüfung abwarten.');
-  }
-  return items;
-}
+/*
+ * StatusDetailModal intentionally does not render a generic "Fehler-Assistent" box.
+ * Status, progress, real error_message, retry/cancel actions and raw payloads are the
+ * source of truth here. Re-introduce assistant-style guidance only when it is derived
+ * from concrete FAILED/ERROR payloads and provides a task-specific action.
+ */
 
 function deriveLiveProgress(task) {
   const response = task?.response_payload && typeof task.response_payload === 'object' ? task.response_payload : {};
@@ -300,9 +289,9 @@ export function StatusDetailModal({
   const steps = useMemo(() => statusSteps(task || { status: rawStatus, task_id: taskId }, localTask, t), [task, rawStatus, taskId, localTask, t]);
   const liveProgress = useMemo(() => deriveLiveProgress(task), [task]);
   const isActiveTask = ACTIVE_STATUSES.has(normalizeStatus(rawStatus));
-  const errorAssistantItems = useMemo(() => buildErrorAssistant(task, notification, t), [task, notification, t]);
   const requestPayloadForActions = task?.request_payload || {};
   const hasPromptForRetry = Boolean(requestPayloadForActions.prompt || requestPayloadForActions.lyrics || requestPayloadForActions.style);
+  const canPrepareRetry = Boolean(onPrepareRetry && hasPromptForRetry && isFailedStatus(rawStatus));
   const debugPackage = useMemo(
     () => buildTaskDebugPackage({ task, notification, targetPayload, requestPayload, responsePayload, resultPayload }),
     [task, notification, targetPayload, requestPayload, responsePayload, resultPayload]
@@ -379,22 +368,6 @@ export function StatusDetailModal({
           </section>
         )}
 
-        {errorAssistantItems.length > 0 && (
-          <section className="status-error-assistant">
-            <div>
-              <p className="eyebrow"><Wand2 size={14} /> {t('statusDetail.errorAssistant', 'Fehler-Assistent')}</p>
-              <h4>{t('statusDetail.recommendedSteps', 'Empfohlene nächste Schritte')}</h4>
-              <ul>
-                {errorAssistantItems.map((item) => <li key={item}>{item}</li>)}
-              </ul>
-            </div>
-            <div className="button-row wrap">
-              {hasPromptForRetry && <button type="button" onClick={() => onPrepareRetry?.(task, 'same')}>{t('statusDetail.retry', 'Retry vorbereiten')}</button>}
-              {hasPromptForRetry && <button type="button" onClick={() => onPrepareRetry?.(task, 'without_voice')}>{t('statusDetail.retryWithoutVoice', 'Ohne Voice vorbereiten')}</button>}
-              {hasPromptForRetry && <button type="button" onClick={() => onPrepareRetry?.(task, 'safe_check')}>{t('statusDetail.safeCheck', 'Suno-Safe-Check öffnen')}</button>}
-            </div>
-          </section>
-        )}
 
         <section className="status-detail-grid">
           <DetailRow label={t('statusDetail.localTaskId', 'Lokale Task-ID')} value={task?.id || notification?.task_local_id || targetPayload.task_local_id} />
@@ -428,6 +401,21 @@ export function StatusDetailModal({
           {notification?.id && notification?.status !== 'done' && (
             <button type="button" onClick={() => onMarkNotificationDone?.(notification)}>
               <CheckCircle size={16} /> {t('statusDetail.markDone', 'Meldung erledigen')}
+            </button>
+          )}
+          {canPrepareRetry && (
+            <button type="button" onClick={() => onPrepareRetry?.(task, 'same')}>
+              {t('statusDetail.retry', 'Retry vorbereiten')}
+            </button>
+          )}
+          {canPrepareRetry && (
+            <button type="button" onClick={() => onPrepareRetry?.(task, 'without_voice')}>
+              {t('statusDetail.retryWithoutVoice', 'Ohne Voice vorbereiten')}
+            </button>
+          )}
+          {canPrepareRetry && (
+            <button type="button" onClick={() => onPrepareRetry?.(task, 'safe_check')}>
+              {t('statusDetail.safeCheck', 'Suno-Safe-Check öffnen')}
             </button>
           )}
           {taskId && (

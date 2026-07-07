@@ -832,6 +832,7 @@ async def generate_ai_cover_from_audio_asset(
     background_tasks: BackgroundTasks,
     model: str = Form(default="pro"),
     note: str | None = Form(default=None),
+    title_text_enabled: bool = Form(default=False),
     reference_image: UploadFile | None = File(default=None),
     db: Session = Depends(get_db),
 ):
@@ -840,6 +841,9 @@ async def generate_ai_cover_from_audio_asset(
     if model not in REPLICATE_COVER_MODELS:
         raise HTTPException(status_code=400, detail=f"Ungültiges Cover-Modell: {model}")
     reference_path = _save_temp_cover_reference(reference_image, asset) if reference_image else None
-    task = ReplicateCoverService(db).create_status_task(asset, model=model, note=note, has_reference=bool(reference_path))
-    background_tasks.add_task(ReplicateCoverService.run_generation_task, task.id, asset.id, model, note, reference_path)
+    # Titeltext ist bei Replicate-Covern bewusst opt-in: Die Erzeugung selbst
+    # bleibt unveraendert, nur der Prompt erhaelt bei expliziter Aktivierung
+    # den Titeltext. Standardmaessig werden textfreie Cover erzeugt.
+    task = ReplicateCoverService(db).create_status_task(asset, model=model, note=note, has_reference=bool(reference_path), title_text_enabled=bool(title_text_enabled))
+    background_tasks.add_task(ReplicateCoverService.run_generation_task, task.id, asset.id, model, note, reference_path, bool(title_text_enabled))
     return task

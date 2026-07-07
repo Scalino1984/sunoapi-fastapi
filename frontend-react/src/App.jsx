@@ -374,10 +374,7 @@ export default function App() {
     let ticking = false;
     const updateScrollTopButton = () => {
       ticking = false;
-      const isMobile = typeof window.matchMedia === 'function'
-        ? window.matchMedia('(max-width: 760px)').matches
-        : window.innerWidth <= 760;
-      const nextVisible = isMobile && window.scrollY > 240;
+      const nextVisible = window.scrollY > 240;
       if (showMobileScrollTopRef.current === nextVisible) return;
       showMobileScrollTopRef.current = nextVisible;
       setShowMobileScrollTop(nextVisible);
@@ -1780,6 +1777,7 @@ export default function App() {
           </div>
 
           <div className={`studio-top-actions ${topbarMenuOpen ? 'is-open' : ''}`}>
+            <button type="button" className={`header-scroll-top-button ${showMobileScrollTop ? 'is-visible' : ''}`} onClick={scrollToPageTop} title={t('topbar.scrollTop', 'Nach oben')} aria-label={t('topbar.scrollTop', 'Nach oben')} aria-hidden={!showMobileScrollTop} tabIndex={showMobileScrollTop ? 0 : -1}><ArrowUp size={17} /></button>
             {openTaskCount > 0 && <button className="task-poll-pill live-pill" onClick={() => refreshPendingAndReload({ manual: true })} title={t('topbar.openTasksNow', 'Offene Suno-Tasks jetzt prüfen')}><RefreshCw size={14} className={taskRefreshState.running ? 'spin-icon' : ''} /> {t('topbar.activeTasksShort', '{{count}} aktiv', { count: openTaskCount })}</button>}
             <span className="credits topbar-credits">{t('topbar.credits', 'Credits: {{value}}', { value: credits ?? '—' })}</span>
             <button className={workspaceFocus ? 'active focus-toggle-button' : 'focus-toggle-button'} type="button" onClick={() => setWorkspaceFocus((value) => !value)} title={t('topbar.focusTitle', 'Zusatzcontainer ein-/ausblenden')}><Command size={16} /><span>{t('topbar.focus', 'Fokus')}</span></button>
