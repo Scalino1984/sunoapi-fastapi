@@ -8,6 +8,45 @@ function uploadLabel(file) {
   return file?.original_name || file?.source_url || file?.uploaded_url || `Upload #${file?.id}`;
 }
 
+const DEFAULT_BACKUP_SCOPES = {
+  database: true,
+  audio: true,
+  covers: true,
+  videos: true,
+  transcripts: true,
+  stems: true,
+  exports: true,
+  lyrics: true,
+  styles: true,
+  daw_prompts: true
+};
+
+const BACKUP_SCOPE_OPTIONS = [
+  ['database', 'Datenbank'],
+  ['audio', 'Audio'],
+  ['covers', 'Cover'],
+  ['videos', 'Videos'],
+  ['transcripts', 'SRT/Transcripts'],
+  ['stems', 'Stems'],
+  ['exports', 'Exports'],
+  ['lyrics', 'Songtexte'],
+  ['styles', 'Styles'],
+  ['daw_prompts', 'DAW-Prompts']
+];
+
+const DEFAULT_BACKUP_SCHEDULE = {
+  enabled: false,
+  frequency: 'daily',
+  time: '03:00',
+  weekday: 'sunday',
+  month_day: 1,
+  timezone: 'Europe/Berlin',
+  retention_count: 14,
+  normalize_paths: true,
+  mode: 'full',
+  scopes: DEFAULT_BACKUP_SCOPES
+};
+
 export function SystemPage({ notify, uploadedFiles = [], onRefresh }) {
   const { t } = useI18n();
   const [diagnostics, setDiagnostics] = useState(null);
@@ -21,6 +60,10 @@ export function SystemPage({ notify, uploadedFiles = [], onRefresh }) {
   const [backupBusy, setBackupBusy] = useState(false);
   const [backupFile, setBackupFile] = useState(null);
   const [backupJob, setBackupJob] = useState(null);
+  const [backupMode, setBackupMode] = useState('full');
+  const [backupScopes, setBackupScopes] = useState(DEFAULT_BACKUP_SCOPES);
+  const [backupSchedule, setBackupSchedule] = useState(DEFAULT_BACKUP_SCHEDULE);
+  const [scheduleBusy, setScheduleBusy] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(null);
   const [uploading, setUploading] = useState(false);
   const [urlUpload, setUrlUpload] = useState('');
@@ -49,7 +92,12 @@ export function SystemPage({ notify, uploadedFiles = [], onRefresh }) {
         setDiagnostics({ ok: false, error: message });
         if (!silent) notify?.(message, 'error');
       }
-      if (backupResult.status === 'fulfilled') setBackupStatus(backupResult.value);
+      if (backupResult.status === 'fulfilled') {
+        setBackupStatus(backupResult.value);
+        if (backupResult.value?.schedule) {
+          setBackupSchedule((prev) => ({ ...prev, ...backupResult.value.schedule, scopes: { ...DEFAULT_BACKUP_SCOPES, ...(backupResult.value.schedule.scopes || {}) } }));
+        }
+      }
       if (maintenanceResult.status === 'fulfilled') setDbMaintenance(maintenanceResult.value);
     } finally {
       setLoading(false);
@@ -79,6 +127,35 @@ export function SystemPage({ notify, uploadedFiles = [], onRefresh }) {
     return ['completed', 'failed', 'cancelled'].includes(String(job?.status || '').toLowerCase());
   }
 
+  function scopedPayload(mode = backupMode, scopes = backupScopes) {
+    const safeMode = mode === 'partial' ? 'partial' : 'full';
+    const safeScopes = safeMode === 'partial'
+      ? { ...DEFAULT_BACKUP_SCOPES, ...scopes, database: false, audio: false, covers: false, videos: false, transcripts: false, stems: false, exports: false }
+      : { ...DEFAULT_BACKUP_SCOPES, ...scopes };
+    return { mode: safeMode, scopes: safeScopes };
+  }
+
+  function updateBackupScope(key, checked) {
+    setBackupScopes((prev) => ({ ...prev, [key]: checked }));
+  }
+
+  function updateScheduleField(key, value) {
+    setBackupSchedule((prev) => ({ ...prev, [key]: value }));
+  }
+
+  function updateScheduleScope(key, checked) {
+    setBackupSchedule((prev) => ({ ...prev, scopes: { ...DEFAULT_BACKUP_SCOPES, ...(prev.scopes || {}), [key]: checked } }));
+  }
+
+  function formatScheduleDate(value) {
+    if (!value) return 'nicht geplant';
+    try {
+      return new Date(`${value}Z`).toLocaleString();
+    } catch {
+      return value;
+    }
+  }
+
   async function waitForBackupJob(jobId, options = {}) {
     const downloadWhenComplete = Boolean(options.downloadWhenComplete);
     let latest = null;
@@ -106,7 +183,7 @@ export function SystemPage({ notify, uploadedFiles = [], onRefresh }) {
     setUploadProgress(null);
     setBackupJob({ status: 'queued', phase: 'start', message: t('system.messages.exportPreparing', 'Export wird vorbereitet.'), percent: 0 });
     try {
-      const job = await api.system.startPortableBackupExport({ normalize_paths: true, note: 'Frontend Portable Backup' });
+      const job = await api.system.startPortableBackupExport({ normalize_paths: true, note: 'Frontend Portable Backup', ...scopedPayload() });
       setBackupJob(job);
       await waitForBackupJob(job.id, { downloadWhenComplete: true });
       notify?.(t('system.messages.backupCreated', 'Portables Backup wurde erstellt und heruntergeladen.'), 'success');
@@ -157,6 +234,40 @@ export function SystemPage({ notify, uploadedFiles = [], onRefresh }) {
       notify?.(err.message || t('system.messages.backupImportFailed', 'Portable Backup konnte nicht importiert werden.'), 'error');
     } finally {
       setBackupBusy(false);
+    }
+  }
+
+  async function saveBackupSchedule() {
+    setScheduleBusy(true);
+    try {
+      const payload = {
+        ...backupSchedule,
+        retention_count: Number(backupSchedule.retention_count || 14),
+        month_day: Number(backupSchedule.month_day || 1),
+        mode: backupSchedule.mode === 'partial' ? 'partial' : 'full',
+        scopes: scopedPayload(backupSchedule.mode, backupSchedule.scopes || DEFAULT_BACKUP_SCOPES).scopes
+      };
+      const result = await api.system.updatePortableBackupSchedule(payload);
+      setBackupSchedule((prev) => ({ ...prev, ...(result?.schedule || payload), scopes: { ...DEFAULT_BACKUP_SCOPES, ...((result?.schedule || payload).scopes || {}) } }));
+      await load({ silent: true });
+      notify?.('Auto-Backup-Konfiguration gespeichert.', 'success');
+    } catch (err) {
+      notify?.(err.message || 'Auto-Backup-Konfiguration konnte nicht gespeichert werden.', 'error');
+    } finally {
+      setScheduleBusy(false);
+    }
+  }
+
+  async function runBackupScheduleNow() {
+    setScheduleBusy(true);
+    try {
+      const result = await api.system.runPortableBackupScheduleNow();
+      await load({ silent: true });
+      notify?.(result?.backup ? `Auto-Backup erstellt: ${result.backup}` : 'Auto-Backup-Testlauf abgeschlossen.', 'success');
+    } catch (err) {
+      notify?.(err.message || 'Auto-Backup-Testlauf fehlgeschlagen.', 'error');
+    } finally {
+      setScheduleBusy(false);
     }
   }
 
@@ -401,6 +512,34 @@ export function SystemPage({ notify, uploadedFiles = [], onRefresh }) {
           <button type="button" onClick={normalizePortablePaths} disabled={backupBusy}>{t('system.backup.normalizePaths', 'Pfade normalisieren')}</button>
           <button type="button" onClick={() => load()} disabled={loading || backupBusy}>{t('system.backup.refreshStatus', 'Status aktualisieren')}</button>
         </div>
+        <div className="nested-panel soft-panel stack">
+          <div className="row between align-start">
+            <div>
+              <h3>Backup-Umfang</h3>
+              <p className="muted">Vollbackup sichert Datenbank und lokale Dateien. Teilbackup exportiert ausgewählte Inhalte als Merge-fähige JSON-Daten.</p>
+            </div>
+            <div className="segmented-control">
+              <button type="button" className={backupMode === 'full' ? 'active' : ''} onClick={() => setBackupMode('full')}>Vollbackup</button>
+              <button type="button" className={backupMode === 'partial' ? 'active' : ''} onClick={() => setBackupMode('partial')}>Teilbackup</button>
+            </div>
+          </div>
+          <div className="backup-scope-grid">
+            {BACKUP_SCOPE_OPTIONS.map(([key, label]) => {
+              const disabled = backupMode === 'partial' && !['lyrics', 'styles', 'daw_prompts'].includes(key);
+              return (
+                <label key={key} className={`check-row scope-toggle ${disabled ? 'disabled' : ''}`}>
+                  <input
+                    type="checkbox"
+                    checked={Boolean(backupScopes[key]) && !disabled}
+                    disabled={disabled || backupBusy}
+                    onChange={(event) => updateBackupScope(key, event.target.checked)}
+                  />
+                  {label}
+                </label>
+              );
+            })}
+          </div>
+        </div>
         {(backupJob || uploadProgress) && (
           <div className="system-backup-progress nested-panel soft-panel">
             <div className="row between align-start">
@@ -440,6 +579,83 @@ export function SystemPage({ notify, uploadedFiles = [], onRefresh }) {
             </div>
           </div>
         )}
+        <div className="nested-panel soft-panel stack">
+          <div className="row between align-start">
+            <div>
+              <h3>Auto-Backup</h3>
+              <p className="muted">Automatische Backups laufen im Backend zur gewählten Zeit und rotieren nur Dateien mit Auto-Backup-Prefix.</p>
+            </div>
+            <label className="inline-check">
+              <input type="checkbox" checked={Boolean(backupSchedule.enabled)} onChange={(event) => updateScheduleField('enabled', event.target.checked)} />
+              aktiv
+            </label>
+          </div>
+          <div className="backup-schedule-grid">
+            <label>Intervall
+              <select value={backupSchedule.frequency || 'daily'} onChange={(event) => updateScheduleField('frequency', event.target.value)}>
+                <option value="daily">Täglich</option>
+                <option value="weekly">Wöchentlich</option>
+                <option value="monthly">Monatlich</option>
+              </select>
+            </label>
+            <label>Uhrzeit
+              <input type="time" value={backupSchedule.time || '03:00'} onChange={(event) => updateScheduleField('time', event.target.value)} />
+            </label>
+            {backupSchedule.frequency === 'weekly' && (
+              <label>Wochentag
+                <select value={backupSchedule.weekday || 'sunday'} onChange={(event) => updateScheduleField('weekday', event.target.value)}>
+                  <option value="monday">Montag</option>
+                  <option value="tuesday">Dienstag</option>
+                  <option value="wednesday">Mittwoch</option>
+                  <option value="thursday">Donnerstag</option>
+                  <option value="friday">Freitag</option>
+                  <option value="saturday">Samstag</option>
+                  <option value="sunday">Sonntag</option>
+                </select>
+              </label>
+            )}
+            {backupSchedule.frequency === 'monthly' && (
+              <label>Tag im Monat
+                <input type="number" min="1" max="28" value={backupSchedule.month_day || 1} onChange={(event) => updateScheduleField('month_day', event.target.value)} />
+              </label>
+            )}
+            <label>Rotation
+              <input type="number" min="1" max="365" value={backupSchedule.retention_count || 14} onChange={(event) => updateScheduleField('retention_count', event.target.value)} />
+            </label>
+            <label>Modus
+              <select value={backupSchedule.mode || 'full'} onChange={(event) => updateScheduleField('mode', event.target.value)}>
+                <option value="full">Vollbackup</option>
+                <option value="partial">Teilbackup</option>
+              </select>
+            </label>
+          </div>
+          <div className="backup-scope-grid">
+            {BACKUP_SCOPE_OPTIONS.map(([key, label]) => {
+              const disabled = backupSchedule.mode === 'partial' && !['lyrics', 'styles', 'daw_prompts'].includes(key);
+              return (
+                <label key={`schedule-${key}`} className={`check-row scope-toggle ${disabled ? 'disabled' : ''}`}>
+                  <input
+                    type="checkbox"
+                    checked={Boolean((backupSchedule.scopes || DEFAULT_BACKUP_SCOPES)[key]) && !disabled}
+                    disabled={disabled || scheduleBusy}
+                    onChange={(event) => updateScheduleScope(key, event.target.checked)}
+                  />
+                  {label}
+                </label>
+              );
+            })}
+          </div>
+          <div className="row between wrap">
+            <div className="muted small">
+              Nächster Lauf: {formatScheduleDate(backupSchedule.next_run_at)}{backupSchedule.last_backup ? ` · Letztes Backup: ${backupSchedule.last_backup}` : ''}
+            </div>
+            <div className="system-backup-actions">
+              <button type="button" onClick={saveBackupSchedule} disabled={scheduleBusy}>Auto-Backup speichern</button>
+              <button type="button" onClick={runBackupScheduleNow} disabled={scheduleBusy}>Jetzt testen</button>
+            </div>
+          </div>
+          {backupSchedule.last_error ? <p className="error-text">{backupSchedule.last_error}</p> : null}
+        </div>
         <form className="nested-panel soft-panel stack" onSubmit={importPortableBackup}>
           <h3>{t('system.backup.importTitle', 'Portable Backup importieren')}</h3>
           <p className="muted">{t('system.backup.importText', 'Beim Import wird automatisch zuerst ein Backup des aktuellen Ist-Stands abgelegt. Danach werden DB und lokale Dateien aus dem ZIP als neuer frischer Stand übernommen.')}</p>

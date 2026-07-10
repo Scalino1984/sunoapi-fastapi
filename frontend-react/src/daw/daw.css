@@ -1,0 +1,697 @@
+/* Mini-DAW – Styles der überarbeiteten, modularen Fassung.
+   Nutzt die bestehenden App-Design-Tokens (--panel, --accent, --line, ...)
+   aus styles/app.css, damit sich die Seite nahtlos einfügt. */
+
+.daw-shell {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+}
+
+/* ---------- Header ---------- */
+.daw-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--panel);
+}
+.daw-asset-picker { max-width: 340px; min-width: 200px; flex: 1; }
+.daw-header-status { display: flex; gap: 8px; align-items: center; }
+.daw-header-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin-left: auto;
+}
+.daw-header-actions input { width: 190px; }
+.daw-header-actions select { width: 88px; }
+
+.daw-status-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 4px 10px;
+  background: rgba(0, 0, 0, 0.28);
+  white-space: nowrap;
+}
+.daw-status-chip.ok { color: var(--success); border-color: rgba(67, 230, 143, 0.35); }
+.daw-status-chip.warn { color: var(--warn); border-color: rgba(255, 209, 102, 0.4); }
+
+.daw-spin { animation: daw-spin 0.9s linear infinite; }
+@keyframes daw-spin { to { transform: rotate(360deg); } }
+
+/* ---------- Transport ---------- */
+.daw-shell { --daw-lane-height: 72px; --daw-rail-height: 24px; --daw-ruler-height: 44px; }
+
+.daw-transport {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 14px;
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--panel);
+}
+.daw-transport-group { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.daw-transport .icon-button { padding: 7px 9px; border-radius: 10px; }
+
+.daw-play-button {
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  background: linear-gradient(135deg, var(--accent), var(--accent-2));
+  color: white;
+}
+.daw-play-button.active { box-shadow: 0 0 0 3px rgba(55, 213, 255, 0.25); }
+
+.daw-time-display {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  font-variant-numeric: tabular-nums;
+  padding: 4px 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.32);
+}
+.daw-time-display strong { font-size: 15px; letter-spacing: 0.4px; }
+.daw-time-display span { color: var(--muted); font-size: 12px; }
+.daw-time-display em { color: var(--accent-2); font-size: 12px; font-style: normal; }
+
+.daw-inline-field { display: inline-flex; align-items: center; gap: 6px; }
+.daw-inline-field > span { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.4px; }
+.daw-inline-field input[type='number'] { width: 76px; padding: 6px 8px; }
+.daw-inline-field select { width: auto; padding: 6px 8px; }
+
+.daw-snap-units, .daw-tool-modes {
+  display: inline-flex;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  overflow: hidden;
+}
+.daw-snap-units button, .daw-tool-modes button {
+  border: 0;
+  border-radius: 0;
+  padding: 7px 10px;
+  font-size: 12px;
+  background: transparent;
+}
+.daw-snap-units button + button, .daw-tool-modes button + button { border-left: 1px solid var(--line); }
+.daw-snap-units button.active, .daw-tool-modes button.active {
+  background: rgba(124, 92, 255, 0.25);
+  color: white;
+}
+
+.daw-zoom { display: inline-flex; align-items: center; gap: 6px; }
+.daw-zoom span { font-size: 12px; color: var(--muted); min-width: 42px; text-align: center; }
+
+.daw-volume { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); }
+.daw-volume input[type='range'] { width: 96px; padding: 0; background: transparent; border: 0; }
+
+.daw-ai-toolbar-button {
+  border: 1px solid rgba(124, 92, 255, 0.55);
+  background: rgba(124, 92, 255, 0.14);
+  border-radius: 10px;
+}
+.daw-ai-toolbar-button.active { background: rgba(124, 92, 255, 0.35); color: white; }
+
+/* ---------- Workspace / Timeline ---------- */
+.daw-workspace { display: flex; flex-direction: column; gap: 10px; min-height: 0; }
+
+.daw-timeline-frame {
+  display: flex;
+  gap: 0;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--panel-3);
+  overflow: hidden;
+}
+
+.daw-track-headers {
+  width: 180px;
+  flex: 0 0 180px;
+  border-right: 1px solid var(--line);
+  background: rgba(0, 0, 0, 0.3);
+  display: flex;
+  flex-direction: column;
+}
+.daw-track-headers-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 10px;
+  height: calc(var(--daw-rail-height) + var(--daw-ruler-height)); /* Section-Rail + Ruler */
+  box-sizing: border-box;
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.daw-track-headers-top .icon-button { padding: 4px 7px; }
+.daw-track-header {
+  height: var(--daw-lane-height);
+  box-sizing: border-box;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  justify-content: center;
+}
+.daw-track-name {
+  padding: 5px 8px;
+  font-size: 12px;
+  border-radius: 8px;
+}
+.daw-track-controls { display: flex; align-items: center; gap: 5px; }
+.daw-track-controls .icon-button { padding: 4px 6px; border-radius: 8px; }
+.daw-track-controls input[type='range'] { flex: 1; padding: 0; border: 0; background: transparent; min-width: 0; }
+
+.daw-timeline-scroll {
+  flex: 1;
+  overflow-x: auto;
+  overflow-y: hidden;
+  position: relative;
+}
+.daw-timeline-content { position: relative; min-height: 100%; }
+
+/* ---------- Section-Rail ---------- */
+.daw-section-rail {
+  position: relative;
+  height: var(--daw-rail-height);
+  border-bottom: 1px solid var(--line);
+  background: rgba(0, 0, 0, 0.22);
+}
+.daw-section {
+  position: absolute;
+  top: 3px;
+  bottom: 3px;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  background: rgba(124, 92, 255, 0.14);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 7px;
+  font-size: 11px;
+  cursor: pointer;
+  overflow: hidden;
+  white-space: nowrap;
+  color: var(--text);
+}
+.daw-section:hover { border-color: var(--line-strong); }
+.daw-section.active {
+  border-color: var(--accent-2);
+  background: rgba(55, 213, 255, 0.18);
+  overflow: visible;
+  z-index: 4;
+}
+.daw-section-chorus, .daw-section-post_chorus { background: rgba(255, 92, 122, 0.16); }
+.daw-section-verse { background: rgba(67, 230, 143, 0.12); }
+.daw-section-intro, .daw-section-outro { background: rgba(255, 209, 102, 0.12); }
+.daw-section-bridge, .daw-section-break, .daw-section-drop { background: rgba(55, 213, 255, 0.12); }
+.daw-section-label { overflow: hidden; text-overflow: ellipsis; }
+.daw-section-actions { display: inline-flex; gap: 3px; }
+.daw-section-actions button {
+  padding: 2px 5px;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  background: rgba(0, 0, 0, 0.5);
+}
+
+/* ---------- Ruler ---------- */
+.daw-ruler {
+  position: relative;
+  height: var(--daw-ruler-height);
+  border-bottom: 1px solid var(--line);
+  background: rgba(0, 0, 0, 0.3);
+  cursor: crosshair;
+  user-select: none;
+  touch-action: none;
+}
+.daw-ruler-grid { position: absolute; inset: 0; pointer-events: none; }
+.daw-bar-line {
+  position: absolute;
+  top: 0;
+  bottom: -1000px; /* Linien laufen optisch in die Tracks hinein */
+  width: 1px;
+  background: rgba(124, 92, 255, 0.16);
+}
+.daw-bar-line i {
+  position: absolute;
+  top: 0;
+  left: 3px;
+  font-size: 8.5px;
+  font-style: normal;
+  color: rgba(158, 169, 189, 0.6);
+}
+.daw-tick { position: absolute; bottom: 0; width: 1px; height: 8px; background: var(--line-strong); }
+.daw-tick.major { height: 14px; }
+.daw-tick.major label {
+  position: absolute;
+  bottom: 15px;
+  left: 3px;
+  font-size: 9.5px;
+  color: var(--muted);
+  white-space: nowrap;
+  background: rgba(0, 0, 0, 0.45);
+  padding: 0 3px;
+  border-radius: 4px;
+}
+.daw-selection-range {
+  position: absolute;
+  top: 0;
+  bottom: -1000px;
+  background: rgba(55, 213, 255, 0.13);
+  border-left: 1px solid var(--accent-2);
+  border-right: 1px solid var(--accent-2);
+  pointer-events: none;
+  z-index: 2;
+}
+.daw-marker {
+  position: absolute;
+  top: 2px;
+  transform: translateX(-50%);
+  padding: 1px 6px;
+  font-size: 10px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 209, 102, 0.5);
+  background: rgba(255, 209, 102, 0.16);
+  color: var(--warn);
+  z-index: 3;
+}
+.daw-marker-jump { border-color: rgba(55, 213, 255, 0.55); background: rgba(55, 213, 255, 0.16); color: var(--accent-2); }
+.daw-snap-guide {
+  position: absolute;
+  top: 0;
+  bottom: -1000px;
+  width: 1px;
+  background: var(--accent-2);
+  z-index: 6;
+  pointer-events: none;
+}
+.daw-snap-guide span {
+  position: absolute;
+  top: 2px;
+  left: 5px;
+  font-size: 10px;
+  color: var(--accent-2);
+  background: rgba(0, 0, 0, 0.7);
+  border-radius: 5px;
+  padding: 1px 5px;
+  white-space: nowrap;
+}
+.daw-playhead-layer {
+  position: absolute;
+  top: var(--daw-rail-height);
+  bottom: 0;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--danger);
+  box-shadow: 0 0 6px rgba(255, 92, 122, 0.55);
+  z-index: 6;
+  pointer-events: none;
+  will-change: left;
+}
+.daw-playhead-cap {
+  position: absolute;
+  top: 0;
+  left: -5px;
+  border-left: 6px solid transparent;
+  border-right: 6px solid transparent;
+  border-top: 8px solid var(--danger);
+}
+
+/* ---------- Tracks & Clips ---------- */
+.daw-track-lanes { position: relative; }
+.daw-track-lane {
+  position: relative;
+  height: var(--daw-lane-height);
+  border-bottom: 1px solid var(--line);
+  background:
+    repeating-linear-gradient(90deg, transparent 0, transparent 79px, rgba(255, 255, 255, 0.015) 80px);
+}
+.daw-track-lane.muted { opacity: 0.45; }
+
+.daw-clip {
+  position: absolute;
+  top: 7px;
+  bottom: 7px;
+  border-radius: 9px;
+  border: 1px solid rgba(55, 213, 255, 0.45);
+  background: rgba(55, 213, 255, 0.13);
+  overflow: visible;
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
+  min-width: 8px;
+}
+.daw-clip:active { cursor: grabbing; }
+.daw-clip.selected { border-color: white; box-shadow: 0 0 0 1.5px rgba(255, 255, 255, 0.65), 0 8px 22px rgba(0, 0, 0, 0.35); z-index: 3; }
+.daw-clip.muted { opacity: 0.4; }
+.daw-clip.locked { cursor: not-allowed; border-style: dashed; }
+
+.daw-clip-color-cyan { border-color: rgba(55, 213, 255, 0.5); background: rgba(55, 213, 255, 0.13); }
+.daw-clip-color-violet { border-color: rgba(124, 92, 255, 0.55); background: rgba(124, 92, 255, 0.15); }
+.daw-clip-color-emerald { border-color: rgba(67, 230, 143, 0.5); background: rgba(67, 230, 143, 0.12); }
+.daw-clip-color-amber { border-color: rgba(255, 209, 102, 0.5); background: rgba(255, 209, 102, 0.12); }
+.daw-clip-color-rose { border-color: rgba(255, 92, 122, 0.5); background: rgba(255, 92, 122, 0.12); }
+.daw-clip-color-sky { border-color: rgba(120, 180, 255, 0.5); background: rgba(120, 180, 255, 0.12); }
+
+.daw-clip-wave {
+  position: absolute;
+  inset: 16px 2px 3px 2px;
+  width: calc(100% - 4px);
+  height: calc(100% - 19px);
+  pointer-events: none;
+}
+.daw-clip-wave path { stroke: rgba(244, 247, 251, 0.55); stroke-width: 1; fill: none; }
+.daw-clip-wave-empty { background: repeating-linear-gradient(90deg, rgba(255,255,255,0.05) 0 2px, transparent 2px 5px); }
+
+.daw-clip-top {
+  position: absolute;
+  top: 1px;
+  left: 4px;
+  right: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+  z-index: 2;
+}
+.daw-clip-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.daw-clip-ai-button {
+  padding: 1px 5px;
+  border-radius: 6px;
+  border: 1px solid rgba(124, 92, 255, 0.55);
+  background: rgba(10, 8, 24, 0.72);
+  color: #cabfff;
+  flex: 0 0 auto;
+}
+.daw-clip-ai-button.active { background: rgba(124, 92, 255, 0.5); color: white; }
+
+.daw-clip-fades { position: absolute; inset: 0; pointer-events: none; overflow: hidden; border-radius: 9px; }
+.daw-clip-fade-in {
+  position: absolute; left: 0; top: 0; bottom: 0;
+  background: linear-gradient(90deg, rgba(0, 0, 0, 0.55), transparent);
+  border-right: 1px dashed rgba(255, 255, 255, 0.35);
+}
+.daw-clip-fade-out {
+  position: absolute; right: 0; top: 0; bottom: 0;
+  background: linear-gradient(270deg, rgba(0, 0, 0, 0.55), transparent);
+  border-left: 1px dashed rgba(255, 255, 255, 0.35);
+}
+
+.daw-clip-handle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 8px;
+  cursor: ew-resize;
+  z-index: 4;
+}
+.daw-clip-handle.left { left: -2px; border-radius: 9px 0 0 9px; }
+.daw-clip-handle.right { right: -2px; border-radius: 0 9px 9px 0; }
+.daw-clip:hover .daw-clip-handle { background: rgba(255, 255, 255, 0.22); }
+
+.daw-clip-fade-handle {
+  position: absolute;
+  top: -5px;
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  border: 1.5px solid white;
+  background: var(--accent);
+  cursor: ew-resize;
+  z-index: 5;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+.daw-clip-fade-handle.left { left: 6px; }
+.daw-clip-fade-handle.right { right: 6px; }
+.daw-clip:hover .daw-clip-fade-handle, .daw-clip.selected .daw-clip-fade-handle { opacity: 1; }
+
+/* ---------- Clip-KI-Popover ---------- */
+.daw-clip-ai-popover {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  width: min(320px, 78vw);
+  z-index: 30;
+  border: 1px solid rgba(124, 92, 255, 0.5);
+  border-radius: 12px;
+  background: var(--panel-2);
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.5);
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  cursor: default;
+}
+.daw-clip-ai-popover-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12px;
+  color: #cabfff;
+}
+.daw-clip-ai-popover-head span { display: inline-flex; align-items: center; gap: 5px; }
+.daw-clip-ai-popover textarea { min-height: 52px; font-size: 12px; }
+.daw-clip-ai-popover-actions { display: flex; justify-content: flex-end; }
+.daw-clip-ai-popover-actions button { padding: 6px 12px; font-size: 12px; }
+
+/* ---------- Unterer Bereich ---------- */
+.daw-bottom { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-start; }
+
+.daw-clip-inspector {
+  flex: 1;
+  min-width: 320px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--panel);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.daw-clip-inspector-row { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; }
+.daw-clip-inspector-row label { display: flex; flex-direction: column; gap: 4px; }
+.daw-clip-inspector-row label > span { font-size: 11px; color: var(--muted); }
+.daw-clip-inspector-row input, .daw-clip-inspector-row select { padding: 7px 9px; width: auto; min-width: 90px; }
+.daw-clip-inspector-buttons { display: flex; flex-wrap: wrap; gap: 8px; }
+.daw-clip-inspector-buttons button { padding: 7px 11px; font-size: 12px; }
+
+.daw-check { display: inline-flex; flex-direction: row !important; align-items: center; gap: 6px !important; }
+.daw-check input { width: auto !important; min-width: 0 !important; }
+.daw-check span { font-size: 12px !important; color: var(--text) !important; }
+
+.daw-selected-section-hint {
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--panel);
+  padding: 10px 12px;
+  font-size: 13px;
+  color: var(--muted);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+.daw-selected-section-hint strong { color: var(--text); }
+
+/* ---------- KI-Panel ---------- */
+.daw-ai-panel {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  width: min(480px, calc(100vw - 36px));
+  max-height: min(680px, 84vh);
+  min-height: 320px;
+  z-index: 60;
+  border: 1px solid rgba(124, 92, 255, 0.65);
+  border-radius: 20px;
+  background: linear-gradient(180deg, rgba(124, 92, 255, 0.10), transparent 90px), var(--panel-2);
+  backdrop-filter: blur(10px);
+  box-shadow:
+    0 0 0 1px rgba(124, 92, 255, 0.18),
+    0 10px 30px rgba(124, 92, 255, 0.18),
+    0 30px 90px rgba(0, 0, 0, 0.65);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 16px;
+}
+.daw-ai-panel-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 700;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--line);
+}
+.daw-ai-panel-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 15px;
+  color: #d8cfff;
+}
+.daw-ai-panel-head .daw-ai-server-toggle { margin-left: auto; }
+.daw-ai-panel-head .icon-button { padding: 5px 8px; }
+.daw-ai-panel-head .icon-button:disabled { opacity: 0.35; }
+.daw-ai-server-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--muted);
+}
+.daw-ai-server-toggle input { width: auto; }
+
+.daw-ai-history {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 130px;
+}
+.daw-ai-empty { color: var(--muted); font-size: 13px; line-height: 1.5; margin: 0; }
+.daw-ai-message {
+  font-size: 13px;
+  line-height: 1.5;
+  border-radius: 12px;
+  padding: 9px 11px;
+  max-width: 92%;
+}
+.daw-ai-user { align-self: flex-end; background: rgba(124, 92, 255, 0.24); }
+.daw-ai-assistant { align-self: flex-start; background: rgba(0, 0, 0, 0.35); border: 1px solid var(--line); display: inline-flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.daw-ai-message.warning { border-color: rgba(255, 209, 102, 0.45); color: var(--warn); }
+.daw-ai-prompt-hooks {
+  flex-basis: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+.daw-ai-prompt-hooks button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 100%;
+  font-size: 12px;
+  padding: 5px 8px;
+  border: 1px solid rgba(79, 211, 209, 0.35);
+  background: rgba(79, 211, 209, 0.1);
+}
+
+.daw-ai-status { font-size: 12px; color: var(--accent-2); }
+.daw-ai-examples { display: flex; flex-wrap: wrap; gap: 6px; }
+.daw-ai-examples button {
+  font-size: 11.5px;
+  padding: 5px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(124, 92, 255, 0.35);
+  background: rgba(124, 92, 255, 0.08);
+}
+.daw-ai-examples button:hover { background: rgba(124, 92, 255, 0.22); }
+.daw-ai-input-row { display: flex; gap: 8px; align-items: flex-end; }
+.daw-ai-input-row textarea { flex: 1; min-height: 58px; font-size: 13.5px; }
+.daw-ai-input-row button { padding: 11px 15px; }
+
+/* ---------- Kommandovorschau ---------- */
+.daw-command-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  background: rgba(4, 6, 12, 0.62);
+  backdrop-filter: blur(4px);
+  display: grid;
+  place-items: center;
+  padding: 18px;
+}
+.daw-command-modal {
+  width: min(520px, 100%);
+  border: 1px solid var(--line-strong);
+  border-radius: 18px;
+  background: var(--panel-2);
+  box-shadow: 0 30px 100px rgba(0, 0, 0, 0.6);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.daw-command-head { display: flex; align-items: center; gap: 8px; }
+.daw-command-head strong { flex: 1; }
+.daw-command-head .icon-button { padding: 4px 7px; }
+.daw-command-summary { margin: 0; color: var(--muted); font-size: 13.5px; }
+.daw-command-actions { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; }
+.daw-command-warnings {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--warn);
+  border: 1px solid rgba(255, 209, 102, 0.35);
+  border-radius: 10px;
+  padding: 8px 10px;
+  background: rgba(255, 209, 102, 0.07);
+}
+.daw-command-warnings > div { display: flex; gap: 6px; align-items: center; }
+.daw-command-meta { font-size: 12px; color: var(--muted); }
+.daw-command-buttons { display: flex; justify-content: flex-end; gap: 8px; }
+
+/* ---------- Empty State ---------- */
+.daw-empty-state {
+  border: 1px dashed var(--line-strong);
+  border-radius: 18px;
+  padding: 46px 22px;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  align-items: center;
+  background: var(--panel-3);
+}
+.daw-empty-state h2 { margin: 0; }
+.daw-empty-state p { margin: 0; color: var(--muted); }
+.daw-empty-actions { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; }
+
+/* ---------- Responsiv ---------- */
+@media (max-width: 860px) {
+  .daw-track-headers { width: 128px; flex-basis: 128px; }
+  .daw-header-actions input { width: 130px; }
+  .daw-ai-panel { right: 8px; bottom: 8px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .daw-spin { animation: none; }
+  .daw-clip-fade-handle { transition: none; }
+}

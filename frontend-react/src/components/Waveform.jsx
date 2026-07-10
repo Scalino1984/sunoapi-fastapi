@@ -164,6 +164,8 @@ export function Waveform({
   showProgress = true,
   sourceStartSeconds = 0,
   sourceEndSeconds = null,
+  sourceDurationSeconds = null,
+  showSegments = true,
 }) {
   const { t } = useI18n();
   const [waveform, setWaveform] = useState(asset?.waveform_json || null);
@@ -207,10 +209,16 @@ export function Waveform({
     return () => { cancelled = true; };
   }, [asset?.id, asset?.waveform_json, asset?.structure_segments_json, asset?.structure_segments, asset?.updated_at, asset?.waveform_generated_at]);
 
-  const sourceDuration = resolveWaveformDuration(audioRef?.current, durationSeconds, waveform, asset);
+  const fullSourceDuration = positiveDuration(sourceDurationSeconds)
+    || positiveDuration(asset?.duration_seconds)
+    || positiveDuration(waveform?.duration_seconds)
+    || positiveDuration(durationSeconds)
+    || positiveDuration(audioRef?.current?.duration);
+  const displaySourceDuration = resolveWaveformDuration(audioRef?.current, durationSeconds, waveform, asset);
   const hasSourceWindow = Number.isFinite(Number(sourceEndSeconds))
     && Number(sourceEndSeconds) > Number(sourceStartSeconds || 0)
-    && sourceDuration > 0;
+    && fullSourceDuration > 0;
+  const sourceDuration = hasSourceWindow ? fullSourceDuration : displaySourceDuration;
   const sourceWindowStart = hasSourceWindow ? clampNumber(sourceStartSeconds, 0, sourceDuration) : 0;
   const sourceWindowEnd = hasSourceWindow ? clampNumber(sourceEndSeconds, sourceWindowStart, sourceDuration) : 0;
 
@@ -280,7 +288,7 @@ export function Waveform({
 
   return (
     <div className={`react-waveform ${compact ? 'compact' : ''} ${loading ? 'loading' : ''} ${showProgress && progressRatio > 0 ? 'has-progress' : ''}`}>
-      <div className="react-waveform-segments">
+      {showSegments && <div className="react-waveform-segments">
         {segments.map((segment, index) => {
           const start = Number(segment.start || 0);
           const end = Number(segment.end || start);
@@ -289,7 +297,7 @@ export function Waveform({
           const absoluteStart = Number.isFinite(Number(segment.absoluteStart)) ? Number(segment.absoluteStart) : start;
           return <button key={`${segment.label}-${index}-${start}-${end}`} type="button" className={`react-waveform-segment ${segmentClass(segment.type)}`} style={{ left: `${left}%`, width: `${width}%` }} onClick={() => seekTo(absoluteStart)} title={segment.label || segment.type}>{segment.label}</button>;
         })}
-      </div>
+      </div>}
       <button type="button" className="react-waveform-bars" onClick={seekByClick} aria-label={t('waveform.navigation', 'Waveform Navigation')} disabled={!interactive || !audioRef?.current}>
         {peaks.map((value, index) => <span key={index} className={index <= activeIndex ? 'played' : ''} style={{ height: `${Math.max(5, value * 100)}%` }} />)}
       </button>

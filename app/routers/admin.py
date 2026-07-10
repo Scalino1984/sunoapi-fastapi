@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from app.auth import get_current_active_user
 from app.config import get_settings
 from app.database import get_db
-from app.models import AppSetting, User, VocalTag, AiAssistantProfile, AiInstructionFile, AiAssistantProfileFile
+from app.models import AppSetting, User, VocalTag, AiAssistantProfile, AiInstructionFile, AiAssistantProfileFile, DawPromptHook
 from app.schemas import (
     AiAdminSettingsRead,
     AiAdminSettingsUpdate,
@@ -20,6 +20,9 @@ from app.schemas import (
     AiInstructionFileRead,
     AiInstructionFileUpdate,
     AiProviderTestRequest,
+    DawPromptHookCreate,
+    DawPromptHookRead,
+    DawPromptHookUpdate,
     UserAdminUpdate,
     UserRead,
     VocalTagCreate,
@@ -311,6 +314,89 @@ def delete_vocal_tag(tag_id: int, db: Session = Depends(get_db), current_user: U
     tag.deleted_reason = "Admin-Löschung"
     db.commit()
     return {"ok": True, "deleted_vocal_tag_id": tag_id}
+
+
+def _clean_prompt_hook_tags(tags: list[str] | None) -> list[str]:
+    cleaned: list[str] = []
+    for item in tags or []:
+        value = str(item or "").strip()
+        if value and value not in cleaned:
+            cleaned.append(value[:80])
+    return cleaned[:20]
+
+
+def _apply_prompt_hook_payload(hook: DawPromptHook, values: dict[str, Any]) -> None:
+    for key, value in values.items():
+        if key == "tags":
+            hook.tags_json = _clean_prompt_hook_tags(value)
+        elif key == "scope" and value:
+            hook.scope = str(value).strip()[:80] or "daw"
+        elif key in {"title", "prompt"} and value is not None:
+            setattr(hook, key, str(value).strip())
+        else:
+            setattr(hook, key, value)
+
+
+@router.get("/daw-prompt-hooks", response_model=list[DawPromptHookRead])
+def list_daw_prompt_hooks(include_inactive: bool = True, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
+    query = db.query(DawPromptHook).filter(DawPromptHook.is_deleted.is_(False))
+    if not include_inactive:
+        query = query.filter(DawPromptHook.is_active.is_(True))
+    return query.order_by(DawPromptHook.scope.asc(), DawPromptHook.sort_order.asc(), DawPromptHook.title.asc()).all()
+
+
+@router.post("/daw-prompt-hooks", response_model=DawPromptHookRead)
+def create_daw_prompt_hook(payload: DawPromptHookCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
+    hook = DawPromptHook()
+    _apply_prompt_hook_payload(hook, payload.model_dump())
+    db.add(hook)
+    db.commit()
+    db.refresh(hook)
+    return hook
+
+
+@router.put("/daw-prompt-hooks/{hook_id}", response_model=DawPromptHookRead)
+def update_daw_prompt_hook(hook_id: int, payload: DawPromptHookUpdate, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
+    hook = db.query(DawPromptHook).filter(DawPromptHook.id == hook_id, DawPromptHook.is_deleted.is_(False)).first()
+    if not hook:
+        raise HTTPException(status_code=404, detail="DAW-Prompt-Aufhänger wurde nicht gefunden.")
+    _apply_prompt_hook_payload(hook, payload.model_dump(exclude_unset=True))
+    db.commit()
+    db.refresh(hook)
+    return hook
+
+
+@router.post("/daw-prompt-hooks/{hook_id}/duplicate", response_model=DawPromptHookRead)
+def duplicate_daw_prompt_hook(hook_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
+    hook = db.query(DawPromptHook).filter(DawPromptHook.id == hook_id, DawPromptHook.is_deleted.is_(False)).first()
+    if not hook:
+        raise HTTPException(status_code=404, detail="DAW-Prompt-Aufhänger wurde nicht gefunden.")
+    duplicate = DawPromptHook(
+        title=f"{hook.title} Kopie"[:180],
+        prompt=hook.prompt,
+        description=hook.description,
+        scope=hook.scope,
+        tags_json=list(hook.tags),
+        sort_order=hook.sort_order + 1,
+        is_active=hook.is_active,
+        metadata_json={"duplicated_from": hook.id},
+    )
+    db.add(duplicate)
+    db.commit()
+    db.refresh(duplicate)
+    return duplicate
+
+
+@router.delete("/daw-prompt-hooks/{hook_id}")
+def delete_daw_prompt_hook(hook_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
+    hook = db.query(DawPromptHook).filter(DawPromptHook.id == hook_id, DawPromptHook.is_deleted.is_(False)).first()
+    if not hook:
+        raise HTTPException(status_code=404, detail="DAW-Prompt-Aufhänger wurde nicht gefunden.")
+    hook.is_deleted = True
+    hook.deleted_at = utc_now_naive()
+    hook.deleted_reason = "Admin-Löschung"
+    db.commit()
+    return {"ok": True, "deleted_daw_prompt_hook_id": hook_id}
 
 
 # === GPT-ähnliche KI-Profile und Instruction-Dateien ===

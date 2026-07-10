@@ -7,6 +7,7 @@ This folder keeps the public technical notes that are useful for contributors an
 - [Architecture Contract](ARCHITECTURE_CONTRACT.md)
 - [Protected Functions](PROTECTED_FUNCTIONS.md)
 - [Audio AI Analysis Implementation](AUDIO_AI_ANALYSIS_IMPLEMENTATION.md)
+- [DAW AI Technical Notes](DAW_AI_TECHNICAL.md)
 - [Changelog Protection Notes](CHANGELOG_PROTECTION.md)
 
 ## Repository Entry Points

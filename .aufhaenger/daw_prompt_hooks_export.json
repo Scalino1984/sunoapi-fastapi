@@ -1,0 +1,934 @@
+{
+  "exported_at": "2026-07-09T23:27:12+00:00",
+  "count": 52,
+  "items": [
+    {
+      "title": "Hook + Übergang doppeln",
+      "prompt": "Setze die erste Hook doppelt und berücksichtige dabei den Übergangsauftakt nach der Hook.\n\nErkenne die erste Hook anhand der Lyrics-/SRT-Struktur und BeatNet+-Taktgrenzen. Bestimme nicht nur den eigentlichen Hook-Bereich, sondern auch den direkt nachfolgenden musikalischen Übergangsauftakt zum nächsten Verse, falls dieser rhythmisch oder musikalisch noch zur Hook-Phrase gehört.\n\nKopiere den Bereich vom Hook-Start bis einschließlich des Übergangsauftakts nach der Hook und füge ihn direkt danach erneut ein. Der nächste Verse soll erst nach der zweiten Kopie des Übergangsauftakts beginnen.\n\nSchneide ausschließlich auf Beat-, Downbeat- oder Taktgrenzen. Arbeite non-destruktiv und speichere das Ergebnis als neue editierte Variante.",
+      "description": "Verdoppelt die erste Hook inklusive nachfolgendem Übergangsauftakt zum nächsten Verse.",
+      "scope": "daw",
+      "tags_json": [
+        "importiert",
+        "Bereits definierte Hook-Prompts"
+      ],
+      "sort_order": 1,
+      "is_active": true,
+      "metadata_json": {
+        "source_file": ".aufhaenger/daw_gespraechsaufhaenger_prompts.md",
+        "source_category": "Bereits definierte Hook-Prompts",
+        "imported_from_markdown": true,
+        "imported_at": "2026-07-09T23:24:51"
+      }
+    },
+    {
+      "title": "Hook doppeln, Übergang behalten",
+      "prompt": "Setze die erste Hook doppelt, aber lasse den Übergangsauftakt zum nächsten Verse nur einmal stehen.\n\nErkenne die erste Hook anhand der Lyrics-/SRT-Struktur und BeatNet+-Taktgrenzen. Bestimme das Ende der eigentlichen Hook vor dem nachfolgenden Übergangsauftakt. Kopiere nur den reinen Hook-Bereich und füge ihn direkt vor dem bestehenden Übergangsauftakt ein.\n\nDer Ablauf soll danach sein: erste Hook, kopierte Hook, bestehender Übergangsauftakt, nächster Verse.\n\nSchneide ausschließlich auf Beat-, Downbeat- oder Taktgrenzen. Der Übergangsauftakt darf nicht mitkopiert werden, wenn er eindeutig in den nächsten Verse hineinführt. Arbeite non-destruktiv und speichere das Ergebnis als neue editierte Variante.",
+      "description": "Verdoppelt nur die erste Hook und lässt den bestehenden Übergangsauftakt einmal vor dem nächsten Verse stehen.",
+      "scope": "daw",
+      "tags_json": [
+        "importiert",
+        "Bereits definierte Hook-Prompts"
+      ],
+      "sort_order": 2,
+      "is_active": true,
+      "metadata_json": {
+        "source_file": ".aufhaenger/daw_gespraechsaufhaenger_prompts.md",
+        "source_category": "Bereits definierte Hook-Prompts",
+        "imported_from_markdown": true,
+        "imported_at": "2026-07-09T23:24:51"
+      }
+    },
+    {
+      "title": "Hook 4 Takte doppeln",
+      "prompt": "Verdopple die erste Hook. Nutze dafür ausschließlich die ersten 4 vollständigen Takte der ersten Hook.\n\nErkenne den Start der ersten Hook anhand der Lyrics-/SRT-Struktur und der BeatNet+-Downbeats. Schneide ab dem ersten vollständigen Hook-Takt exakt 4 Takte lang. Kopiere diese 4 Takte und füge sie direkt danach erneut ein.\n\nFalls nach der Hook ein Übergangsauftakt in den nächsten Verse folgt, darf dieser nicht mitkopiert werden. Der Ablauf soll danach sein: erste 4 Hook-Takte, kopierte 4 Hook-Takte, danach der bestehende weitere Songverlauf.",
+      "description": "Verdoppelt ausschließlich die ersten 4 vollständigen Takte der ersten Hook.",
+      "scope": "daw",
+      "tags_json": [
+        "importiert",
+        "Bereits definierte Hook-Prompts"
+      ],
+      "sort_order": 3,
+      "is_active": true,
+      "metadata_json": {
+        "source_file": ".aufhaenger/daw_gespraechsaufhaenger_prompts.md",
+        "source_category": "Bereits definierte Hook-Prompts",
+        "imported_from_markdown": true,
+        "imported_at": "2026-07-09T23:24:51"
+      }
+    },
+    {
+      "title": "Hook auf 8 Takte verlängern",
+      "prompt": "Verlängere die erste Hook auf 8 Takte.\n\nErkenne die erste Hook anhand der Lyrics-/SRT-Struktur und BeatNet+-Downbeats. Bestimme den Start der Hook exakt auf der ersten vollständigen Hook-Taktgrenze. Nutze die ersten 4 vollständigen Hook-Takte als Quellbereich, kopiere sie und füge sie direkt danach erneut ein, sodass die Hook anschließend 8 vollständige Takte umfasst.\n\nFalls nach der Hook ein Übergang oder Auftakt zum nächsten Verse folgt, lasse diesen Übergang nur einmal nach der verlängerten Hook stehen. Schneide ausschließlich auf Beat-, Downbeat- oder Taktgrenzen. Arbeite non-destruktiv und speichere das Ergebnis als neue editierte Variante.",
+      "description": "Verlängert eine 4-Takt-Hook durch Duplikation auf 8 Takte.",
+      "scope": "daw",
+      "tags_json": [
+        "importiert",
+        "Hook / Refrain"
+      ],
+      "sort_order": 4,
+      "is_active": true,
+      "metadata_json": {
+        "source_file": ".aufhaenger/daw_gespraechsaufhaenger_prompts.md",
+        "source_category": "Hook / Refrain",
+        "imported_from_markdown": true,
+        "imported_at": "2026-07-09T23:24:51"
+      }
+    },
+    {
+      "title": "Hook-Ende sauber setzen",
+      "prompt": "Setze das Ende der ersten Hook sauber auf eine musikalisch passende Taktgrenze.\n\nErkenne die erste Hook anhand der Lyrics-/SRT-Struktur und BeatNet+-Downbeats. Bestimme, wo der eigentliche Hook-Inhalt endet, und verschiebe das Hook-Ende auf die nächste saubere Downbeat- oder Bar-Grenze, ohne Wörter, Adlibs, Fills oder Übergänge unnatürlich abzuschneiden.\n\nDer bestehende Songverlauf soll musikalisch flüssig bleiben. Schneide ausschließlich auf Beat-, Downbeat- oder Taktgrenzen. Arbeite non-destruktiv und speichere das Ergebnis als neue editierte Variante.",
+      "description": "Schneidet das Hook-Ende exakt auf die nächste Taktgrenze.",
+      "scope": "daw",
+      "tags_json": [
+        "importiert",
+        "Hook / Refrain"
+      ],
+      "sort_order": 5,
+      "is_active": true,
+      "metadata_json": {
+        "source_file": ".aufhaenger/daw_gespraechsaufhaenger_prompts.md",
+        "source_category": "Hook / Refrain",
+        "imported_from_markdown": true,
+        "imported_at": "2026-07-09T23:24:51"
+      }
+    },
+    {
+      "title": "Letzte Hook verlängern",
+      "prompt": "Verlängere die letzte Hook des Songs.\n\nErkenne die letzte Hook anhand der Lyrics-/SRT-Struktur, wiederholter Hook-Zeilen und BeatNet+-Taktgrenzen. Bestimme einen musikalisch vollständigen Hook-Bereich und dupliziere ihn direkt vor dem Outro oder Songende, sodass der finale Refrain länger und wirkungsvoller wird.\n\nAchte darauf, vorhandene Outro-Übergänge, Schlussfills und Fade-Outs nicht unnötig zu beschädigen. Schneide ausschließlich auf Beat-, Downbeat- oder Taktgrenzen. Arbeite non-destruktiv und speichere das Ergebnis als neue editierte Variante.",
+      "description": "Macht den finalen Refrain länger und epischer.",
+      "scope": "daw",
+      "tags_json": [
+        "importiert",
+        "Hook / Refrain"
+      ],
+      "sort_order": 6,
+      "is_active": true,
+      "metadata_json": {
+        "source_file": ".aufhaenger/daw_gespraechsaufhaenger_prompts.md",
+        "source_category": "Hook / Refrain",
+        "imported_from_markdown": true,
+        "imported_at": "2026-07-09T23:24:51"
+      }
+    },
+    {
+      "title": "Hook vorziehen",
+      "prompt": "Ziehe die erste Hook im Arrangement früher nach vorne.\n\nErkenne die erste Hook anhand der Lyrics-/SRT-Struktur und BeatNet+-Downbeats. Bestimme einen passenden früheren Einfügepunkt auf einer vollständigen Taktgrenze, idealerweise nach einem sinnvollen Verse- oder Intro-Ende. Verschiebe oder kopiere die Hook so, dass sie früher im Song erscheint und der Ablauf musikalisch schlüssig bleibt.\n\nBestehende Übergänge sollen erhalten oder sauber angepasst werden. Schneide ausschließlich auf Beat-, Downbeat- oder Taktgrenzen. Arbeite non-destruktiv und speichere das Ergebnis als neue editierte Variante.",
+      "description": "Verschiebt die erste Hook früher in den Song.",
+      "scope": "daw",
+      "tags_json": [
+        "importiert",
+        "Hook / Refrain"
+      ],
+      "sort_order": 7,
+      "is_active": true,
+      "metadata_json": {
+        "source_file": ".aufhaenger/daw_gespraechsaufhaenger_prompts.md",
+        "source_category": "Hook / Refrain",
+        "imported_from_markdown": true,
+        "imported_at": "2026-07-09T23:24:51"
+      }
+    },
+    {
+      "title": "Hook wiederholen",
+      "prompt": "Füge die erste Hook später im Song erneut ein.\n\nErkenne die erste vollständige Hook anhand der Lyrics-/SRT-Struktur und BeatNet+-Downbeats. Kopiere den vollständigen Hook-Bereich taktgenau und füge ihn an einer musikalisch sinnvollen späteren Stelle erneut ein, zum Beispiel nach Verse 2 oder vor dem Outro.\n\nAchte darauf, Übergänge, Auftakte und vorhandene Songstruktur sauber zu erhalten. Schneide ausschließlich auf Beat-, Downbeat- oder Taktgrenzen. Arbeite non-destruktiv und speichere das Ergebnis als neue editierte Variante.",
+      "description": "Fügt die erste Hook später im Song erneut ein.",
+      "scope": "daw",
+      "tags_json": [
+        "importiert",
+        "Hook / Refrain"
+      ],
+      "sort_order": 8,
+      "is_active": true,
+      "metadata_json": {
+        "source_file": ".aufhaenger/daw_gespraechsaufhaenger_prompts.md",
+        "source_category": "Hook / Refrain",
+        "imported_from_markdown": true,
+        "imported_at": "2026-07-09T23:24:51"
+      }
+    },
+    {
+      "title": "Hook ohne Übergang doppeln",
+      "prompt": "Verdopple die erste Hook ohne nachfolgenden Übergang.\n\nErkenne die erste Hook anhand der Lyrics-/SRT-Struktur und BeatNet+-Downbeats. Bestimme nur den reinen Hook-Bereich vom ersten vollständigen Hook-Takt bis zum Ende der letzten vollständigen Hook-Phrase. Kopiere keine nachfolgenden Drumfills, Turnarounds, Adlibs oder Auftakte zum nächsten Verse mit.\n\nFüge die kopierte Hook direkt nach dem reinen Hook-Bereich ein. Der bestehende Übergang zum nächsten Abschnitt soll danach nur einmal stehen bleiben. Schneide ausschließlich auf Beat-, Downbeat- oder Taktgrenzen. Arbeite non-destruktiv und speichere das Ergebnis als neue editierte Variante.",
+      "description": "Verdoppelt die Hook ohne Intro-, Fill- oder Verse-Übergang.",
+      "scope": "daw",
+      "tags_json": [
+        "importiert",
+        "Hook / Refrain"
+      ],
+      "sort_order": 9,
+      "is_active": true,
+      "metadata_json": {
+        "source_file": ".aufhaenger/daw_gespraechsaufhaenger_prompts.md",
+        "source_category": "Hook / Refrain",
+        "imported_from_markdown": true,
+        "imported_at": "2026-07-09T23:24:51"
+      }
+    },
+    {
+      "title": "Verse doppeln",
+      "prompt": "Verdopple den ersten vollständigen Verse.\n\nErkenne den ersten Verse anhand der Lyrics-/SRT-Struktur, Vocal-Einsätze und BeatNet+-Downbeats. Bestimme den vollständigen Verse-Bereich von der ersten Verse-Taktgrenze bis zur letzten vollständigen Verse-Taktgrenze vor Hook, Bridge oder Übergang. Kopiere diesen Bereich und füge ihn direkt danach erneut ein.\n\nAchte darauf, dass Übergänge zur Hook nicht doppelt oder unnatürlich abgeschnitten werden. Schneide ausschließlich auf Beat-, Downbeat- oder Taktgrenzen. Arbeite non-destruktiv und speichere das Ergebnis als neue editierte Variante.",
+      "description": "Dupliziert den ersten vollständigen Verse taktgenau.",
+      "scope": "daw",
+      "tags_json": [
+        "importiert",
+        "Verse / Parts"
+      ],
+      "sort_order": 10,
+      "is_active": true,
+      "metadata_json": {
+        "source_file": ".aufhaenger/daw_gespraechsaufhaenger_prompts.md",
+        "source_category": "Verse / Parts",
+        "imported_from_markdown": true,
+        "imported_at": "2026-07-09T23:24:51"
+      }
+    },
+    {
+      "title": "Verse kürzen",
+      "prompt": "Kürze den ersten Verse taktgenau.\n\nErkenne den ersten Verse anhand der Lyrics-/SRT-Struktur und BeatNet+-Downbeats. Entferne musikalisch sinnvolle vollständige Takte aus dem Verse, ohne Wörter, Reimphrasen oder Übergänge unnatürlich abzuschneiden. Bevorzuge Bereiche mit Wiederholungen, Pausen oder weniger wichtigen Zeilen.\n\nVerbinde den verbleibenden Verse sauber mit dem nachfolgenden Abschnitt. Schneide ausschließlich auf Beat-, Downbeat- oder Taktgrenzen. Arbeite non-destruktiv und speichere das Ergebnis als neue editierte Variante.",
+      "description": "Entfernt ausgewählte Takte aus einem Verse.",
+      "scope": "daw",
+      "tags_json": [
+        "importiert",
+        "Verse / Parts"
+      ],
+      "sort_order": 11,
+      "is_active": true,
+      "metadata_json": {
+        "source_file": ".aufhaenger/daw_gespraechsaufhaenger_prompts.md",
+        "source_category": "Verse / Parts",
+        "imported_from_markdown": true,
+        "imported_at": "2026-07-09T23:24:51"
+      }
+    },
+    {
+      "title": "Verse austauschen",
+      "prompt": "Tausche einen Verse-Bereich gegen einen anderen passenden Songabschnitt aus.\n\nErkenne den Ziel-Verse anhand der Lyrics-/SRT-Struktur und BeatNet+-Downbeats. Bestimme einen gleich langen oder musikalisch kompatiblen Ersatzbereich aus dem Song. Entferne den Zielbereich und setze den Ersatzbereich an dessen Position ein.\n\nAchte auf Taktlänge, Downbeats, Übergänge, Vocal-Einsätze und saubere Anschlussstellen. Schneide ausschließlich auf Beat-, Downbeat- oder Taktgrenzen. Arbeite non-destruktiv und speichere das Ergebnis als neue editierte Variante.",
+      "description": "Ersetzt einen Verse-Bereich durch einen anderen Songabschnitt.",
+      "scope": "daw",
+      "tags_json": [
+        "importiert",
+        "Verse / Parts"
+      ],
+      "sort_order": 12,
+      "is_active": true,
+      "metadata_json": {
+        "source_file": ".aufhaenger/daw_gespraechsaufhaenger_prompts.md",
+        "source_category": "Verse / Parts",
+        "imported_from_markdown": true,
+        "imported_at": "2026-07-09T23:24:51"
+      }
+    },
+    {
+      "title": "Verse 2 früher starten",
+      "prompt": "Lasse Verse 2 früher starten.\n\nErkenne den Start von Verse 2 anhand der Lyrics-/SRT-Struktur, Vocal-Einsätze und BeatNet+-Downbeats. Bestimme den Bereich direkt vor Verse 2, der entfernt oder gekürzt werden kann, zum Beispiel überlange Pausen, Wiederholungen, Fills oder unnötige Zwischenparts.\n\nEntferne diesen Bereich taktgenau, sodass Verse 2 früher startet und musikalisch sauber an den vorherigen Abschnitt anschließt. Schneide ausschließlich auf Beat-, Downbeat- oder Taktgrenzen. Arbeite non-destruktiv und speichere das Ergebnis als neue editierte Variante.",
+      "description": "Entfernt Zwischenraum vor Verse 2 und setzt ihn früher.",
+      "scope": "daw",
+      "tags_json": [
+        "importiert",
+        "Verse / Parts"
+      ],
+      "sort_order": 13,
+      "is_active": true,
+      "metadata_json": {
+        "source_file": ".aufhaenger/daw_gespraechsaufhaenger_prompts.md",
+        "source_category": "Verse / Parts",
+        "imported_from_markdown": true,
+        "imported_at": "2026-07-09T23:24:51"
+      }
+    },
+    {
+      "title": "16 Takte extrahieren",
+      "prompt": "Extrahiere exakt 16 vollständige Takte aus dem gewünschten Abschnitt.\n\nErkenne den Start des relevanten Abschnitts anhand der Lyrics-/SRT-Struktur und BeatNet+-Downbeats. Schneide ab der ersten passenden vollständigen Taktgrenze exakt 16 Takte heraus. Der extrahierte Bereich soll als eigener Clip oder neue Variante gespeichert werden.\n\nSchneide ausschließlich auf Beat-, Downbeat- oder Taktgrenzen. Vermeide abgeschnittene Wörter, unvollständige Vocal-Phrasen und halbe Übergänge. Arbeite non-destruktiv.",
+      "description": "Schneidet exakt 16 Takte ab gewähltem Abschnitt heraus.",
+      "scope": "daw",
+      "tags_json": [
+        "importiert",
+        "Verse / Parts"
+      ],
+      "sort_order": 14,
+      "is_active": true,
+      "metadata_json": {
+        "source_file": ".aufhaenger/daw_gespraechsaufhaenger_prompts.md",
+        "source_category": "Verse / Parts",
+        "imported_from_markdown": true,
+        "imported_at": "2026-07-09T23:24:51"
+      }
+    },
+    {
+      "title": "Part loopen",
+      "prompt": "Erstelle einen sauberen Loop aus dem gewählten Part.\n\nErkenne den gewünschten Part anhand der Lyrics-/SRT-Struktur und BeatNet+-Downbeats. Bestimme Start und Ende so, dass der Bereich auf vollständigen Taktgrenzen liegt und beim Wiederholen rhythmisch sauber zurück auf den Anfang springt. Kopiere den Bereich und wiederhole ihn in der gewünschten Länge.\n\nAchte auf Downbeat-Konsistenz, saubere Loop-Enden und natürliche Übergänge. Schneide ausschließlich auf Beat-, Downbeat- oder Taktgrenzen. Arbeite non-destruktiv und speichere das Ergebnis als neue editierte Variante.",
+      "description": "Loopt einen Verse-, Hook- oder Instrumentalabschnitt sauber auf Bar-Grenzen.",
+      "scope": "daw",
+      "tags_json": [
+        "importiert",
+        "Verse / Parts"
+      ],
+      "sort_order": 15,
+      "is_active": true,
+      "metadata_json": {
+        "source_file": ".aufhaenger/daw_gespraechsaufhaenger_prompts.md",
+        "source_category": "Verse / Parts",
+        "imported_from_markdown": true,
+        "imported_at": "2026-07-09T23:24:51"
+      }
+    },
+    {
+      "title": "Intro kürzen",
+      "prompt": "Kürze das Intro des Songs.\n\nErkenne das Intro anhand der Lyrics-/SRT-Struktur, des ersten Vocal-Einsatzes und BeatNet+-Downbeats. Entferne überflüssige vollständige Intro-Takte vor dem ersten wichtigen Einsatz, ohne den musikalischen Einstieg unnatürlich abzuschneiden.\n\nDer Song soll danach schneller und direkter starten. Schneide ausschließlich auf Beat-, Downbeat- oder Taktgrenzen. Arbeite non-destruktiv und speichere das Ergebnis als neue editierte Variante.",
+      "description": "Entfernt überflüssige Intro-Takte vor dem ersten Einsatz.",
+      "scope": "daw",
+      "tags_json": [
+        "importiert",
+        "Intro / Outro"
+      ],
+      "sort_order": 16,
+      "is_active": true,
+      "metadata_json": {
+        "source_file": ".aufhaenger/daw_gespraechsaufhaenger_prompts.md",
+        "source_category": "Intro / Outro",
+        "imported_from_markdown": true,
+        "imported_at": "2026-07-09T23:24:51"
+      }
+    },
+    {
+      "title": "Intro verlängern",
+      "prompt": "Verlängere das Intro des Songs.\n\nErkenne das Intro anhand der Lyrics-/SRT-Struktur, BeatNet+-Downbeats und des ersten Vocal-Einsatzes. Wähle einen musikalisch sauberen Intro-Bereich von vollständigen Takten, kopiere ihn und füge ihn vor dem ersten Einsatz erneut ein, sodass der Einstieg länger wirkt.\n\nAchte darauf, dass der erste Vocal-Einsatz weiterhin sauber auf einer passenden Taktgrenze beginnt. Schneide ausschließlich auf Beat-, Downbeat- oder Taktgrenzen. Arbeite non-destruktiv und speichere das Ergebnis als neue editierte Variante.",
+      "description": "Dupliziert Intro-Takte für längeren Einstieg.",
+      "scope": "daw",
+      "tags_json": [
+        "importiert",
+        "Intro / Outro"
+      ],
+      "sort_order": 17,
+      "is_active": true,
+      "metadata_json": {
+        "source_file": ".aufhaenger/daw_gespraechsaufhaenger_prompts.md",
+        "source_category": "Intro / Outro",
+        "imported_from_markdown": true,
+        "imported_at": "2026-07-09T23:24:51"
+      }
+    },
+    {
+      "title": "Direkt zur Hook starten",
+      "prompt": "Erstelle eine Version, die direkt mit der ersten Hook startet.\n\nErkenne die erste Hook anhand der Lyrics-/SRT-Struktur und BeatNet+-Downbeats. Entferne alle vorherigen Bereiche bis zum Start der ersten vollständigen Hook oder bis zu einem musikalisch passenden Auftakt unmittelbar vor der Hook.\n\nDer neue Songstart soll sauber, druckvoll und nicht abgeschnitten wirken. Schneide ausschließlich auf Beat-, Downbeat- oder Taktgrenzen. Arbeite non-destruktiv und speichere das Ergebnis als neue editierte Variante.",
+      "description": "Entfernt Intro/Verse-Anfang und startet beim ersten Refrain.",
+      "scope": "daw",
+      "tags_json": [
+        "importiert",
+        "Intro / Outro"
+      ],
+      "sort_order": 18,
+      "is_active": true,
+      "metadata_json": {
+        "source_file": ".aufhaenger/daw_gespraechsaufhaenger_prompts.md",
+        "source_category": "Intro / Outro",
+        "imported_from_markdown": true,
+        "imported_at": "2026-07-09T23:24:51"
+      }
+    },
+    {
+      "title": "Outro verlängern",
+      "prompt": "Verlängere das Outro des Songs.\n\nErkenne das Outro oder die letzten musikalisch vollständigen Takte anhand der Lyrics-/SRT-Struktur und BeatNet+-Downbeats. Kopiere einen passenden Schlussbereich und füge ihn vor dem endgültigen Ende erneut ein, sodass das Outro länger wirkt.\n\nAchte darauf, dass ein vorhandener Schlussakzent oder Fade-Out nicht unnatürlich doppelt erscheint. Schneide ausschließlich auf Beat-, Downbeat- oder Taktgrenzen. Arbeite non-destruktiv und speichere das Ergebnis als neue editierte Variante.",
+      "description": "Wiederholt die letzten Takte für ein längeres Outro.",
+      "scope": "daw",
+      "tags_json": [
+        "importiert",
+        "Intro / Outro"
+      ],
+      "sort_order": 19,
+      "is_active": true,
+      "metadata_json": {
+        "source_file": ".aufhaenger/daw_gespraechsaufhaenger_prompts.md",
+        "source_category": "Intro / Outro",
+        "imported_from_markdown": true,
+        "imported_at": "2026-07-09T23:24:51"
+      }
+    },
+    {
+      "title": "Fade-Out setzen",
+      "prompt": "Setze ein sauberes Fade-Out am Songende.\n\nErkenne das musikalische Ende anhand der letzten vollständigen Taktgrenzen und BeatNet+-Downbeats. Lege den Fade-Out so an, dass er musikalisch natürlich beginnt und auf dem Songende sauber ausläuft. Schneide bei Bedarf das Ende auf die nächste passende Taktgrenze.\n\nArbeite non-destruktiv und speichere das Ergebnis als neue editierte Variante.",
+      "description": "Erstellt ein sauberes Fade-Out am Songende.",
+      "scope": "daw",
+      "tags_json": [
+        "importiert",
+        "Intro / Outro"
+      ],
+      "sort_order": 20,
+      "is_active": true,
+      "metadata_json": {
+        "source_file": ".aufhaenger/daw_gespraechsaufhaenger_prompts.md",
+        "source_category": "Intro / Outro",
+        "imported_from_markdown": true,
+        "imported_at": "2026-07-09T23:24:51"
+      }
+    },
+    {
+      "title": "Outro abschneiden",
+      "prompt": "Schneide das Outro nach der letzten sinnvollen vollständigen Taktgrenze ab.\n\nErkenne das Ende des musikalisch relevanten Songs anhand der Lyrics-/SRT-Struktur, BeatNet+-Downbeats und des letzten klaren musikalischen Abschlusses. Entferne überlange Ausläufe, Pausen oder unnötige Wiederholungen nach diesem Punkt.\n\nSchneide ausschließlich auf Beat-, Downbeat- oder Taktgrenzen. Setze bei Bedarf ein kurzes sauberes Fade-Out. Arbeite non-destruktiv und speichere das Ergebnis als neue editierte Variante.",
+      "description": "Schneidet den Song nach der letzten vollständigen Taktgrenze ab.",
+      "scope": "daw",
+      "tags_json": [
+        "importiert",
+        "Intro / Outro"
+      ],
+      "sort_order": 21,
+      "is_active": true,
+      "metadata_json": {
+        "source_file": ".aufhaenger/daw_gespraechsaufhaenger_prompts.md",
+        "source_category": "Intro / Outro",
+        "imported_from_markdown": true,
+        "imported_at": "2026-07-09T23:24:51"
+      }
+    },
+    {
+      "title": "Übergang behalten",
+      "prompt": "Behalte den bestehenden Übergang zum nächsten Part nur einmal.\n\nErkenne den zu bearbeitenden Abschnitt und den nachfolgenden Übergang anhand der Lyrics-/SRT-Struktur und BeatNet+-Downbeats. Wenn der Abschnitt dupliziert oder verlängert wird, kopiere den Übergang nicht mit. Der bestehende Übergang soll nach der Kopie weiterhin genau einmal direkt vor dem nächsten Part stehen.\n\nSchneide ausschließlich auf Beat-, Downbeat- oder Taktgrenzen. Arbeite non-destruktiv und speichere das Ergebnis als neue editierte Variante.",
+      "description": "Lässt einen bestehenden Übergang nur einmal vor dem nächsten Part stehen.",
+      "scope": "daw",
+      "tags_json": [
+        "importiert",
+        "Übergänge / Fills / Auftakte"
+      ],
+      "sort_order": 22,
+      "is_active": true,
+      "metadata_json": {
+        "source_file": ".aufhaenger/daw_gespraechsaufhaenger_prompts.md",
+        "source_category": "Übergänge / Fills / Auftakte",
+        "imported_from_markdown": true,
+        "imported_at": "2026-07-09T23:24:51"
+      }
+    },
+    {
+      "title": "Übergang doppeln",
+      "prompt": "Dopple den Abschnitt inklusive nachfolgendem Übergang.\n\nErkenne den gewünschten Abschnitt und den direkt folgenden musikalischen Übergang anhand der Lyrics-/SRT-Struktur und BeatNet+-Downbeats. Wenn der Übergang rhythmisch oder musikalisch noch zur Phrase gehört, kopiere den Abschnitt inklusive dieses Übergangs und füge ihn direkt danach erneut ein.\n\nDer nächste Songabschnitt soll erst nach der zweiten Kopie des Übergangs beginnen. Schneide ausschließlich auf Beat-, Downbeat- oder Taktgrenzen. Arbeite non-destruktiv und speichere das Ergebnis als neue editierte Variante.",
+      "description": "Kopiert Hook plus nachfolgenden Übergangsauftakt gemeinsam.",
+      "scope": "daw",
+      "tags_json": [
+        "importiert",
+        "Übergänge / Fills / Auftakte"
+      ],
+      "sort_order": 23,
+      "is_active": true,
+      "metadata_json": {
+        "source_file": ".aufhaenger/daw_gespraechsaufhaenger_prompts.md",
+        "source_category": "Übergänge / Fills / Auftakte",
+        "imported_from_markdown": true,
+        "imported_at": "2026-07-09T23:24:51"
+      }
+    },
+    {
+      "title": "Fill isolieren",
+      "prompt": "Isoliere den markanten Fill oder Turnaround als eigenen Bereich.\n\nErkenne den Fill anhand von BeatNet+-Downbeats, auffälligen rhythmischen Änderungen und der Position zwischen zwei Songabschnitten. Schneide den Fill von der vorherigen passenden Taktgrenze bis zur nachfolgenden passenden Taktgrenze als eigenen Clip heraus.\n\nDer Fill soll später wieder sauber vor Hooks, Verses oder Breaks eingefügt werden können. Schneide ausschließlich auf Beat-, Downbeat- oder Taktgrenzen. Arbeite non-destruktiv.",
+      "description": "Schneidet einen Drumfill oder Turnaround als eigenen Bereich heraus.",
+      "scope": "daw",
+      "tags_json": [
+        "importiert",
+        "Übergänge / Fills / Auftakte"
+      ],
+      "sort_order": 24,
+      "is_active": true,
+      "metadata_json": {
+        "source_file": ".aufhaenger/daw_gespraechsaufhaenger_prompts.md",
+        "source_category": "Übergänge / Fills / Auftakte",
+        "imported_from_markdown": true,
+        "imported_at": "2026-07-09T23:24:51"
+      }
+    },
+    {
+      "title": "Fill vor Hook setzen",
+      "prompt": "Setze einen vorhandenen Fill direkt vor die erste Hook.\n\nErkenne die erste Hook anhand der Lyrics-/SRT-Struktur und BeatNet+-Downbeats. Suche einen passenden vorhandenen Drumfill oder Turnaround im Song, kopiere ihn taktgenau und füge ihn unmittelbar vor dem Hook-Start ein.\n\nAchte darauf, dass der Hook-Start weiterhin sauber auf dem Downbeat liegt. Schneide ausschließlich auf Beat-, Downbeat- oder Taktgrenzen. Arbeite non-destruktiv und speichere das Ergebnis als neue editierte Variante.",
+      "description": "Fügt einen vorhandenen Übergangsfill direkt vor die Hook.",
+      "scope": "daw",
+      "tags_json": [
+        "importiert",
+        "Übergänge / Fills / Auftakte"
+      ],
+      "sort_order": 25,
+      "is_active": true,
+      "metadata_json": {
+        "source_file": ".aufhaenger/daw_gespraechsaufhaenger_prompts.md",
+        "source_category": "Übergänge / Fills / Auftakte",
+        "imported_from_markdown": true,
+        "imported_at": "2026-07-09T23:24:51"
+      }
+    },
+    {
+      "title": "Auftakt erkennen",
+      "prompt": "Erkenne den musikalischen Auftakt eines Abschnitts.\n\nAnalysiere Lyrics-/SRT-Struktur, BeatNet+-Downbeats, Vocal-Einsätze, Drumfills, Adlibs und musikalische Lead-ins. Bestimme, ob der Auftakt vor dem Abschnitt liegt, nach dem Abschnitt in den nächsten Part führt oder als eigenständiger Übergang behandelt werden sollte.\n\nGib Start und Ende des Auftakts taktgenau an und beschreibe, ob er beim Duplizieren mitkopiert oder nur einmal stehen bleiben soll. Schneide ausschließlich auf Beat-, Downbeat- oder Taktgrenzen.",
+      "description": "Findet musikalische Lead-ins vor oder nach einem Abschnitt.",
+      "scope": "daw",
+      "tags_json": [
+        "importiert",
+        "Übergänge / Fills / Auftakte"
+      ],
+      "sort_order": 26,
+      "is_active": true,
+      "metadata_json": {
+        "source_file": ".aufhaenger/daw_gespraechsaufhaenger_prompts.md",
+        "source_category": "Übergänge / Fills / Auftakte",
+        "imported_from_markdown": true,
+        "imported_at": "2026-07-09T23:24:51"
+      }
+    },
+    {
+      "title": "Übergang glätten",
+      "prompt": "Glätte den Übergang zwischen zwei geschnittenen Songabschnitten.\n\nAnalysiere die Schnittstelle anhand von BeatNet+-Downbeats, Taktgrenzen, Vocal-Phrasen und vorhandenen Fills. Verschiebe Start- und Endpunkte so, dass der Übergang rhythmisch stabil, musikalisch sauber und ohne hörbare Stolperstelle funktioniert.\n\nSchneide ausschließlich auf Beat-, Downbeat- oder Taktgrenzen. Nutze bei Bedarf minimale Fades, aber vermeide unnötige Klangveränderungen. Arbeite non-destruktiv und speichere das Ergebnis als neue editierte Variante.",
+      "description": "Verschiebt Schnittpunkte auf passende Beat-/Taktgrenzen.",
+      "scope": "daw",
+      "tags_json": [
+        "importiert",
+        "Übergänge / Fills / Auftakte"
+      ],
+      "sort_order": 27,
+      "is_active": true,
+      "metadata_json": {
+        "source_file": ".aufhaenger/daw_gespraechsaufhaenger_prompts.md",
+        "source_category": "Übergänge / Fills / Auftakte",
+        "imported_from_markdown": true,
+        "imported_at": "2026-07-09T23:24:51"
+      }
+    },
+    {
+      "title": "Songstruktur analysieren",
+      "prompt": "Analysiere die vollständige Songstruktur.\n\nErkenne anhand von Lyrics-/SRT-Struktur, wiederholten Textzeilen, Vocal-Einsätzen und BeatNet+-Downbeats die wichtigsten Abschnitte des Songs: Intro, Verse, Hook, Bridge, Break, Outro und Übergänge. Gib für jeden Abschnitt Start, Ende, geschätzte Taktanzahl und kurze Begründung aus.\n\nSchneide noch nichts. Erzeuge nur eine strukturierte Analyse, die als Grundlage für spätere non-destruktive Bearbeitung verwendet werden kann.",
+      "description": "Erkennt Intro, Verse, Hook, Bridge und Outro anhand von Lyrics/SRT/Beats.",
+      "scope": "daw",
+      "tags_json": [
+        "importiert",
+        "Arrangement / Struktur"
+      ],
+      "sort_order": 28,
+      "is_active": true,
+      "metadata_json": {
+        "source_file": ".aufhaenger/daw_gespraechsaufhaenger_prompts.md",
+        "source_category": "Arrangement / Struktur",
+        "imported_from_markdown": true,
+        "imported_at": "2026-07-09T23:24:51"
+      }
+    },
+    {
+      "title": "Arrangement verdichten",
+      "prompt": "Verdichte das Arrangement des Songs.\n\nAnalysiere die Songstruktur anhand von Lyrics-/SRT-Struktur und BeatNet+-Downbeats. Suche überlange Pausen, unnötige Wiederholungen, zu lange Intros, zu lange Outros oder Zwischenparts ohne klare Funktion. Entferne oder kürze nur vollständige musikalische Takte, damit der Song direkter und kompakter wirkt.\n\nAchte darauf, Hooks, wichtige Verse-Zeilen, Übergänge und musikalische Höhepunkte zu erhalten. Schneide ausschließlich auf Beat-, Downbeat- oder Taktgrenzen. Arbeite non-destruktiv und speichere das Ergebnis als neue editierte Variante.",
+      "description": "Entfernt lange Pausen, Wiederholungen oder unnötige Zwischenparts.",
+      "scope": "daw",
+      "tags_json": [
+        "importiert",
+        "Arrangement / Struktur"
+      ],
+      "sort_order": 29,
+      "is_active": true,
+      "metadata_json": {
+        "source_file": ".aufhaenger/daw_gespraechsaufhaenger_prompts.md",
+        "source_category": "Arrangement / Struktur",
+        "imported_from_markdown": true,
+        "imported_at": "2026-07-09T23:24:51"
+      }
+    },
+    {
+      "title": "Radioversion erstellen",
+      "prompt": "Erstelle eine kompakte Radioversion des Songs.\n\nAnalysiere Intro, Verse, Hook, Bridge, Outro und Wiederholungen anhand von Lyrics-/SRT-Struktur und BeatNet+-Downbeats. Kürze den Song auf eine straffere Version, indem du überlange Intros, doppelte Hooks, unnötige Bridges oder zu lange Outros reduzierst.\n\nDie wichtigsten Songteile sollen erhalten bleiben. Schneide ausschließlich auf Beat-, Downbeat- oder Taktgrenzen. Arbeite non-destruktiv und speichere das Ergebnis als neue editierte Variante.",
+      "description": "Kürzt den Song auf eine kompaktere Version.",
+      "scope": "daw",
+      "tags_json": [
+        "importiert",
+        "Arrangement / Struktur"
+      ],
+      "sort_order": 30,
+      "is_active": true,
+      "metadata_json": {
+        "source_file": ".aufhaenger/daw_gespraechsaufhaenger_prompts.md",
+        "source_category": "Arrangement / Struktur",
+        "imported_from_markdown": true,
+        "imported_at": "2026-07-09T23:24:51"
+      }
+    },
+    {
+      "title": "Extended Version erstellen",
+      "prompt": "Erstelle eine Extended Version des Songs.\n\nAnalysiere die Songstruktur anhand von Lyrics-/SRT-Struktur und BeatNet+-Downbeats. Verlängere musikalisch sinnvolle Bereiche wie Intro, Hook, Break oder Outro durch taktgenaue Duplikation. Die neue Version soll länger wirken, ohne künstlich oder unruhig zu klingen.\n\nAchte auf saubere Übergänge, Downbeats und vollständige Phrasen. Schneide ausschließlich auf Beat-, Downbeat- oder Taktgrenzen. Arbeite non-destruktiv und speichere das Ergebnis als neue editierte Variante.",
+      "description": "Verlängert Hook-, Intro- oder Outro-Bereiche.",
+      "scope": "daw",
+      "tags_json": [
+        "importiert",
+        "Arrangement / Struktur"
+      ],
+      "sort_order": 31,
+      "is_active": true,
+      "metadata_json": {
+        "source_file": ".aufhaenger/daw_gespraechsaufhaenger_prompts.md",
+        "source_category": "Arrangement / Struktur",
+        "imported_from_markdown": true,
+        "imported_at": "2026-07-09T23:24:51"
+      }
+    },
+    {
+      "title": "Bridge entfernen",
+      "prompt": "Entferne die Bridge aus dem Song.\n\nErkenne die Bridge anhand der Lyrics-/SRT-Struktur, musikalischer Änderung und BeatNet+-Downbeats. Entferne den vollständigen Bridge-Bereich taktgenau und verbinde den vorherigen Abschnitt sauber mit dem nachfolgenden Abschnitt.\n\nAchte darauf, dass der Übergang rhythmisch und musikalisch schlüssig bleibt. Schneide ausschließlich auf Beat-, Downbeat- oder Taktgrenzen. Arbeite non-destruktiv und speichere das Ergebnis als neue editierte Variante.",
+      "description": "Entfernt einen Mittelteil und verbindet Hook/Verse sauber.",
+      "scope": "daw",
+      "tags_json": [
+        "importiert",
+        "Arrangement / Struktur"
+      ],
+      "sort_order": 32,
+      "is_active": true,
+      "metadata_json": {
+        "source_file": ".aufhaenger/daw_gespraechsaufhaenger_prompts.md",
+        "source_category": "Arrangement / Struktur",
+        "imported_from_markdown": true,
+        "imported_at": "2026-07-09T23:24:51"
+      }
+    },
+    {
+      "title": "Neue Hook nach Verse 2",
+      "prompt": "Füge nach Verse 2 eine zusätzliche Hook ein.\n\nErkenne Verse 2 und die erste vollständige Hook anhand der Lyrics-/SRT-Struktur und BeatNet+-Downbeats. Kopiere die Hook taktgenau und füge sie direkt nach Verse 2 oder nach dem dortigen Übergang ein, je nachdem was musikalisch sauberer ist.\n\nAchte darauf, dass der neue Hook-Einsatz auf einer vollständigen Downbeat-/Taktgrenze beginnt. Schneide ausschließlich auf Beat-, Downbeat- oder Taktgrenzen. Arbeite non-destruktiv und speichere das Ergebnis als neue editierte Variante.",
+      "description": "Fügt eine vorhandene Hook nach dem zweiten Verse ein.",
+      "scope": "daw",
+      "tags_json": [
+        "importiert",
+        "Arrangement / Struktur"
+      ],
+      "sort_order": 33,
+      "is_active": true,
+      "metadata_json": {
+        "source_file": ".aufhaenger/daw_gespraechsaufhaenger_prompts.md",
+        "source_category": "Arrangement / Struktur",
+        "imported_from_markdown": true,
+        "imported_at": "2026-07-09T23:24:51"
+      }
+    },
+    {
+      "title": "Auf Takt schneiden",
+      "prompt": "Schneide den gewünschten Bereich exakt auf Taktgrenzen.\n\nNutze BeatNet+-Downbeats als verbindliche rhythmische Referenz. Verschiebe Start und Ende des gewählten Bereichs auf die nächstliegenden musikalisch sinnvollen Downbeat- oder Bar-Grenzen. Vermeide Schnitte mitten in Wörtern, Vocal-Phrasen, Fills oder wichtigen Transienten.\n\nArbeite ausschließlich beat-, downbeat- und taktgenau. Speichere das Ergebnis non-destruktiv als neue editierte Variante.",
+      "description": "Schneidet einen Bereich exakt auf Downbeat-/Bar-Grenzen.",
+      "scope": "daw",
+      "tags_json": [
+        "importiert",
+        "Beat-/Taktgenaues Schneiden"
+      ],
+      "sort_order": 34,
+      "is_active": true,
+      "metadata_json": {
+        "source_file": ".aufhaenger/daw_gespraechsaufhaenger_prompts.md",
+        "source_category": "Beat-/Taktgenaues Schneiden",
+        "imported_from_markdown": true,
+        "imported_at": "2026-07-09T23:24:51"
+      }
+    },
+    {
+      "title": "4 Takte kopieren",
+      "prompt": "Kopiere exakt 4 vollständige Takte ab dem gewählten Abschnittsstart.\n\nErkenne den Abschnittsstart anhand der Lyrics-/SRT-Struktur und BeatNet+-Downbeats. Setze den Start auf die erste passende vollständige Taktgrenze und kopiere exakt 4 vollständige Takte. Füge den kopierten Bereich direkt nach dem Originalbereich oder an der gewünschten Zielposition ein.\n\nSchneide ausschließlich auf Beat-, Downbeat- oder Taktgrenzen. Arbeite non-destruktiv und speichere das Ergebnis als neue editierte Variante.",
+      "description": "Kopiert exakt 4 vollständige Takte ab Abschnittsstart.",
+      "scope": "daw",
+      "tags_json": [
+        "importiert",
+        "Beat-/Taktgenaues Schneiden"
+      ],
+      "sort_order": 35,
+      "is_active": true,
+      "metadata_json": {
+        "source_file": ".aufhaenger/daw_gespraechsaufhaenger_prompts.md",
+        "source_category": "Beat-/Taktgenaues Schneiden",
+        "imported_from_markdown": true,
+        "imported_at": "2026-07-09T23:24:51"
+      }
+    },
+    {
+      "title": "8 Takte kopieren",
+      "prompt": "Kopiere exakt 8 vollständige Takte ab dem gewählten Abschnittsstart.\n\nErkenne den Abschnittsstart anhand der Lyrics-/SRT-Struktur und BeatNet+-Downbeats. Setze den Start auf die erste passende vollständige Taktgrenze und kopiere exakt 8 vollständige Takte. Füge den kopierten Bereich direkt nach dem Originalbereich oder an der gewünschten Zielposition ein.\n\nAchte darauf, keine Übergänge mitzunehmen, sofern sie nicht ausdrücklich Teil des Bereichs sein sollen. Schneide ausschließlich auf Beat-, Downbeat- oder Taktgrenzen. Arbeite non-destruktiv und speichere das Ergebnis als neue editierte Variante.",
+      "description": "Kopiert exakt 8 vollständige Takte ab Abschnittsstart.",
+      "scope": "daw",
+      "tags_json": [
+        "importiert",
+        "Beat-/Taktgenaues Schneiden"
+      ],
+      "sort_order": 36,
+      "is_active": true,
+      "metadata_json": {
+        "source_file": ".aufhaenger/daw_gespraechsaufhaenger_prompts.md",
+        "source_category": "Beat-/Taktgenaues Schneiden",
+        "imported_from_markdown": true,
+        "imported_at": "2026-07-09T23:24:51"
+      }
+    },
+    {
+      "title": "16 Takte kopieren",
+      "prompt": "Kopiere exakt 16 vollständige Takte ab dem gewählten Abschnittsstart.\n\nErkenne den Abschnittsstart anhand der Lyrics-/SRT-Struktur und BeatNet+-Downbeats. Setze den Start auf die erste passende vollständige Taktgrenze und kopiere exakt 16 vollständige Takte. Füge den kopierten Bereich direkt nach dem Originalbereich oder an der gewünschten Zielposition ein.\n\nDer Bereich soll als vollständiger musikalischer Part funktionieren. Schneide ausschließlich auf Beat-, Downbeat- oder Taktgrenzen. Arbeite non-destruktiv und speichere das Ergebnis als neue editierte Variante.",
+      "description": "Kopiert exakt 16 vollständige Takte ab Abschnittsstart.",
+      "scope": "daw",
+      "tags_json": [
+        "importiert",
+        "Beat-/Taktgenaues Schneiden"
+      ],
+      "sort_order": 37,
+      "is_active": true,
+      "metadata_json": {
+        "source_file": ".aufhaenger/daw_gespraechsaufhaenger_prompts.md",
+        "source_category": "Beat-/Taktgenaues Schneiden",
+        "imported_from_markdown": true,
+        "imported_at": "2026-07-09T23:24:51"
+      }
+    },
+    {
+      "title": "Taktbereich verschieben",
+      "prompt": "Verschiebe den angegebenen Taktbereich an eine neue Position.\n\nNutze BeatNet+-Downbeats als verbindliche Referenz. Bestimme den Quellbereich über vollständige Takte und schneide ihn taktgenau heraus oder kopiere ihn, je nach gewünschter Bearbeitung. Füge den Bereich an der Zielposition auf einer passenden Downbeat-/Taktgrenze ein.\n\nAchte darauf, dass alle nachfolgenden Clips zeitlich korrekt verschoben werden und keine Lücken oder Überlappungen entstehen. Arbeite non-destruktiv und speichere das Ergebnis als neue editierte Variante.",
+      "description": "Verschiebt einen bestimmten Taktbereich an eine neue Position.",
+      "scope": "daw",
+      "tags_json": [
+        "importiert",
+        "Beat-/Taktgenaues Schneiden"
+      ],
+      "sort_order": 38,
+      "is_active": true,
+      "metadata_json": {
+        "source_file": ".aufhaenger/daw_gespraechsaufhaenger_prompts.md",
+        "source_category": "Beat-/Taktgenaues Schneiden",
+        "imported_from_markdown": true,
+        "imported_at": "2026-07-09T23:24:51"
+      }
+    },
+    {
+      "title": "Loop sauber machen",
+      "prompt": "Korrigiere den Loop so, dass er sauber und taktgenau wiederholt.\n\nAnalysiere den aktuellen Loop-Bereich anhand von BeatNet+-Downbeats. Verschiebe Start und Ende auf vollständige Taktgrenzen, sodass der Loop beim Wiederholen ohne rhythmischen Versatz, Stolpern oder hörbaren Schnitt zurück auf den Anfang springt.\n\nNutze bei Bedarf minimale Fades, aber verändere den Klang nicht unnötig. Arbeite non-destruktiv und speichere das Ergebnis als neue editierte Variante.",
+      "description": "Korrigiert Start/Ende eines Loops auf perfekte Wiederholung.",
+      "scope": "daw",
+      "tags_json": [
+        "importiert",
+        "Beat-/Taktgenaues Schneiden"
+      ],
+      "sort_order": 39,
+      "is_active": true,
+      "metadata_json": {
+        "source_file": ".aufhaenger/daw_gespraechsaufhaenger_prompts.md",
+        "source_category": "Beat-/Taktgenaues Schneiden",
+        "imported_from_markdown": true,
+        "imported_at": "2026-07-09T23:24:51"
+      }
+    },
+    {
+      "title": "SRT an Schnitt anpassen",
+      "prompt": "Passe die SRT-Zeitstempel an die aktuelle Audio-Bearbeitung an.\n\nAnalysiere die vorgenommenen Schnitte, Duplikationen oder Verschiebungen und übertrage diese Änderungen auf alle betroffenen SRT-Zeitstempel. Wenn ein Audioabschnitt dupliziert wurde, dupliziere auch die passenden SRT-Zeilen mit entsprechend verschobenen Zeiten.\n\nErhalte den Textinhalt unverändert, außer eine Korrektur ist ausdrücklich gewünscht. Speichere die angepasste SRT als neue Datei passend zur editierten Audio-Variante.",
+      "description": "Verschiebt Untertitelzeiten passend zur Audio-Editierung.",
+      "scope": "daw",
+      "tags_json": [
+        "importiert",
+        "Vocals / Lyrics / SRT"
+      ],
+      "sort_order": 40,
+      "is_active": true,
+      "metadata_json": {
+        "source_file": ".aufhaenger/daw_gespraechsaufhaenger_prompts.md",
+        "source_category": "Vocals / Lyrics / SRT",
+        "imported_from_markdown": true,
+        "imported_at": "2026-07-09T23:24:51"
+      }
+    },
+    {
+      "title": "Hook-Zeilen finden",
+      "prompt": "Finde die Hook-Zeilen im Song.\n\nAnalysiere Lyrics und SRT auf wiederholte Zeilen, Refrain-Marker, Hook-Strukturen und wiederkehrende Phrasen. Bestimme daraus den wahrscheinlichsten Hook-Bereich inklusive Start, Ende und Taktanzahl anhand der BeatNet+-Downbeats.\n\nSchneide noch nichts. Gib nur eine strukturierte Analyse aus, welche Zeilen zur Hook gehören und welche Zeit-/Taktbereiche dafür erkannt wurden.",
+      "description": "Erkennt die Hook anhand wiederholter Lyrics-Zeilen.",
+      "scope": "daw",
+      "tags_json": [
+        "importiert",
+        "Vocals / Lyrics / SRT"
+      ],
+      "sort_order": 41,
+      "is_active": true,
+      "metadata_json": {
+        "source_file": ".aufhaenger/daw_gespraechsaufhaenger_prompts.md",
+        "source_category": "Vocals / Lyrics / SRT",
+        "imported_from_markdown": true,
+        "imported_at": "2026-07-09T23:24:51"
+      }
+    },
+    {
+      "title": "Doppelte Zeilen beachten",
+      "prompt": "Berücksichtige doppelte oder abweichend wiederholte Zeilen bei der Schnittanalyse.\n\nVergleiche Lyrics, SRT und tatsächliche Songstruktur. Achte darauf, dass Zeilen im Audio doppelt vorkommen können, obwohl sie im geschriebenen Text nur einmal stehen, oder dass erwartete Wiederholungen im Audio fehlen können. Nutze BeatNet+-Downbeats und SRT-Zeiten, um die tatsächliche gesungene Struktur zu bestimmen.\n\nSchneide nur anhand der realen Audio-/SRT-Struktur, nicht starr anhand des geschriebenen Songtexts. Arbeite non-destruktiv.",
+      "description": "Berücksichtigt Suno-typische Wiederholungen beim Schnitt.",
+      "scope": "daw",
+      "tags_json": [
+        "importiert",
+        "Vocals / Lyrics / SRT"
+      ],
+      "sort_order": 42,
+      "is_active": true,
+      "metadata_json": {
+        "source_file": ".aufhaenger/daw_gespraechsaufhaenger_prompts.md",
+        "source_category": "Vocals / Lyrics / SRT",
+        "imported_from_markdown": true,
+        "imported_at": "2026-07-09T23:24:51"
+      }
+    },
+    {
+      "title": "Vocal-Einsatz finden",
+      "prompt": "Finde den ersten relevanten Vocal-Einsatz im Song.\n\nAnalysiere SRT, Lyrics und Audio-Timing. Bestimme den ersten gesungenen oder gerappten Einsatz und snappe den Start auf die vorherige passende BeatNet+-Taktgrenze. Unterscheide dabei zwischen Intro-Adlibs, gesprochenem Vorlauf und dem eigentlichen ersten Part.\n\nSchneide noch nichts. Gib Startzeit, Taktposition und kurze Begründung aus.",
+      "description": "Findet den ersten gesungenen oder gerappten Einsatz.",
+      "scope": "daw",
+      "tags_json": [
+        "importiert",
+        "Vocals / Lyrics / SRT"
+      ],
+      "sort_order": 43,
+      "is_active": true,
+      "metadata_json": {
+        "source_file": ".aufhaenger/daw_gespraechsaufhaenger_prompts.md",
+        "source_category": "Vocals / Lyrics / SRT",
+        "imported_from_markdown": true,
+        "imported_at": "2026-07-09T23:24:51"
+      }
+    },
+    {
+      "title": "Adlibs erhalten",
+      "prompt": "Erhalte wichtige Adlibs bei der Bearbeitung.\n\nAnalysiere SRT, Lyrics und BeatNet+-Taktgrenzen. Prüfe bei jedem geplanten Schnitt, ob direkt vor oder nach dem Schnitt wichtige Adlibs, Call-ins, Backing-Vocals oder Übergangsvocals liegen. Verschiebe den Schnittpunkt bei Bedarf auf eine musikalisch bessere Taktgrenze, damit diese Elemente nicht versehentlich abgeschnitten werden.\n\nArbeite ausschließlich auf Beat-, Downbeat- oder Taktgrenzen. Speichere die Bearbeitung non-destruktiv als neue Variante.",
+      "description": "Achtet darauf, Adlibs nicht versehentlich abzuschneiden.",
+      "scope": "daw",
+      "tags_json": [
+        "importiert",
+        "Vocals / Lyrics / SRT"
+      ],
+      "sort_order": 44,
+      "is_active": true,
+      "metadata_json": {
+        "source_file": ".aufhaenger/daw_gespraechsaufhaenger_prompts.md",
+        "source_category": "Vocals / Lyrics / SRT",
+        "imported_from_markdown": true,
+        "imported_at": "2026-07-09T23:24:51"
+      }
+    },
+    {
+      "title": "Lyrics mit Audio abgleichen",
+      "prompt": "Gleiche Lyrics und Audio-Struktur miteinander ab.\n\nVergleiche den geschriebenen Songtext mit SRT-Zeitstempeln, tatsächlichen Vocal-Einsätzen und BeatNet+-Downbeats. Erkenne Abweichungen wie ausgelassene Zeilen, doppelte Zeilen, verschobene Hooks, zusätzliche Adlibs oder andere Abschnittsreihenfolgen.\n\nSchneide noch nichts. Erzeuge eine strukturierte Analyse mit erkannten Abweichungen und empfohlenen Schnittbereichen.",
+      "description": "Vergleicht Lyrics/SRT mit tatsächlicher Songstruktur.",
+      "scope": "daw",
+      "tags_json": [
+        "importiert",
+        "Vocals / Lyrics / SRT"
+      ],
+      "sort_order": 45,
+      "is_active": true,
+      "metadata_json": {
+        "source_file": ".aufhaenger/daw_gespraechsaufhaenger_prompts.md",
+        "source_category": "Vocals / Lyrics / SRT",
+        "imported_from_markdown": true,
+        "imported_at": "2026-07-09T23:24:51"
+      }
+    },
+    {
+      "title": "Edit als Variante speichern",
+      "prompt": "Speichere die aktuelle Bearbeitung als neue editierte Variante.\n\nÜberschreibe keine Originaldateien. Erzeuge eine neue Audio-Variante mit nachvollziehbarem Namen, speichere alle Schnittentscheidungen in einem Edit-Report und verknüpfe die neue Variante mit dem ursprünglichen Song oder Audio-Asset.\n\nErhalte vorhandene Metadaten, Pfade, SRT-Dateien und Projektstruktur so weit wie möglich. Arbeite non-destruktiv und auditierbar.",
+      "description": "Speichert die Bearbeitung non-destruktiv als neue Version.",
+      "scope": "daw",
+      "tags_json": [
+        "importiert",
+        "Export / Varianten"
+      ],
+      "sort_order": 46,
+      "is_active": true,
+      "metadata_json": {
+        "source_file": ".aufhaenger/daw_gespraechsaufhaenger_prompts.md",
+        "source_category": "Export / Varianten",
+        "imported_from_markdown": true,
+        "imported_at": "2026-07-09T23:24:51"
+      }
+    },
+    {
+      "title": "Original behalten",
+      "prompt": "Bearbeite den Song non-destruktiv und behalte das Original unverändert.\n\nAlle Schnitte, Duplikationen, Verschiebungen oder Exporte sollen als neue Variante gespeichert werden. Die Original-Audiodatei, ursprüngliche SRT-Dateien, Metadaten und Projektverweise dürfen nicht überschrieben oder gelöscht werden.\n\nErzeuge einen nachvollziehbaren Edit-Report mit allen Start-, End- und Insert-Zeitpunkten.",
+      "description": "Führt alle Änderungen ohne Überschreiben der Originaldatei aus.",
+      "scope": "daw",
+      "tags_json": [
+        "importiert",
+        "Export / Varianten"
+      ],
+      "sort_order": 47,
+      "is_active": true,
+      "metadata_json": {
+        "source_file": ".aufhaenger/daw_gespraechsaufhaenger_prompts.md",
+        "source_category": "Export / Varianten",
+        "imported_from_markdown": true,
+        "imported_at": "2026-07-09T23:24:51"
+      }
+    },
+    {
+      "title": "Edit-Report erzeugen",
+      "prompt": "Erzeuge einen vollständigen Edit-Report zur aktuellen Bearbeitung.\n\nDokumentiere Quellbereich, Zielposition, Startzeit, Endzeit, Insert-Zeit, Taktpositionen, verwendete BeatNet+-Downbeats, erkannte Songabschnitte, KI-Entscheidung, Confidence, Begründung und exportierte Dateien.\n\nDer Report soll maschinenlesbar als JSON gespeichert werden und die Bearbeitung später nachvollziehbar oder wiederholbar machen.",
+      "description": "Erstellt einen JSON-Bericht mit Schnittpunkten und Entscheidungen.",
+      "scope": "daw",
+      "tags_json": [
+        "importiert",
+        "Export / Varianten"
+      ],
+      "sort_order": 48,
+      "is_active": true,
+      "metadata_json": {
+        "source_file": ".aufhaenger/daw_gespraechsaufhaenger_prompts.md",
+        "source_category": "Export / Varianten",
+        "imported_from_markdown": true,
+        "imported_at": "2026-07-09T23:24:51"
+      }
+    },
+    {
+      "title": "WAV-Version exportieren",
+      "prompt": "Exportiere die bearbeitete Version als WAV-Datei.\n\nNutze die aktuelle editierte Audio-Variante und exportiere sie verlustfrei oder möglichst qualitätsschonend als WAV. Überschreibe nicht das Original. Behalte Samplerate, Kanäle und Lautstärke so weit wie möglich bei.\n\nErzeuge zusätzlich einen Edit-Report und verknüpfe die WAV-Datei mit der neuen Variante.",
+      "description": "Exportiert die bearbeitete Version verlustfrei als WAV.",
+      "scope": "daw",
+      "tags_json": [
+        "importiert",
+        "Export / Varianten"
+      ],
+      "sort_order": 49,
+      "is_active": true,
+      "metadata_json": {
+        "source_file": ".aufhaenger/daw_gespraechsaufhaenger_prompts.md",
+        "source_category": "Export / Varianten",
+        "imported_from_markdown": true,
+        "imported_at": "2026-07-09T23:24:51"
+      }
+    },
+    {
+      "title": "MP3-Version exportieren",
+      "prompt": "Exportiere zusätzlich eine MP3-Version der bearbeiteten Variante.\n\nNutze die aktuelle editierte Audio-Variante als Quelle und erstelle daraus eine MP3-Datei mit hoher Qualität. Überschreibe nicht das Original. Die MP3 soll als zusätzliche Exportdatei zur gleichen Variante gespeichert werden.\n\nErzeuge oder aktualisiere den Edit-Report mit Pfad, Format, Bitrate und Dauer der exportierten Datei.",
+      "description": "Exportiert zusätzlich eine komprimierte MP3-Version.",
+      "scope": "daw",
+      "tags_json": [
+        "importiert",
+        "Export / Varianten"
+      ],
+      "sort_order": 50,
+      "is_active": true,
+      "metadata_json": {
+        "source_file": ".aufhaenger/daw_gespraechsaufhaenger_prompts.md",
+        "source_category": "Export / Varianten",
+        "imported_from_markdown": true,
+        "imported_at": "2026-07-09T23:24:51"
+      }
+    },
+    {
+      "title": "Vorher/Nachher prüfen",
+      "prompt": "Prüfe die Bearbeitung im Vorher/Nachher-Vergleich.\n\nVergleiche Original und editierte Variante hinsichtlich Länge, Schnittpunkten, eingefügten Bereichen, Taktpositionen, SRT-Verschiebungen und Songstruktur. Prüfe, ob die Bearbeitung musikalisch logisch ist, keine unerwarteten Lücken oder Überlappungen entstanden sind und alle Übergänge taktgenau sitzen.\n\nGib eine kurze technische Zusammenfassung mit möglichen Warnungen aus.",
+      "description": "Vergleicht Länge, Schnittpunkte und Songstruktur nach dem Edit.",
+      "scope": "daw",
+      "tags_json": [
+        "importiert",
+        "Export / Varianten"
+      ],
+      "sort_order": 51,
+      "is_active": true,
+      "metadata_json": {
+        "source_file": ".aufhaenger/daw_gespraechsaufhaenger_prompts.md",
+        "source_category": "Export / Varianten",
+        "imported_from_markdown": true,
+        "imported_at": "2026-07-09T23:24:51"
+      }
+    },
+    {
+      "title": "Erste 8-Takte Hook",
+      "prompt": "Verdopple die erste Hook. Nutze dafür ausschließlich die ersten 8 vollständigen Takte der ersten Hook. Erkenne den Start der ersten Hook anhand der Lyrics-/SRT-Struktur und der BeatNet+-Downbeats. Schneide ab dem ersten vollständigen Hook-Takt exakt 8 Takte lang. Kopiere diese 8 Takte und füge sie direkt danach erneut ein. Falls nach der Hook ein Übergangsauftakt in den nächsten Verse folgt, darf dieser nicht mitkopiert werden. Der Ablauf soll danach sein: erste 8 Hook-Takte, kopierte 8 Hook-Takte, danach der bestehende weitere Songverlauf.",
+      "description": "Erste 8-Takte Hook",
+      "scope": "daw",
+      "tags_json": [],
+      "sort_order": 100,
+      "is_active": true,
+      "metadata_json": {}
+    }
+  ]
+}

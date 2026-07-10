@@ -1014,6 +1014,10 @@ def _update_content_title(db: Session, content_type: str, item_id: int, title: s
             song = db.query(Song).filter(Song.id == asset.song_id).first()
             if song:
                 song.title = new_title
+        if asset.project_id:
+            project = db.query(AudioProject).filter(AudioProject.id == asset.project_id).first()
+            if project:
+                project.title = new_title
         id3_result = sync_audio_asset_id3_title(asset, new_title)
         db.add(asset)
         db.commit()

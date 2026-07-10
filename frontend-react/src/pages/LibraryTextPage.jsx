@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import { ChevronLeft, ChevronRight, Copy, Download, Edit3, Eye, FileText, LayoutGrid, List, Music2, Save, Trash2, Upload } from 'lucide-react';
 import { api } from '../api/client.js';
+// Schutz: /texts besitzt Kartenansicht, strukturierte Listenansicht und Viewer-Modal; Layout-Patches duerfen diese drei Modi nicht gegeneinander ueberschreiben.
 import { EmptyState } from '../components/EmptyState.jsx';
 import { Modal } from '../components/Modal.jsx';
 import { SectionHeader } from '../components/SectionHeader.jsx';

@@ -59,6 +59,14 @@ const libraryGalleryModeStorageKey = 'react-library-gallery-mode';
 const libraryFlatListModeStorageKey = 'react-library-flat-list-mode';
 const libraryViewModes = ['list', 'flat-list', 'gallery'];
 const librarySubModes = ['simple', 'advanced'];
+const libraryFlatListScaleOptions = [
+  { label: 'Kompakt', short: 'Komp.' },
+  { label: 'Normal', short: 'Normal' },
+  { label: 'Breit', short: 'Breit' },
+  { label: 'Breiter', short: 'Breiter' },
+  { label: 'Max', short: 'Max' },
+];
+const libraryFlatListScaleMax = libraryFlatListScaleOptions.length - 1;
 
 
 function translateFallback(translate, key, fallback, values) {
@@ -367,7 +375,7 @@ function isAssetFullyLocal(asset) {
 }
 
 function fullLocalLabel(translate = null) {
-  return translateFallback(translate, 'library.localFilter.local', 'Lokal');
+  return String(translateFallback(translate, 'library.localFilter.local', 'LOKAL')).toUpperCase();
 }
 
 function storageStatusLabel(asset, translate = null) {
@@ -434,6 +442,87 @@ function isExtendedAsset(asset) {
     metadata.task_type,
     ...requestCandidates.flatMap((request) => [request.operation_type, request.task_type, request.type]),
   ].some((value) => operationKey(value) === 'extend');
+}
+
+function assetSourceText(asset) {
+  const metadata = assetMetadata(asset);
+  const requestCandidates = metadataRequestPayloadCandidates(asset);
+  return [
+    asset?.audio_id,
+    asset?.operation_type,
+    asset?.task_type,
+    asset?.operation_label,
+    asset?.version_label,
+    asset?.import_source,
+    asset?.generation_source,
+    metadata.source,
+    metadata.import_source,
+    metadata.generation_source,
+    metadata.provider,
+    metadata.operation,
+    metadata.operation_type,
+    metadata.task_type,
+    metadata.taskType,
+    metadata.model,
+    metadata.modelName,
+    ...requestCandidates.flatMap((request) => [
+      request.source,
+      request.import_source,
+      request.generation_source,
+      request.provider,
+      request.operation,
+      request.operation_type,
+      request.task_type,
+      request.taskType,
+      request.type,
+      request.model,
+    ]),
+  ].filter((value) => value !== undefined && value !== null && value !== '').map((value) => String(value).toLowerCase()).join(' ');
+}
+
+function isDawAsset(asset) {
+  const metadata = assetMetadata(asset);
+  return Boolean(
+    metadata.is_edited_version ||
+    metadata.generation_source === 'mini_daw' ||
+    metadata.operation_type === 'daw_arrangement_render' ||
+    metadata.task_type === 'daw_arrangement_render' ||
+    operationKey(asset?.operation_type || asset?.task_type || asset?.operation_label) === 'daw_arrangement_render'
+  );
+}
+
+function isUploadedAudioAsset(asset) {
+  const metadata = assetMetadata(asset);
+  const sourceText = assetSourceText(asset);
+  return Boolean(
+    sourceText.includes('manual_import') ||
+    sourceText.includes('manual-') ||
+    sourceText.includes('manuell importiert') ||
+    metadata.manual_import ||
+    String(asset?.audio_id || '').toLowerCase().startsWith('manual-')
+  );
+}
+
+function isSunoComImportAsset(asset) {
+  const metadata = assetMetadata(asset);
+  const sourceText = assetSourceText(asset);
+  return Boolean(
+    asset?.is_suno_clip_import ||
+    metadata.is_suno_clip_import ||
+    metadata.import_source === 'suno_public_clip' ||
+    sourceText.includes('suno_public_clip') ||
+    sourceText.includes('suno import')
+  );
+}
+
+function isSunoApiImportAsset(asset) {
+  const sourceText = assetSourceText(asset);
+  return Boolean(
+    sourceText.includes('manual_sunoapi_import') ||
+    sourceText.includes('sunoapi_import') ||
+    sourceText.includes('import_sunoapi') ||
+    sourceText.includes('imported_external')
+  ) && !isSunoComImportAsset(asset) && !isUploadedAudioAsset(asset) && !isDawAsset(asset);
 }
 
 function extendSourceAudioId(asset) {
@@ -568,6 +657,11 @@ function assetContentBadges(asset, srtByAsset = {}) {
   const stems = metadata.stems && typeof metadata.stems === 'object' ? metadata.stems : {};
   const stemFiles = stems.files && typeof stems.files === 'object' ? stems.files : {};
   const wav = metadata.wav_conversion && typeof metadata.wav_conversion === 'object' ? metadata.wav_conversion : {};
+  if (isDawAsset(asset)) badges.push({ key: 'daw', label: 'DAW', className: 'cached' });
+  if (isUploadedAudioAsset(asset)) badges.push({ key: 'upload', label: 'UPLOAD', className: 'cached' });
+  if (isSunoComImportAsset(asset)) badges.push({ key: 'suno', label: 'SUNO', className: 'cached' });
+  if (isSunoApiImportAsset(asset)) badges.push({ key: 'api', label: 'API', className: 'cached' });
+  if (isExtendedAsset(asset)) badges.push({ key: 'extended', label: 'EXT', className: 'cached' });
   if (hasAssetSrt(asset, srtByAsset)) badges.push({ key: 'srt', label: 'SRT', className: 'cached' });
   if (hasAssetVideo(asset)) badges.push({ key: 'mp4', label: 'MP4', className: 'cached' });
   if (stemFiles.vocals || stemFiles.instrumental) badges.push({ key: 'stems', label: 'STEMS', className: 'cached' });
@@ -795,6 +889,7 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
   const [selectedProjectSnapshot, setSelectedProjectSnapshot] = useState(null);
   const handledOpenAssetIdRef = useRef('');
   const [actionAsset, setActionAsset] = useState(null);
+  const [renameModal, setRenameModal] = useState({ asset: null, title: '', saving: false });
   const [openAudioMenuId, setOpenAudioMenuId] = useState(null);
   const [openAudioMenuPosition, setOpenAudioMenuPosition] = useState(null);
   const audioMenuScrollRef = useRef({ key: '', scrollTop: 0 });
@@ -847,7 +942,7 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
   const [libraryFlatListScale, setLibraryFlatListScale] = useState(() => {
     try {
       const value = Number(localStorage.getItem('react-library-flat-list-scale') || 1);
-      return Number.isFinite(value) ? Math.max(0, Math.min(2, value)) : 1;
+      return Number.isFinite(value) ? Math.max(0, Math.min(libraryFlatListScaleMax, value)) : 1;
     } catch { return 1; }
   });
   const [libraryGalleryColumns, setLibraryGalleryColumns] = useState(() => {
@@ -943,14 +1038,21 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
   }, [projects]);
   const filteredProjects = useMemo(() => {
     const needle = query.trim().toLowerCase();
-    let rows = projects.filter((project) => {
+    // Favoriten sind ein Asset-Filter, kein Projekt-Hinweis: In der Favoritenansicht
+    // duerfen weder Final-Assets noch nicht favorisierte Varianten aus derselben
+    // Songgruppe mit angezeigt werden. Sonst wirkt die Liste wie ein gemischter
+    // Projektfilter und zeigt scheinbar falsche Inhalte.
+    const sourceProjects = localFilter === 'favorites'
+      ? groupAssetsByProject(effectiveAssets.filter((asset) => isAssetFavorite(asset)))
+      : projects;
+    let rows = sourceProjects.filter((project) => {
       const matchesQuery = !needle || [project.title, ...project.assets.map(assetSearchText)].join(' ').toLowerCase().includes(needle);
       const matchesType = type === 'all' || project.assets.some((asset) => operationKey(asset.operation_type || asset.task_type || asset.operation_label) === type);
-      const matchesLocal = localFilter === 'all'
+      const matchesLocal = localFilter === 'favorites'
+        || localFilter === 'all'
         || (localFilter === 'audio-local' && project.assets.some(isAudioLocal))
         || (localFilter === 'cover-local' && project.assets.some(isCoverCached))
-        || (localFilter === 'missing-backup' && project.assets.some((asset) => !isAudioLocal(asset) || !isCoverCached(asset)))
-        || (localFilter === 'favorites' && project.assets.some((asset) => isAssetFavorite(asset) || asset.is_final));
+        || (localFilter === 'missing-backup' && project.assets.some((asset) => !isAudioLocal(asset) || !isCoverCached(asset)));
       return matchesQuery && matchesType && matchesLocal;
     });
     rows = [...rows].sort((a, b) => {
@@ -964,7 +1066,7 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
       return stableLibrarySortValue(b) - stableLibrarySortValue(a);
     });
     return rows;
-  }, [projects, query, sort, type, localFilter]);
+  }, [projects, effectiveAssets, query, sort, type, localFilter, favoriteOverrides]);
 
   const filteredGalleryAssets = useMemo(() => filteredProjects.flatMap((project) => project.assets.map((asset, index) => ({
     project,
@@ -977,7 +1079,7 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
   const libraryStats = useMemo(() => {
     const variants = filteredProjects.reduce((sum, project) => sum + (project.assets?.length || 0), 0);
     const playable = filteredProjects.reduce((sum, project) => sum + (project.playable?.length || 0), 0);
-    const favorites = filteredProjects.reduce((sum, project) => sum + (project.assets || []).filter((asset) => isAssetFavorite(asset) || asset.is_final).length, 0);
+    const favorites = filteredProjects.reduce((sum, project) => sum + (project.assets || []).filter((asset) => isAssetFavorite(asset)).length, 0);
     return {
       groups: filteredProjects.length,
       variants,
@@ -993,8 +1095,9 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
   const pagedProjects = libraryPageSize === 'all' ? filteredProjects : filteredProjects.slice((safeLibraryPage - 1) * libraryPageSizeNumber, safeLibraryPage * libraryPageSizeNumber);
   const pagedGalleryAssets = libraryPageSize === 'all' ? filteredGalleryAssets : filteredGalleryAssets.slice((safeLibraryPage - 1) * libraryPageSizeNumber, safeLibraryPage * libraryPageSizeNumber);
   const galleryGridStyle = { '--gallery-columns': String(libraryGalleryColumns || '5') };
-  const flatListScaleLabel = ['Kompakt', 'Normal', 'Breit'][libraryFlatListScale] || 'Normal';
-  const flatListScaleShortLabel = ['Komp.', 'Normal', 'Breit'][libraryFlatListScale] || 'Normal';
+  const flatListScaleOption = libraryFlatListScaleOptions[libraryFlatListScale] || libraryFlatListScaleOptions[1];
+  const flatListScaleLabel = flatListScaleOption.label;
+  const flatListScaleShortLabel = flatListScaleOption.short;
 
   useEffect(() => { setLibraryPage(1); }, [query, type, sort, localFilter, libraryPageSize, libraryViewMode, libraryGalleryMode, libraryFlatListMode, libraryGalleryColumns]);
   useEffect(() => {
@@ -1623,12 +1726,78 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
     }
   }
 
-  async function renameAsset(asset) {
-    const title = prompt(t('library.messages.newTitlePrompt', 'Neuer Titel'), pickTitle(asset));
-    if (!title?.trim()) return;
-    await api.library.updateTitle('audio', asset.id, title.trim());
-    notify(t('library.messages.titleSaved', 'Titel wurde gespeichert.'), 'success');
-    await onReload();
+  function renameAsset(asset) {
+    if (!asset?.id) return;
+    setRenameModal({ asset, title: pickTitle(asset), saving: false });
+  }
+
+  async function submitRenameAsset(event = null) {
+    event?.preventDefault?.();
+    const asset = renameModal.asset;
+    const title = String(renameModal.title || '').trim();
+    if (!asset?.id || !title) return;
+    setRenameModal((current) => ({ ...current, saving: true }));
+    try {
+      await api.library.updateTitle('audio', asset.id, title);
+      notify(t('library.messages.titleSaved', 'Titel wurde gespeichert.'), 'success');
+      setRenameModal({ asset: null, title: '', saving: false });
+      await onReload();
+    } catch (err) {
+      notify(err?.message || t('library.messages.titleSaveFailed', 'Titel konnte nicht gespeichert werden.'), 'error');
+      setRenameModal((current) => ({ ...current, saving: false }));
+    }
+  }
+
+  function InlineRenameTitle({ asset, title, subtitle = null, className = '', onOpen = null, heading = false }) {
+    const displayTitle = title || pickTitle(asset);
+    return (
+      <span className={`inline-title-edit ${className}`.trim()}>
+        <button className="inline-title-main" type="button" onClick={onOpen || (() => {})} title={onOpen ? t('library.openSongDetails', 'Songdetails öffnen') : displayTitle}>
+          <strong className={heading ? 'inline-title-heading' : ''}>{displayTitle}</strong>
+          {subtitle ? <span>{subtitle}</span> : null}
+        </button>
+        {asset?.id ? (
+          <button
+            className="inline-title-edit-button"
+            type="button"
+            onClick={(event) => { event.preventDefault(); event.stopPropagation(); renameAsset(asset); }}
+            title={t('library.actions.renameTitle', 'Titel ändern')}
+            aria-label={t('library.actions.renameTitle', 'Titel ändern')}
+          >
+            <Edit3 size={13} />
+          </button>
+        ) : null}
+      </span>
+    );
+  }
+
+  function RenameTitleModal() {
+    const asset = renameModal.asset;
+    return (
+      <Modal open={Boolean(asset)} title={t('library.actions.renameTitle', 'Titel ändern')} onClose={() => setRenameModal({ asset: null, title: '', saving: false })}>
+        {asset && (
+          <form className="stack rename-title-form" onSubmit={submitRenameAsset}>
+            <p className="muted">{t('library.messages.newTitlePrompt', 'Neuer Titel')}</p>
+            <input
+              autoFocus
+              value={renameModal.title}
+              maxLength={255}
+              onChange={(event) => setRenameModal((current) => ({ ...current, title: event.target.value }))}
+              onKeyDown={(event) => {
+                if (event.key === 'Escape') {
+                  event.preventDefault();
+                  setRenameModal({ asset: null, title: '', saving: false });
+                }
+              }}
+            />
+            <div className="button-row">
+              <button type="button" onClick={() => setRenameModal({ asset: null, title: '', saving: false })}>{t('common.cancel', 'Abbrechen')}</button>
+              <button className="primary" type="submit" disabled={renameModal.saving || !String(renameModal.title || '').trim()}>{renameModal.saving ? t('common.saving', 'Speichert…') : t('stylesPage.save', 'Speichern')}</button>
+            </div>
+          </form>
+        )}
+      </Modal>
+    );
   }
 
   function stopPlaybackForDeletedAssets(assetIds = []) {
@@ -4421,7 +4590,7 @@ ${generationOptionsText(asset)}`,
             <div className="asset-flat-size-controls" aria-label={t('library.flatListSizeAria', 'Titelliste Spaltengröße')}>
               <button type="button" onClick={() => setLibraryFlatListScale((value) => Math.max(0, value - 1))} disabled={libraryFlatListScale <= 0} title={t('library.flatListCompact', 'Titelliste kompakter anzeigen')}>−</button>
               <span><ResponsiveLabel full={flatListScaleLabel} short={flatListScaleShortLabel} /></span>
-              <button type="button" onClick={() => setLibraryFlatListScale((value) => Math.min(2, value + 1))} disabled={libraryFlatListScale >= 2} title={t('library.flatListWide', 'Titelliste breiter anzeigen')}>+</button>
+              <button type="button" onClick={() => setLibraryFlatListScale((value) => Math.min(libraryFlatListScaleMax, value + 1))} disabled={libraryFlatListScale >= libraryFlatListScaleMax} title={t('library.flatListWide', 'Titelliste breiter anzeigen')}>+</button>
             </div>
           )}
           {libraryViewMode === 'gallery' && libraryGalleryMode === 'simple' && (
@@ -4531,11 +4700,10 @@ ${generationOptionsText(asset)}`,
           </div>
         </div>
         <div className="gallery-tile-caption">
-          <button type="button" onClick={() => openGalleryAssetDetails(project, asset)}>{pickTitle(asset)}</button>
+          <InlineRenameTitle asset={asset} title={pickTitle(asset)} onOpen={() => openGalleryAssetDetails(project, asset)} />
           <small>{label} · {formatDuration(asset.duration_seconds)}</small>
         </div>
         <div className="gallery-tile-actions">
-          <button type="button" onClick={(event) => preservePlaybackClick(event, () => playAsset(asset, projectQueue, queueIndex, project))}>{isPlayingAsset(asset) ? t('player.pause', 'Pause') : t('player.play', 'Play')}</button>
           <button type="button" onClick={() => openWorkflowWizard(asset)}>Wizard</button>
           <AudioActionMenu asset={asset} compact label="" dropUp playQueue={projectQueue} playIndex={queueIndex} project={project} />
         </div>
@@ -4560,10 +4728,13 @@ ${generationOptionsText(asset)}`,
           <span className="cover-play">{isPlayingAsset(asset) ? <Pause size={16} /> : <Play size={16} fill="currentColor" />}</span>
         </button>
         <div className="asset-flat-main">
-          <button className="asset-flat-title" type="button" onClick={(event) => openGalleryAssetDetails(project, asset, event)} title={t('library.openSongDetails', 'Songdetails öffnen')}>
-            <strong>{pickTitle(asset)}</strong>
-            <span>{advanced ? `${project?.title || t('library.noSongGroup', 'Ohne Songgruppe')} · ${label} · ${operationLabel(asset.operation_type || asset.task_type || asset.operation_label, t)}` : `${label} · ${formatDuration(asset.duration_seconds)} · ${storageStatusLabel(asset, t)}`}</span>
-          </button>
+          <InlineRenameTitle
+            asset={asset}
+            title={pickTitle(asset)}
+            subtitle={advanced ? `${project?.title || t('library.noSongGroup', 'Ohne Songgruppe')} · ${label} · ${operationLabel(asset.operation_type || asset.task_type || asset.operation_label, t)}` : `${label} · ${formatDuration(asset.duration_seconds)} · ${storageStatusLabel(asset, t)}`}
+            className="asset-flat-title"
+            onOpen={(event) => openGalleryAssetDetails(project, asset, event)}
+          />
           {advanced && active && (
             <div className="library-inline-waveform asset-flat-waveform">
               <span>{playbackState?.isPlaying ? t('library.playback.running', 'Läuft') : t('library.playback.ready', 'Bereit')} · {formatDuration(playbackState?.currentTime || 0)} / {formatDuration(playbackState?.duration || asset.duration_seconds)}</span>
@@ -4578,12 +4749,10 @@ ${generationOptionsText(asset)}`,
           </div>}
         </div>
         {advanced && <div className="asset-flat-badges">
-          {isAssetFavorite(asset) && <span className="status favorite"><ThumbsUp size={14} fill="currentColor" /> {t('library.favorites', 'Favorit')}</span>}
           {isAssetFullyLocal(asset) && <span className="status cached">{fullLocalLabel(t)}</span>}
           {badges.map((badge) => <span key={badge.key} className={`status ${badge.className || 'cached'}`}>{badge.label}</span>)}
         </div>}
         <div className="asset-flat-actions">
-          <button type="button" onClick={(event) => preservePlaybackClick(event, () => playAsset(asset, projectQueue, queueIndex, project))} disabled={!isPlayable(asset)}>{isPlayingAsset(asset) ? <Pause size={15} /> : <Play size={15} fill="currentColor" />}</button>
           <button type="button" className={isAssetFavorite(asset) ? 'favorite-action is-favorite' : 'favorite-action'} onClick={() => toggleAssetFavorite(asset)} disabled={favoriteSavingIds.has(asset.id)} title={isAssetFavorite(asset) ? t('library.actions.removeFavorite', 'Favorit entfernen') : t('library.actions.saveFavorite', 'Als Favorit speichern')}>
             <ThumbsUp size={15} fill={isAssetFavorite(asset) ? 'currentColor' : 'none'} />
           </button>
@@ -4617,10 +4786,13 @@ ${generationOptionsText(asset)}`,
           <img src={displayCover || '/static/favicon.ico'} alt={`${project.title} Cover`} />
           <span className="cover-play">{projectPlaying ? <Pause size={18} /> : <Play size={18} fill="currentColor" />}</span>
         </button>
-        <button className="gallery-card-title" type="button" onClick={(event) => openProjectDetails(project, event)}>
-          <strong>{project.title}</strong>
-          <small>{t('library.variantsWithDuration', '{{count}} Varianten · {{duration}}', { count: project.assets.length, duration: formatDuration(project.duration) })}</small>
-        </button>
+        <InlineRenameTitle
+          asset={bestAsset}
+          title={project.title}
+          subtitle={t('library.variantsWithDuration', '{{count}} Varianten · {{duration}}', { count: project.assets.length, duration: formatDuration(project.duration) })}
+          className="gallery-card-title"
+          onOpen={(event) => openProjectDetails(project, event)}
+        />
         <p className="muted">{summarizeStyle(pickStyle(bestAsset), 90, t)}</p>
         <div className="project-gallery-asset-actions">
           {project.assets.map((asset, index) => (
@@ -4632,7 +4804,6 @@ ${generationOptionsText(asset)}`,
           ))}
         </div>
         <div className="button-row wrap compact">
-          <button type="button" onClick={(event) => preservePlaybackClick(event, () => playProject(project))}>{projectPlaying ? t('player.pause', 'Pause') : t('player.play', 'Play')}</button>
           <button type="button" onClick={(event) => openProjectDetails(project, event)}>{t('library.details', 'Details')}</button>
           {bestAsset && <button type="button" onClick={() => openWorkflowWizard(bestAsset)}>Wizard</button>}
         </div>
@@ -4763,12 +4934,11 @@ ${generationOptionsText(asset)}`,
           </button>
           <div>
             <p className="eyebrow">{t('library.detail.projectSong', 'Projekt / Song')}</p>
-            <h1>{activeProject.title}</h1>
+            <InlineRenameTitle asset={activeProject.assets[0]} title={activeProject.title} className="detail-hero-title" heading />
             <p className="muted">{t('library.detail.projectMeta', '{{variants}} Varianten · {{operations}} Vorgänge · erstellt {{created}} · aktualisiert {{updated}}', { variants: activeProject.assets.length, operations: activeProject.operations.length, created: formatDate(activeProject.created_at), updated: formatDate(activeProject.updated_at) })}</p>
             <p className="muted">{summarizeStyle(pickStyle(activeProject.assets.find((asset) => pickStyle(asset))), 220, t)}</p>
             {activeProject.assets.some((asset) => voiceLabelForAsset(asset)) && <p className="muted voice-detail-line">{t('library.detail.voice', 'Stimme')}: <strong>{voiceLabelForAsset(activeProject.assets.find((asset) => voiceLabelForAsset(asset)))}</strong></p>}
             <div className="button-row wrap">
-              <button className="primary" type="button" onClick={(event) => preservePlaybackClick(event, () => playProject(activeProject))}><Headphones size={16} /> {isPlayingProject(activeProject) ? t('player.pause', 'Pause') : t('library.detail.playBestVersion', 'Beste Version abspielen')}</button>
               <button type="button" onClick={() => openPictureViewer(projectCoverAsset)} disabled={!projectCoverAsset}><Maximize2 size={16} /> {t('library.actions.viewCoverLarge', 'Cover groß anzeigen')}</button>
               <button type="button" onClick={() => downloadCoverImage(projectCoverAsset)} disabled={!projectCoverAsset}><Download size={16} /> {t('library.actions.downloadCover', 'Cover herunterladen')}</button>
               <button type="button" onClick={() => { const best = activeProject.assets.find((item) => isAssetFavorite(item)) || activeProject.playable?.[0] || activeProject.assets[0]; if (best) toggleAssetFavorite(best, !isAssetFavorite(best)); }} disabled={!activeProject.assets.length || Boolean(favoriteSavingIds.size)}><ThumbsUp size={16} fill={activeProject.assets.some((item) => isAssetFavorite(item)) ? 'currentColor' : 'none'} /> {activeProject.assets.some((item) => isAssetFavorite(item)) ? t('library.actions.removeFavorite', 'Favorit entfernen') : t('library.actions.saveFavorite', 'Als Favorit speichern')}</button>
@@ -4842,17 +5012,24 @@ ${generationOptionsText(asset)}`,
                           </span>
                           <span className="variant-accordion-badges">
                             <span className={`status ${isAssetFullyLocal(asset) ? 'cached' : audioStatusClass(asset)}`}>{storageStatusLabel(asset, t)}</span>
-                            {isAssetFavorite(asset) && <span className="status favorite"><ThumbsUp size={13} fill="currentColor" /> {t('library.favoriteOne', 'Favorit')}</span>}
                             {assetContentBadges(asset, srtByAsset).map((badge) => <span key={badge.key} className={`status ${badge.className || 'cached'}`}>{badge.label}</span>)}
                             <span className="muted compact-only">{formatDuration(asset.duration_seconds)}</span>
                           </span>
+                        </button>
+                        <button
+                          type="button"
+                          className="variant-title-edit-button inline-title-edit-button"
+                          onClick={(event) => { event.preventDefault(); event.stopPropagation(); renameAsset(asset); }}
+                          title={t('library.actions.renameTitle', 'Titel ändern')}
+                          aria-label={t('library.actions.renameTitle', 'Titel ändern')}
+                        >
+                          <Edit3 size={13} />
                         </button>
                         {variantOpen && (
                           <>
                         <p className="muted">{formatDuration(asset.duration_seconds)} · songs.id {songDatabaseId(asset) ?? '—'} · audio_assets.id {asset.id} · Audio-ID {shortId(asset.audio_id, 14)} · Task {shortId(asset.suno_task_id, 14)}{voiceLabelForAsset(asset) ? ` · ${t('library.detail.voice', 'Stimme')} ${voiceLabelForAsset(asset)}` : ''}</p>
                           {isCurrentAsset(asset) && <div className="library-inline-waveform"><span>{playbackState?.isPlaying ? t('library.playback.running', 'Läuft') : t('library.playback.ready', 'Bereit')} · {formatDuration(playbackState?.currentTime || 0)} / {formatDuration(playbackState?.duration || asset.duration_seconds)}</span><Waveform asset={asset} compact currentTime={playbackState?.currentTime || 0} durationSeconds={playbackState?.duration || asset.duration_seconds} interactive={false} /></div>}
                           <div className="button-row wrap">
-                            <button type="button" onClick={(event) => preservePlaybackClick(event, () => playAsset(playbackAsset, projectQueue, index, activeProject))}>{isPlayingAsset(asset) ? t('player.pause', 'Pause') : t('player.play', 'Abspielen')}</button>
                             <button type="button" className={isAssetFavorite(asset) ? 'favorite-action is-favorite' : 'favorite-action'} onClick={() => toggleAssetFavorite(asset)} disabled={favoriteSavingIds.has(asset.id)}><ThumbsUp size={15} fill={isAssetFavorite(asset) ? 'currentColor' : 'none'} /> {t('library.favorites', 'Favoriten')}</button>
                             <button type="button" className="stable-detail-action-button" onClick={() => setActionAsset(playbackAsset)}><MoreHorizontal size={15} /> {t('library.actionModal.title', 'Aktionen')}</button>
                             <button type="button" onClick={() => openPictureViewer(asset)} disabled={isFallbackCoverUrl(pickCover(asset))}><Maximize2 size={15} /> {t('library.actions.viewCoverLarge', 'Cover groß anzeigen')}</button>
@@ -4903,7 +5080,6 @@ ${generationOptionsText(asset)}`,
                               )}
                             </div>
                             <div className="button-row wrap">
-                              <button type="button" onClick={(event) => preservePlaybackClick(event, () => playAsset(playbackAsset, projectQueue, index, activeProject))}>{isPlayingAsset(asset) ? t('player.pause', 'Pause') : t('player.play', 'Abspielen')}</button>
                               <button type="button" className={isAssetFavorite(asset) ? 'favorite-action is-favorite' : 'favorite-action'} onClick={() => toggleAssetFavorite(asset)} disabled={favoriteSavingIds.has(asset.id)}><ThumbsUp size={15} fill={isAssetFavorite(asset) ? 'currentColor' : 'none'} /></button>
                               <AudioActionMenu asset={playbackAsset} compact label="" dropUp />
                               <button type="button" onClick={() => toggleVariantAccordion(asset, index)}>{t('library.detail.showDetails', 'Details anzeigen')}</button>
@@ -4930,6 +5106,7 @@ ${generationOptionsText(asset)}`,
         <SrtEditorModal asset={srtEditorAsset} />
         <StemPreviewModal asset={stemPreviewAsset} />
         <AudioAiAnalysisReportModal />
+        <RenameTitleModal />
         <Modal open={Boolean(playlistAsset)} title={t('library.playlist.addTitle', 'Zu Playlist hinzufügen')} onClose={() => setPlaylistAsset(null)}>
           {playlistAsset && <div className="stack">
             <p className="muted">{t('library.playlist.track', 'Track')}: <strong>{pickTitle(playlistAsset)}</strong></p>
@@ -5042,11 +5219,14 @@ ${generationOptionsText(asset)}`,
                 <span className="cover-play">{projectPlaying ? <Pause size={18} /> : <Play size={18} fill="currentColor" />}</span>
               </button>
               <div className="project-row-main">
-                <button className="title-button" type="button" onClick={(event) => openProjectDetails(project, event)} title={t('library.openDetailPage', 'Detailseite öffnen')}>
-                  <strong>{project.title}</strong>
-                  <span>{t('library.projectStatsLine', '{{variants}} Varianten · {{operations}} Vorgänge · {{playable}} abspielbar', { variants: project.assets.length, operations: project.operations.length, playable: project.playable.length })}</span>
-                  <small>{summarizeStyle(pickStyle(project.assets.find((asset) => pickStyle(asset))), 160, t)}</small>
-                </button>
+                <InlineRenameTitle
+                  asset={project.assets[0]}
+                  title={project.title}
+                  subtitle={t('library.projectStatsLine', '{{variants}} Varianten · {{operations}} Vorgänge · {{playable}} abspielbar', { variants: project.assets.length, operations: project.operations.length, playable: project.playable.length })}
+                  className="title-button"
+                  onOpen={(event) => openProjectDetails(project, event)}
+                />
+                <small className="title-button-summary">{summarizeStyle(pickStyle(project.assets.find((asset) => pickStyle(asset))), 160, t)}</small>
                 {projectActive && currentProjectAsset && (
                   <div className="library-inline-waveform project-waveform">
                     <span>{projectPlaying ? t('library.playback.nowPlaying', 'Jetzt läuft') : t('library.playback.ready', 'Bereit')} · {formatDuration(playbackState?.currentTime || 0)} / {formatDuration(playbackState?.duration || currentProjectAsset.duration_seconds)}</span>
@@ -5055,19 +5235,26 @@ ${generationOptionsText(asset)}`,
                 )}
                 <div className="project-audio-actions-strip" aria-label={t('library.audioQuickActions', 'Audio-Schnellaktionen')}>
                   {project.assets.map((asset, index) => {
-                    const queueIndex = Math.max(0, projectQueue.findIndex((row) => String(row.id) === String(asset.id)));
                     return (
 	                    <div className={`project-audio-action-pill ${isCurrentAsset(asset) ? 'is-current' : ''} ${selectedIds.has(asset.id) ? 'is-selected' : ''}`} key={`project-action-${project.id}-${asset.id}`}>
 	                      <label className="project-audio-select-mini" title={t('library.selectAsset', '{{title}} auswählen', { title: variantTitle(asset, project) })}>
 	                        <input type="checkbox" checked={selectedIds.has(asset.id)} onChange={() => toggleSelected(asset.id)} aria-label={t('library.selectAsset', '{{title}} auswählen', { title: variantTitle(asset, project) })} />
 	                      </label>
-	                      <button type="button" className="project-audio-play-mini" onClick={() => playAsset(asset, projectQueue, queueIndex, project)} title={t('library.playAsset', '{{title}} abspielen', { title: variantTitle(asset, project) })}>
-                        {isPlayingAsset(asset) ? <Pause size={13} /> : <Play size={13} fill="currentColor" />}
-                      </button>
-                      <button type="button" className="project-audio-title-mini" onClick={(event) => openProjectDetails(project, event)} title={variantTitle(asset, project)}>
-                        <strong>{index + 1}/{project.assets.length || 1}</strong>
-                        <span>{variantTitle(asset, project)}</span>
-                      </button>
+                      <span className="project-audio-title-mini inline-title-edit">
+                        <button type="button" className="inline-title-main" onClick={(event) => openProjectDetails(project, event)} title={variantTitle(asset, project)}>
+                          <strong>{index + 1}/{project.assets.length || 1}</strong>
+                          <span>{variantTitle(asset, project)}</span>
+                        </button>
+                        <button
+                          type="button"
+                          className="inline-title-edit-button"
+                          onClick={(event) => { event.preventDefault(); event.stopPropagation(); renameAsset(asset); }}
+                          title={t('library.actions.renameTitle', 'Titel ändern')}
+                          aria-label={t('library.actions.renameTitle', 'Titel ändern')}
+                        >
+                          <Edit3 size={12} />
+                        </button>
+                      </span>
                       <button type="button" className={isAssetFavorite(asset) ? 'project-audio-favorite-mini is-favorite' : 'project-audio-favorite-mini'} onClick={(event) => { event.stopPropagation(); toggleAssetFavorite(asset); }} disabled={favoriteSavingIds.has(asset.id)} title={isAssetFavorite(asset) ? t('library.actions.removeFavorite', 'Favorit entfernen') : t('library.actions.saveFavorite', 'Als Favorit speichern')}>
                         <ThumbsUp size={13} fill={isAssetFavorite(asset) ? 'currentColor' : 'none'} />
                       </button>
@@ -5079,14 +5266,17 @@ ${generationOptionsText(asset)}`,
               <div className="project-actions">
                 <div className="project-badges">
                   <span className="status cached"><ListMusic size={14} /> {formatDuration(project.duration)}</span>
-                  {project.assets.some((asset) => isAssetFavorite(asset)) && <span className="status favorite"><ThumbsUp size={14} fill="currentColor" /> {project.assets.filter((asset) => isAssetFavorite(asset)).length === project.assets.length ? t('library.favoriteOne', 'Favorit') : t('library.favoriteCount', '{{count}}/{{total}} Favoriten', { count: project.assets.filter((asset) => isAssetFavorite(asset)).length, total: project.assets.length })}</span>}
                   {isProjectFullyLocal(project) && <span className="status cached">{fullLocalLabel(t)}</span>}
+                  {projectContentBadgeLabel(project, isDawAsset, 'DAW') && <span className="status cached">{projectContentBadgeLabel(project, isDawAsset, 'DAW')}</span>}
+                  {projectContentBadgeLabel(project, isUploadedAudioAsset, 'UPLOAD') && <span className="status cached">{projectContentBadgeLabel(project, isUploadedAudioAsset, 'UPLOAD')}</span>}
+                  {projectContentBadgeLabel(project, isSunoComImportAsset, 'SUNO') && <span className="status cached">{projectContentBadgeLabel(project, isSunoComImportAsset, 'SUNO')}</span>}
+                  {projectContentBadgeLabel(project, isSunoApiImportAsset, 'API') && <span className="status cached">{projectContentBadgeLabel(project, isSunoApiImportAsset, 'API')}</span>}
+                  {projectContentBadgeLabel(project, isExtendedAsset, 'EXT') && <span className="status cached">{projectContentBadgeLabel(project, isExtendedAsset, 'EXT')}</span>}
                   {projectContentBadgeLabel(project, (asset) => hasAssetSrt(asset, srtByAsset), 'SRT') && <span className="status cached">{projectContentBadgeLabel(project, (asset) => hasAssetSrt(asset, srtByAsset), 'SRT')}</span>}
                   {projectContentBadgeLabel(project, (asset) => assetContentBadges(asset, srtByAsset).some((badge) => badge.key === 'stems'), 'STEMS') && <span className="status cached">{projectContentBadgeLabel(project, (asset) => assetContentBadges(asset, srtByAsset).some((badge) => badge.key === 'stems'), 'STEMS')}</span>}
                   {projectContentBadgeLabel(project, (asset) => assetContentBadges(asset, srtByAsset).some((badge) => badge.key === 'wav'), 'WAV') && <span className="status cached">{projectContentBadgeLabel(project, (asset) => assetContentBadges(asset, srtByAsset).some((badge) => badge.key === 'wav'), 'WAV')}</span>}
                 </div>
                 <div className="project-action-buttons">
-                  <button type="button" onClick={() => playProject(project)}><Headphones size={16} /> {projectPlaying ? t('player.pause', 'Pause') : t('player.play', 'Abspielen')}</button>
                   <button type="button" onClick={() => onOpenDaw?.(project.playable[0] || project.assets[0])}><Scissors size={16} /> {t('library.actions.openInMiniDaw', 'In Mini-DAW öffnen')}</button>
                 </div>
               </div>
@@ -5105,6 +5295,7 @@ ${generationOptionsText(asset)}`,
       <SrtEditorModal asset={srtEditorAsset} />
       <StemPreviewModal asset={stemPreviewAsset} />
       <AudioAiAnalysisReportModal />
+      <RenameTitleModal />
       <Modal open={Boolean(playlistAsset)} title={t('library.playlist.addTitle', 'Zu Playlist hinzufügen')} onClose={() => setPlaylistAsset(null)}>
         {playlistAsset && <div className="stack">
           <p className="muted">{t('library.playlist.track', 'Track')}: <strong>{pickTitle(playlistAsset)}</strong></p>

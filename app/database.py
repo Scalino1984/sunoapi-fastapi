@@ -194,6 +194,13 @@ _PERFORMANCE_INDEXES: list[tuple[str, str]] = [
     # Playlists / Activity
     ("ix_playlist_items_playlist_position", "playlist_items (playlist_id, position, id)"),
     ("ix_activity_log_content_created", "activity_log (content_type, content_id, created_at)"),
+    # DAW normalisierte Timeline-Spiegelung
+    ("ix_daw_projects_asset_deleted", "daw_timeline_projects (audio_asset_id, is_deleted)"),
+    ("ix_daw_tracks_project_position", "daw_timeline_tracks (project_id, position)"),
+    ("ix_daw_clips_project_track_start", "daw_timeline_clips (project_id, track_key, timeline_start)"),
+    ("ix_daw_ai_actions_asset_created", "daw_timeline_ai_actions (audio_asset_id, created_at)"),
+    ("ix_daw_prompt_hooks_scope_active", "daw_prompt_hooks (scope, is_active, sort_order)"),
+    ("ix_daw_arrangement_sessions_asset_updated", "daw_arrangement_sessions (audio_asset_id, is_deleted, updated_at)"),
 ]
 
 

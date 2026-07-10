@@ -1760,6 +1760,41 @@ class AiAssistantProfileRead(BaseModel):
     updated_at: Any | None = None
 
 
+class DawPromptHookCreate(BaseModel):
+    title: str = Field(min_length=1, max_length=180)
+    prompt: str = Field(min_length=1, max_length=5000)
+    description: str | None = Field(default=None, max_length=1000)
+    scope: str = Field(default="daw", min_length=1, max_length=80)
+    tags: list[str] = Field(default_factory=list)
+    sort_order: int = 0
+    is_active: bool = True
+
+
+class DawPromptHookUpdate(BaseModel):
+    title: str | None = Field(default=None, min_length=1, max_length=180)
+    prompt: str | None = Field(default=None, min_length=1, max_length=5000)
+    description: str | None = Field(default=None, max_length=1000)
+    scope: str | None = Field(default=None, min_length=1, max_length=80)
+    tags: list[str] | None = None
+    sort_order: int | None = None
+    is_active: bool | None = None
+
+
+class DawPromptHookRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    title: str
+    prompt: str
+    description: str | None = None
+    scope: str = "daw"
+    tags: list[str] = Field(default_factory=list)
+    sort_order: int = 0
+    is_active: bool = True
+    created_at: Any | None = None
+    updated_at: Any | None = None
+
+
 class AiProfileLinkFilesRequest(BaseModel):
     file_ids: list[int] = Field(default_factory=list)
 

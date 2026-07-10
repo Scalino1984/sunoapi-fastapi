@@ -609,6 +609,38 @@ class AiAssistantProfileFile(Base, TimestampMixin):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
 
+class DawPromptHook(Base, TimestampMixin, SoftDeleteMixin):
+    __tablename__ = "daw_prompt_hooks"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    title: Mapped[str] = mapped_column(String(180), index=True, nullable=False)
+    prompt: Mapped[str] = mapped_column(Text, nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    scope: Mapped[str] = mapped_column(String(80), index=True, default="daw", nullable=False)
+    tags_json: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    metadata_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
+    @property
+    def tags(self) -> list[str]:
+        if isinstance(self.tags_json, list):
+            return [str(item) for item in self.tags_json if str(item).strip()]
+        return []
+
+
+class DawArrangementSession(Base, TimestampMixin, SoftDeleteMixin):
+    __tablename__ = "daw_arrangement_sessions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    audio_asset_id: Mapped[int] = mapped_column(Integer, index=True, nullable=False)
+    title: Mapped[str] = mapped_column(String(180), index=True, nullable=False)
+    arrangement_json: Mapped[dict] = mapped_column(JSON, nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    is_auto_saved: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    metadata_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
+
 class AiChatSession(Base, TimestampMixin, SoftDeleteMixin):
     __tablename__ = "ai_chat_sessions"
 
@@ -637,6 +669,29 @@ class AiChatMessage(Base, TimestampMixin):
     canvas_after: Mapped[str | None] = mapped_column(Text, nullable=True)
     change_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     raw_response: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
+
+class DawAiAction(Base, TimestampMixin):
+    """Protokoll der DAW-KI-Befehle (additive Tabelle, create_all-kompatibel).
+
+    Jeder natürliche Befehl an die Timeline-KI (global oder pro Clip) wird hier
+    dauerhaft in SQLite abgelegt: Eingabe, Interpretation, geplante Operationen
+    und ob der Plan angewendet/persistiert wurde. Das Arrangement selbst bleibt
+    unverändert in audio_assets.metadata_json.daw_arrangement gespeichert.
+    """
+
+    __tablename__ = "daw_ai_actions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    audio_asset_id: Mapped[int] = mapped_column(Integer, index=True, nullable=False)
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+    interpretation: Mapped[str | None] = mapped_column(Text, nullable=True)
+    operations_json: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    status: Mapped[str] = mapped_column(String(40), index=True, default="planned", nullable=False)
+    source: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    provider: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    model: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    meta_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
 
 class LyricCanvasHistory(Base, TimestampMixin):

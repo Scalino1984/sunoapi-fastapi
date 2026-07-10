@@ -382,15 +382,25 @@ export const api = {
     deleteProfile: (id) => apiFetch(`/api/admin/ai-profiles/${id}`, { method: 'DELETE' }),
     instructionFiles: () => apiFetch('/api/admin/instruction-files'),
     createInstructionFile: (payload) => apiFetch('/api/admin/instruction-files', { method: 'POST', body: JSON.stringify(payload) }),
-    deleteInstructionFile: (id) => apiFetch(`/api/admin/instruction-files/${id}`, { method: 'DELETE' })
+    deleteInstructionFile: (id) => apiFetch(`/api/admin/instruction-files/${id}`, { method: 'DELETE' }),
+    dawPromptHooks: (includeInactive = true) => apiFetch(`/api/admin/daw-prompt-hooks?include_inactive=${includeInactive ? 'true' : 'false'}`),
+    createDawPromptHook: (payload) => apiFetch('/api/admin/daw-prompt-hooks', { method: 'POST', body: JSON.stringify(payload) }),
+    updateDawPromptHook: (id, payload) => apiFetch(`/api/admin/daw-prompt-hooks/${id}`, { method: 'PUT', body: JSON.stringify(payload) }),
+    duplicateDawPromptHook: (id) => apiFetch(`/api/admin/daw-prompt-hooks/${id}/duplicate`, { method: 'POST' }),
+    deleteDawPromptHook: (id) => apiFetch(`/api/admin/daw-prompt-hooks/${id}`, { method: 'DELETE' })
   },
 
   daw: {
     project: (id) => apiFetch(`/api/daw/assets/${id}`),
     render: (payload) => apiFetch('/api/daw/render', { method: 'POST', body: JSON.stringify(payload) }),
     preview: (payload) => apiFetchBlob('/api/daw/preview', { method: 'POST', body: JSON.stringify(payload) }),
-    getArrangement: (id) => apiFetch(`/api/daw/assets/${id}/arrangement`),
-    saveArrangement: (id, arrangement) => apiFetch(`/api/daw/assets/${id}/arrangement`, { method: 'PUT', body: JSON.stringify({ arrangement }) }),
+    getArrangement: (id, sessionId = null) => apiFetch(`/api/daw/assets/${id}/arrangement${sessionId ? `?session_id=${encodeURIComponent(sessionId)}` : ''}`),
+    saveArrangement: (id, arrangement, options = {}) => apiFetch(`/api/daw/assets/${id}/arrangement`, { method: 'PUT', body: JSON.stringify({ arrangement, session_id: options.sessionId || null, title: options.title || null, create_new_session: Boolean(options.createNewSession) }) }),
+    arrangementSessions: (id) => apiFetch(`/api/daw/assets/${id}/arrangement/sessions`),
+    createArrangementSession: (id, arrangement, title = '') => apiFetch(`/api/daw/assets/${id}/arrangement/sessions`, { method: 'POST', body: JSON.stringify({ arrangement, title, create_new_session: true }) }),
+    deleteArrangementSession: (id, sessionId) => apiFetch(`/api/daw/assets/${id}/arrangement/sessions/${encodeURIComponent(sessionId)}`, { method: 'DELETE' }),
+    getBeatgrid: (id) => apiFetch(`/api/daw/assets/${id}/beatgrid?v=${Date.now()}`, { cache: 'no-store', timeoutMs: 900000 }),
+    rebuildBeatgrid: (id) => apiFetch(`/api/daw/assets/${id}/beatgrid/rebuild`, { method: 'POST', timeoutMs: 900000 }),
     previewArrangement: (id, payload) => apiFetchBlob(`/api/daw/assets/${id}/arrangement/preview`, { method: 'POST', body: JSON.stringify(payload) }),
     renderArrangement: (id, payload) => apiFetch(`/api/daw/assets/${id}/arrangement/render`, { method: 'POST', body: JSON.stringify(payload) }),
     renderArrangementTask: (id, payload) => apiFetch(`/api/daw/assets/${id}/arrangement/render-task`, { method: 'POST', body: JSON.stringify(payload), timeoutMs: 12000 }),
@@ -398,7 +408,9 @@ export const api = {
     deleteMarker: (id, markerIndex) => apiFetch(`/api/daw/assets/${id}/markers/${encodeURIComponent(markerIndex)}`, { method: 'DELETE' }),
     analyze: (payload) => apiFetch('/api/daw/analyze', { method: 'POST', body: JSON.stringify(payload) }),
     chat: (payload) => apiFetch('/api/daw/chat', { method: 'POST', body: JSON.stringify(payload) }),
-    resolveCommand: (payload) => apiFetch('/api/daw/commands/resolve', { method: 'POST', body: JSON.stringify(payload) })
+    resolveCommand: (payload) => apiFetch('/api/daw/commands/resolve', { method: 'POST', body: JSON.stringify(payload) }),
+    arrangementAiCommand: (id, payload) => apiFetch(`/api/daw/assets/${id}/arrangement/ai-command`, { method: 'POST', body: JSON.stringify(payload), timeoutMs: 180000 }),
+    promptHooks: () => apiFetch('/api/daw/prompt-hooks')
   },
   notifications: {
     list: (includeDone = true) => apiFetch(`/api/notifications?include_done=${includeDone ? 'true' : 'false'}&v=${Date.now()}`, { cache: 'no-store', timeoutMs: 8000 }),
@@ -427,6 +439,9 @@ export const api = {
   system: {
     diagnostics: () => apiFetch('/api/system/diagnostics'),
     portableBackupStatus: () => apiFetch('/api/system/portable-backup/status'),
+    portableBackupSchedule: () => apiFetch('/api/system/portable-backup/schedule', { cache: 'no-store' }),
+    updatePortableBackupSchedule: (payload = {}) => apiFetch('/api/system/portable-backup/schedule', { method: 'PUT', body: JSON.stringify(payload || {}) }),
+    runPortableBackupScheduleNow: () => apiFetch('/api/system/portable-backup/schedule/run-now', { method: 'POST', timeoutMs: 120000 }),
     databaseMaintenanceStatus: () => apiFetch(`/api/system/maintenance/database/status?v=${Date.now()}`, { cache: 'no-store' }),
     runDatabaseMaintenance: (payload = {}) => apiFetch('/api/system/maintenance/database/run', { method: 'POST', body: JSON.stringify(payload || {}), timeoutMs: 120000 }),
     syncSongsToLibrary: (payload = {}) => apiFetch('/api/music/songs/sync-library', { method: 'POST', body: JSON.stringify(payload || {}), timeoutMs: 120000 }),

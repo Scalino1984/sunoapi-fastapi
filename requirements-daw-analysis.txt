@@ -1,0 +1,22 @@
+# Produktions-Stack fuer taktgenaue DAW-Analyse.
+# Getrennt von requirements.txt, damit die Haupt-App ohne schweren Audio-/ML-Stack starten kann.
+# Installation in derselben Python-Umgebung ausfuehren, in der FastAPI laeuft.
+
+numpy>=1.26.4,<3
+scipy>=1.13,<2
+soundfile>=0.12.1,<0.14
+
+# Primaeranalyse: Tempo, Beats, Downbeats und Songstruktur.
+# allin1 benoetigt PyTorch und NATTEN passend zur lokalen Plattform.
+allin1>=1.0
+
+# allin1 / Beat-This-DBN-Fallback: madmom nicht von altem PyPI-Paket installieren,
+# sondern direkt aus der offiziellen CPJKU-Quelle.
+madmom @ git+https://github.com/CPJKU/madmom.git
+
+# Sekundaerer Beat-/Downbeat-Validator.
+beat-this>=0.4
+
+# Optionaler Meter-/Downbeat-Fallback fuer schwierige Tracks.
+# BeatNet ist je nach Python-/Torch-Stand separat zu pruefen und deshalb nicht hart erzwungen.
+# BeatNet @ git+https://github.com/mjhydri/BeatNet.git

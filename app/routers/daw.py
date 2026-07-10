@@ -19,14 +19,17 @@ from starlette.background import BackgroundTask
 from app.config import get_settings
 from app.services.portable_path_service import to_portable_path
 from app.database import SessionLocal, get_db
-from app.models import AudioAsset, StatusNotification, SunoTask
-from app.schemas import AudioAssetRead
+from app.models import AudioAsset, AudioTranscript, DawArrangementSession, DawPromptHook, StatusNotification, SunoTask
+from app.schemas import AudioAssetRead, DawPromptHookRead
 from app.services.audio_metadata_service import normalize_audio_content_type, read_audio_duration_seconds
 from app.services.waveform_service import get_or_create_waveform
 from app.services.background_task_runner import run_detached_process
 from app.services.task_lifecycle_service import heartbeat_task, mark_task_finished
 from app.utils.time_utils import utc_now_naive
 from app.services.ai_chat_service import AiChatService, AiProviderError
+from app.services.daw_beatgrid_service import build_daw_beatgrid, persist_daw_beatgrid
+from app.services.srt_parser import export_srt, parse_srt, renumber_segments
+from app.services.srt_transcript_service import segments_to_half_srt
 
 router = APIRouter(prefix="/api/daw", tags=["daw"])
 
@@ -123,10 +126,14 @@ class DawArrangementState(BaseModel):
 
 class DawArrangementSaveRequest(BaseModel):
     arrangement: DawArrangementState
+    session_id: int | None = None
+    title: str | None = Field(default=None, max_length=180)
+    create_new_session: bool = False
 
 
 class DawArrangementRenderRequest(BaseModel):
     arrangement: DawArrangementState | None = None
+    session_id: int | None = None
     output_format: Literal["mp3", "wav", "m4a"] = "mp3"
     version_label: str | None = None
     create_notification: bool = True
@@ -150,6 +157,20 @@ def _asset_or_404(db: Session, asset_id: int) -> AudioAsset:
     if not asset:
         raise HTTPException(status_code=404, detail="AudioAsset wurde nicht gefunden.")
     return asset
+
+
+@router.get("/prompt-hooks", response_model=list[DawPromptHookRead])
+def list_daw_prompt_hooks(scope: str = "daw", db: Session = Depends(get_db)):
+    return (
+        db.query(DawPromptHook)
+        .filter(
+            DawPromptHook.is_deleted.is_(False),
+            DawPromptHook.is_active.is_(True),
+            DawPromptHook.scope == (scope or "daw"),
+        )
+        .order_by(DawPromptHook.sort_order.asc(), DawPromptHook.title.asc())
+        .all()
+    )
 
 
 def _resolve_audio_path(asset: AudioAsset) -> Path:
@@ -745,7 +766,8 @@ def _sanitize_arrangement(asset: AudioAsset, payload: dict[str, Any] | DawArrang
     tracks_raw = raw.get("tracks") if isinstance(raw.get("tracks"), list) else default["tracks"]
     tracks: list[dict[str, Any]] = []
     seen_tracks: set[str] = set()
-    for index, item in enumerate(tracks_raw[:3]):
+    # Bis zu 8 Spuren (kompatible Erweiterung; Default bleiben 3 Spuren).
+    for index, item in enumerate(tracks_raw[:8]):
         if not isinstance(item, dict):
             continue
         track_id = str(item.get("id") or f"track-{index + 1}")[:40]
@@ -839,6 +861,79 @@ def _get_saved_arrangement(asset: AudioAsset) -> dict[str, Any]:
     return _sanitize_arrangement(asset, metadata.get("daw_arrangement"))
 
 
+def _session_title(asset: AudioAsset, value: str | None = None) -> str:
+    title = re.sub(r"\s+", " ", str(value or "").strip())
+    if title:
+        return title[:180]
+    base = asset.display_title or asset.title or asset.filename or f"Audio {asset.id}"
+    return f"DAW Session - {base}"[:180]
+
+
+def _latest_daw_arrangement_session(db: Session, asset_id: int) -> DawArrangementSession | None:
+    return (
+        db.query(DawArrangementSession)
+        .filter(
+            DawArrangementSession.audio_asset_id == int(asset_id),
+            DawArrangementSession.is_deleted.is_(False),
+            DawArrangementSession.is_active.is_(True),
+        )
+        .order_by(DawArrangementSession.updated_at.desc(), DawArrangementSession.id.desc())
+        .first()
+    )
+
+
+def _has_any_daw_arrangement_session(db: Session, asset_id: int) -> bool:
+    return (
+        db.query(DawArrangementSession.id)
+        .filter(DawArrangementSession.audio_asset_id == int(asset_id))
+        .first()
+        is not None
+    )
+
+
+def _daw_arrangement_session_or_404(db: Session, asset_id: int, session_id: int) -> DawArrangementSession:
+    session = (
+        db.query(DawArrangementSession)
+        .filter(
+            DawArrangementSession.id == int(session_id),
+            DawArrangementSession.audio_asset_id == int(asset_id),
+            DawArrangementSession.is_deleted.is_(False),
+        )
+        .first()
+    )
+    if not session:
+        raise HTTPException(status_code=404, detail="DAW-Session wurde nicht gefunden.")
+    return session
+
+
+def _serialize_daw_session(session: DawArrangementSession, include_arrangement: bool = False) -> dict[str, Any]:
+    arrangement = session.arrangement_json if isinstance(session.arrangement_json, dict) else {}
+    payload = {
+        "id": session.id,
+        "audio_asset_id": session.audio_asset_id,
+        "title": session.title,
+        "is_active": session.is_active,
+        "is_auto_saved": session.is_auto_saved,
+        "duration_seconds": arrangement.get("duration_seconds"),
+        "clips_count": len(arrangement.get("clips") or []),
+        "markers_count": len(arrangement.get("markers") or []),
+        "created_at": session.created_at,
+        "updated_at": session.updated_at,
+    }
+    if include_arrangement:
+        payload["arrangement"] = arrangement
+    return payload
+
+
+def _get_saved_arrangement_session(db: Session, asset: AudioAsset, session_id: int | None = None) -> tuple[dict[str, Any], DawArrangementSession | None]:
+    session = _daw_arrangement_session_or_404(db, asset.id, session_id) if session_id else _latest_daw_arrangement_session(db, asset.id)
+    if session:
+        return _sanitize_arrangement(asset, session.arrangement_json), session
+    if _has_any_daw_arrangement_session(db, asset.id):
+        return _sanitize_arrangement(asset, None), None
+    return _get_saved_arrangement(asset), None
+
+
 def _save_arrangement_to_asset(db: Session, asset: AudioAsset, arrangement: dict[str, Any]) -> dict[str, Any]:
     sanitized = _sanitize_arrangement(asset, arrangement)
     metadata = dict(asset.metadata_json or {}) if isinstance(asset.metadata_json, dict) else {}
@@ -849,6 +944,36 @@ def _save_arrangement_to_asset(db: Session, asset: AudioAsset, arrangement: dict
     db.commit()
     db.refresh(asset)
     return sanitized
+
+
+def _save_arrangement_session(
+    db: Session,
+    asset: AudioAsset,
+    arrangement: dict[str, Any],
+    session_id: int | None = None,
+    title: str | None = None,
+    create_new_session: bool = False,
+) -> tuple[dict[str, Any], DawArrangementSession]:
+    sanitized = _save_arrangement_to_asset(db, asset, arrangement)
+    session = None if create_new_session else (_daw_arrangement_session_or_404(db, asset.id, session_id) if session_id else _latest_daw_arrangement_session(db, asset.id))
+    if not session:
+        session = DawArrangementSession(
+            audio_asset_id=asset.id,
+            title=_session_title(asset, title),
+            arrangement_json=sanitized,
+            is_active=True,
+            is_auto_saved=True,
+            metadata_json={"source": "mini_daw"},
+        )
+        db.add(session)
+    else:
+        if title:
+            session.title = _session_title(asset, title)
+        session.arrangement_json = sanitized
+        session.is_auto_saved = True
+    db.commit()
+    db.refresh(session)
+    return sanitized, session
 
 
 def _arrangement_source_assets(db: Session, asset: AudioAsset, arrangement: dict[str, Any]) -> dict[int, AudioAsset]:
@@ -943,6 +1068,186 @@ def _build_arrangement_ffmpeg_args(db: Session, source_asset: AudioAsset, arrang
     return args
 
 
+def _latest_completed_transcript(db: Session, audio_asset_id: int) -> AudioTranscript | None:
+    return (
+        db.query(AudioTranscript)
+        .filter(AudioTranscript.audio_asset_id == int(audio_asset_id), AudioTranscript.status == "completed")
+        .order_by(AudioTranscript.generated_at.desc().nullslast(), AudioTranscript.updated_at.desc(), AudioTranscript.id.desc())
+        .first()
+    )
+
+
+def _project_timed_items_for_arrangement(
+    items_by_asset_id: dict[int, list[dict[str, Any]]],
+    arrangement: dict[str, Any],
+    *,
+    min_duration: float = 0.05,
+) -> list[dict[str, Any]]:
+    projected: list[dict[str, Any]] = []
+    for clip in sorted(arrangement.get("clips") or [], key=lambda item: float(item.get("timeline_start") or 0)):
+        if clip.get("muted"):
+            continue
+        try:
+            asset_id = int(clip.get("source_audio_id") or arrangement.get("source_audio_id") or 0)
+        except Exception:
+            asset_id = int(arrangement.get("source_audio_id") or 0)
+        source_items = items_by_asset_id.get(asset_id) or []
+        if not source_items:
+            continue
+        clip_timeline_start = max(0.0, _safe_float(clip.get("timeline_start"), 0.0) or 0.0)
+        clip_source_start = max(0.0, _safe_float(clip.get("source_start"), 0.0) or 0.0)
+        clip_source_end = max(clip_source_start, _safe_float(clip.get("source_end"), clip_source_start) or clip_source_start)
+        for index, item in enumerate(source_items):
+            if not isinstance(item, dict):
+                continue
+            item_start = _safe_float(item.get("start", item.get("start_seconds")), None)
+            item_end = _safe_float(item.get("end", item.get("end_seconds")), None)
+            if item_start is None or item_end is None or item_end <= item_start:
+                continue
+            overlap_start = max(item_start, clip_source_start)
+            overlap_end = min(item_end, clip_source_end)
+            if overlap_end - overlap_start < min_duration:
+                continue
+            next_item = dict(item)
+            next_start = clip_timeline_start + (overlap_start - clip_source_start)
+            next_end = clip_timeline_start + (overlap_end - clip_source_start)
+            next_item["start"] = round(next_start, 3)
+            next_item["end"] = round(next_end, 3)
+            if "start_seconds" in next_item:
+                next_item["start_seconds"] = round(next_start, 3)
+            if "end_seconds" in next_item:
+                next_item["end_seconds"] = round(next_end, 3)
+            next_item["source_audio_asset_id"] = asset_id
+            next_item["source_start"] = round(overlap_start, 3)
+            next_item["source_end"] = round(overlap_end, 3)
+            raw_id = str(item.get("id") or item.get("word") or item.get("text") or index)
+            next_item["id"] = f"{raw_id}-daw-{len(projected) + 1}"
+            projected.append(next_item)
+    projected.sort(key=lambda item: (_safe_float(item.get("start"), 0.0) or 0.0, _safe_float(item.get("end"), 0.0) or 0.0))
+    return projected
+
+
+def _lyrics_from_projected_srt_segments(segments: list[dict[str, Any]]) -> str:
+    lines: list[str] = []
+    for segment in segments:
+        text = str(segment.get("text") or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+        if not text:
+            continue
+        for line in text.split("\n"):
+            cleaned = re.sub(r"\s+", " ", line).strip()
+            if cleaned:
+                lines.append(cleaned)
+    return "\n".join(lines).strip()
+
+
+def _write_daw_transcript_file(asset: AudioAsset, audio_asset_id: int, text: str, suffix: str = ".srt") -> Path:
+    settings = get_settings()
+    transcript_root = settings.transcript_storage_path.resolve()
+    target_dir = (transcript_root / str(audio_asset_id)).resolve()
+    try:
+        target_dir.relative_to(transcript_root)
+    except ValueError:
+        raise HTTPException(status_code=500, detail="Ungültiger Transcript-Zielpfad.")
+    target_dir.mkdir(parents=True, exist_ok=True)
+    base_name = _sanitize_filename(asset.display_title or asset.title or asset.filename or f"audio-{audio_asset_id}") or f"audio-{audio_asset_id}"
+    safe_suffix = suffix if str(suffix).startswith(".") else f".{suffix}"
+    target_path = (target_dir / f"{base_name}{safe_suffix}").resolve()
+    try:
+        target_path.relative_to(transcript_root)
+    except ValueError:
+        raise HTTPException(status_code=500, detail="Ungültiger Transcript-Dateipfad.")
+    target_path.write_text(text, encoding="utf-8")
+    return target_path
+
+
+def _project_arrangement_text_timelines(
+    db: Session,
+    source_asset: AudioAsset,
+    new_asset: AudioAsset,
+    arrangement: dict[str, Any],
+    duration: float | int | None,
+) -> dict[str, Any]:
+    source_assets = _arrangement_source_assets(db, source_asset, arrangement)
+    transcripts_by_asset_id: dict[int, AudioTranscript] = {}
+    srt_segments_by_asset_id: dict[int, list[dict[str, Any]]] = {}
+    words_by_asset_id: dict[int, list[dict[str, Any]]] = {}
+    structure_by_asset_id: dict[int, list[dict[str, Any]]] = {}
+
+    for asset_id, asset in source_assets.items():
+        transcript = _latest_completed_transcript(db, asset_id)
+        if transcript:
+            transcripts_by_asset_id[asset_id] = transcript
+            segments = transcript.segments_json if isinstance(transcript.segments_json, list) else []
+            if not segments and transcript.srt_text:
+                segments = parse_srt(transcript.srt_text)
+            if segments:
+                srt_segments_by_asset_id[asset_id] = segments
+            if isinstance(transcript.words_json, list) and transcript.words_json:
+                words_by_asset_id[asset_id] = transcript.words_json
+        if isinstance(asset.structure_segments_json, list) and asset.structure_segments_json:
+            structure_by_asset_id[asset_id] = asset.structure_segments_json
+
+    projected_segments = renumber_segments(_project_timed_items_for_arrangement(srt_segments_by_asset_id, arrangement, min_duration=0.12))
+    projected_words = _project_timed_items_for_arrangement(words_by_asset_id, arrangement, min_duration=0.005)
+    projected_structure = _project_timed_items_for_arrangement(structure_by_asset_id, arrangement, min_duration=0.18)
+    projected_lyrics = _lyrics_from_projected_srt_segments(projected_segments)
+
+    if projected_segments:
+        srt_text = export_srt(projected_segments)
+        srt_path = _write_daw_transcript_file(new_asset, new_asset.id, srt_text, ".srt")
+        half_srt_text = segments_to_half_srt(projected_segments, max_chars=22, min_dur=0.6)
+        if half_srt_text.strip():
+            _write_daw_transcript_file(new_asset, new_asset.id, half_srt_text, ".half.srt")
+        source_transcript = transcripts_by_asset_id.get(source_asset.id) or next(iter(transcripts_by_asset_id.values()), None)
+        transcript = AudioTranscript(
+            audio_asset_id=new_asset.id,
+            backend=f"{source_transcript.backend if source_transcript else 'daw'}+timeline_projection",
+            language=source_transcript.language if source_transcript else None,
+            mode="daw_timeline_projection",
+            match_mode=source_transcript.match_mode if source_transcript else "clip_projection",
+            srt_text=srt_text,
+            srt_path=str(srt_path),
+            segments_json=projected_segments,
+            words_json=projected_words,
+            status="completed",
+            error_message=None,
+            generated_at=utc_now_naive(),
+        )
+        db.add(transcript)
+
+    if projected_structure:
+        new_asset.structure_segments_json = projected_structure
+
+    metadata = dict(new_asset.metadata_json or {}) if isinstance(new_asset.metadata_json, dict) else {}
+    candidate = dict(metadata.get("candidate") or {}) if isinstance(metadata.get("candidate"), dict) else {}
+    request_payload = dict(metadata.get("request_payload") or {}) if isinstance(metadata.get("request_payload"), dict) else {}
+    if projected_lyrics:
+        if candidate.get("prompt") and "original_prompt_before_daw_projection" not in metadata:
+            metadata["original_prompt_before_daw_projection"] = candidate.get("prompt")
+        if request_payload.get("prompt") and "original_request_prompt_before_daw_projection" not in metadata:
+            metadata["original_request_prompt_before_daw_projection"] = request_payload.get("prompt")
+        candidate["prompt"] = projected_lyrics
+        candidate["lyrics"] = projected_lyrics
+        candidate["text"] = projected_lyrics
+        request_payload["prompt"] = projected_lyrics
+        request_payload["lyrics"] = projected_lyrics
+    metadata["candidate"] = candidate
+    metadata["request_payload"] = request_payload
+    metadata["daw_timeline_projection"] = {
+        "source_audio_asset_id": source_asset.id,
+        "duration_seconds": float(duration or 0),
+        "srt_segments": len(projected_segments),
+        "words": len(projected_words),
+        "structure_segments": len(projected_structure),
+        "lyrics_projected": bool(projected_lyrics),
+    }
+    if projected_segments:
+        metadata["srt_projection_source"] = "daw_arrangement_clips"
+    new_asset.metadata_json = metadata
+    db.add(new_asset)
+    return metadata["daw_timeline_projection"]
+
+
 def _render_arrangement(db: Session, source_asset: AudioAsset, arrangement: dict[str, Any], output_format: str, version_label: str | None, create_notification: bool = True, task_local_id: int | None = None) -> AudioAsset:
     settings = get_settings()
     settings.audio_storage_path.mkdir(parents=True, exist_ok=True)
@@ -950,6 +1255,7 @@ def _render_arrangement(db: Session, source_asset: AudioAsset, arrangement: dict
     base_title = source_asset.display_title or source_asset.title or f"Audio {source_asset.id}"
     edited_title = _edited_display_title(base_title)
     label = (version_label or "Editiert").strip()[:80] or "Editiert"
+    now = utc_now_naive()
     temp_name = _sanitize_filename(f"arrangement_{source_asset.id}_{label}")
     hash_source = json.dumps(arrangement, sort_keys=True, ensure_ascii=False)
     target_path = settings.audio_storage_path / f"{temp_name}_{abs(hash(hash_source)) % 100000000}.{output_format}"
@@ -961,6 +1267,30 @@ def _render_arrangement(db: Session, source_asset: AudioAsset, arrangement: dict
     if not target_path.exists() or target_path.stat().st_size <= 0:
         raise HTTPException(status_code=500, detail="DAW-Arrangement hat keine Ausgabedatei erzeugt.")
     duration = read_audio_duration_seconds(target_path)
+    source_metadata = dict(source_asset.metadata_json or {}) if isinstance(source_asset.metadata_json, dict) else {}
+    new_metadata = {
+        **source_metadata,
+        "operation": "DAW Arrangement",
+        "operation_type": "daw_arrangement_render",
+        "task_type": "daw_arrangement_render",
+        "generation_source": "mini_daw",
+        "is_edited_version": True,
+        "source_created_at": now.isoformat(),
+        "created_at": now.isoformat(),
+        "original_display_title": base_title,
+        "daw_arrangement": arrangement,
+        "source_audio_asset_id": source_asset.id,
+        "source_filename": source_asset.filename,
+        "source_audio_asset": {
+            "id": source_asset.id,
+            "audio_id": source_asset.audio_id,
+            "song_id": source_asset.song_id,
+            "suno_task_id": source_asset.suno_task_id,
+            "title": source_asset.title,
+            "display_title": source_asset.display_title,
+            "version_label": source_asset.version_label,
+        },
+    }
     new_asset = AudioAsset(
         task_local_id=task_local_id or source_asset.task_local_id,
         song_id=source_asset.song_id,
@@ -981,18 +1311,30 @@ def _render_arrangement(db: Session, source_asset: AudioAsset, arrangement: dict
         parent_audio_id=str(source_asset.id),
         parent_task_id=source_asset.suno_task_id,
         version_label=label,
-        metadata_json={
-            "operation": "DAW Arrangement",
-            "is_edited_version": True,
-            "original_display_title": base_title,
-            "daw_arrangement": arrangement,
-            "source_audio_asset_id": source_asset.id,
-            "source_filename": source_asset.filename,
-        },
+        metadata_json=new_metadata,
+        project_id=source_asset.project_id,
+        is_favorite=False,
+        is_final=False,
+        structure_segments_json=source_asset.structure_segments_json,
     )
     db.add(new_asset)
     db.commit()
     db.refresh(new_asset)
+    try:
+        projection = _project_arrangement_text_timelines(db, source_asset, new_asset, arrangement, duration)
+        projected_metadata = dict(new_asset.metadata_json or {}) if isinstance(new_asset.metadata_json, dict) else {}
+        projected_metadata["daw_timeline_projection"] = projection
+        new_asset.metadata_json = projected_metadata
+        db.add(new_asset)
+        db.commit()
+        db.refresh(new_asset)
+    except Exception as exc:
+        projected_metadata = dict(new_asset.metadata_json or {}) if isinstance(new_asset.metadata_json, dict) else {}
+        projected_metadata["daw_timeline_projection_error"] = str(exc)[:500]
+        new_asset.metadata_json = projected_metadata
+        db.add(new_asset)
+        db.commit()
+        db.refresh(new_asset)
     try:
         waveform = get_or_create_waveform(new_asset, target_path, db, points=180, rebuild=True)
         new_asset.waveform_json = waveform.model_dump() if hasattr(waveform, "model_dump") else dict(waveform)
@@ -1123,23 +1465,92 @@ def _run_daw_arrangement_render_background(task_id: int, asset_id: int, arrangem
 
 
 @router.get("/assets/{asset_id}/arrangement", response_model=dict)
-def get_daw_arrangement(asset_id: int, db: Session = Depends(get_db)):
+def get_daw_arrangement(asset_id: int, session_id: int | None = None, db: Session = Depends(get_db)):
     asset = _asset_or_404(db, asset_id)
-    arrangement = _get_saved_arrangement(asset)
-    return {"asset": AudioAssetRead.model_validate(asset), "arrangement": arrangement}
+    arrangement, session = _get_saved_arrangement_session(db, asset, session_id)
+    return {
+        "asset": AudioAssetRead.model_validate(asset),
+        "arrangement": arrangement,
+        "session": _serialize_daw_session(session) if session else None,
+    }
 
 
 @router.put("/assets/{asset_id}/arrangement", response_model=dict)
 def save_daw_arrangement(asset_id: int, payload: DawArrangementSaveRequest, db: Session = Depends(get_db)):
     asset = _asset_or_404(db, asset_id)
-    arrangement = _save_arrangement_to_asset(db, asset, payload.arrangement.model_dump())
-    return {"ok": True, "asset": AudioAssetRead.model_validate(asset), "arrangement": arrangement}
+    arrangement, session = _save_arrangement_session(
+        db,
+        asset,
+        payload.arrangement.model_dump(),
+        session_id=payload.session_id,
+        title=payload.title,
+        create_new_session=payload.create_new_session,
+    )
+    return {
+        "ok": True,
+        "asset": AudioAssetRead.model_validate(asset),
+        "arrangement": arrangement,
+        "session": _serialize_daw_session(session),
+    }
+
+
+@router.get("/assets/{asset_id}/arrangement/sessions", response_model=dict)
+def list_daw_arrangement_sessions(asset_id: int, db: Session = Depends(get_db)):
+    _asset_or_404(db, asset_id)
+    sessions = (
+        db.query(DawArrangementSession)
+        .filter(DawArrangementSession.audio_asset_id == int(asset_id), DawArrangementSession.is_deleted.is_(False))
+        .order_by(DawArrangementSession.updated_at.desc(), DawArrangementSession.id.desc())
+        .all()
+    )
+    return {"sessions": [_serialize_daw_session(session) for session in sessions]}
+
+
+@router.post("/assets/{asset_id}/arrangement/sessions", response_model=dict)
+def create_daw_arrangement_session(asset_id: int, payload: DawArrangementSaveRequest, db: Session = Depends(get_db)):
+    asset = _asset_or_404(db, asset_id)
+    arrangement, session = _save_arrangement_session(
+        db,
+        asset,
+        payload.arrangement.model_dump(),
+        title=payload.title,
+        create_new_session=True,
+    )
+    return {"ok": True, "arrangement": arrangement, "session": _serialize_daw_session(session)}
+
+
+@router.delete("/assets/{asset_id}/arrangement/sessions/{session_id}", response_model=dict)
+def delete_daw_arrangement_session(asset_id: int, session_id: int, db: Session = Depends(get_db)):
+    asset = _asset_or_404(db, asset_id)
+    session = _daw_arrangement_session_or_404(db, asset_id, session_id)
+    session.is_deleted = True
+    session.deleted_at = utc_now_naive()
+    session.deleted_reason = "DAW-Session gelöscht"
+    remaining = (
+        db.query(DawArrangementSession.id)
+        .filter(
+            DawArrangementSession.audio_asset_id == int(asset_id),
+            DawArrangementSession.id != int(session_id),
+            DawArrangementSession.is_deleted.is_(False),
+            DawArrangementSession.is_active.is_(True),
+        )
+        .first()
+    )
+    if not remaining:
+        metadata = dict(asset.metadata_json or {}) if isinstance(asset.metadata_json, dict) else {}
+        metadata.pop("daw_arrangement", None)
+        metadata.pop("daw_markers", None)
+        asset.metadata_json = metadata
+        db.add(asset)
+    db.commit()
+    return {"ok": True, "deleted_session_id": session_id}
 
 
 @router.post("/assets/{asset_id}/arrangement/preview")
 def preview_daw_arrangement(asset_id: int, payload: DawArrangementRenderRequest, db: Session = Depends(get_db)):
     asset = _asset_or_404(db, asset_id)
-    arrangement = _sanitize_arrangement(asset, payload.arrangement.model_dump() if payload.arrangement else _get_saved_arrangement(asset))
+    saved, _session = _get_saved_arrangement_session(db, asset, payload.session_id)
+    arrangement = _sanitize_arrangement(asset, payload.arrangement.model_dump() if payload.arrangement else saved)
     output_format = _normalize_daw_output_format(payload.output_format)
     suffix = f".{output_format}"
     temp_file = tempfile.NamedTemporaryFile(prefix="songstudio_daw_arrangement_preview_", suffix=suffix, delete=False)
@@ -1165,8 +1576,9 @@ def preview_daw_arrangement(asset_id: int, payload: DawArrangementRenderRequest,
 @router.post("/assets/{asset_id}/arrangement/render-task", response_model=DawArrangementRenderTaskResponse)
 def render_daw_arrangement_task(asset_id: int, payload: DawArrangementRenderRequest, db: Session = Depends(get_db)):
     asset = _asset_or_404(db, asset_id)
-    arrangement = _sanitize_arrangement(asset, payload.arrangement.model_dump() if payload.arrangement else _get_saved_arrangement(asset))
-    _save_arrangement_to_asset(db, asset, arrangement)
+    saved, _session = _get_saved_arrangement_session(db, asset, payload.session_id)
+    arrangement = _sanitize_arrangement(asset, payload.arrangement.model_dump() if payload.arrangement else saved)
+    _save_arrangement_session(db, asset, arrangement, session_id=payload.session_id, title=payload.version_label)
     task = _create_daw_arrangement_render_task(db, asset, arrangement, payload.output_format, payload.version_label)
     run_detached_process(
         f"daw-arrangement-render-{task.id}",
@@ -1187,10 +1599,38 @@ def render_daw_arrangement_task(asset_id: int, payload: DawArrangementRenderRequ
 @router.post("/assets/{asset_id}/arrangement/render", response_model=AudioAssetRead)
 def render_daw_arrangement(asset_id: int, payload: DawArrangementRenderRequest, db: Session = Depends(get_db)):
     asset = _asset_or_404(db, asset_id)
-    arrangement = _sanitize_arrangement(asset, payload.arrangement.model_dump() if payload.arrangement else _get_saved_arrangement(asset))
-    _save_arrangement_to_asset(db, asset, arrangement)
+    saved, _session = _get_saved_arrangement_session(db, asset, payload.session_id)
+    arrangement = _sanitize_arrangement(asset, payload.arrangement.model_dump() if payload.arrangement else saved)
+    _save_arrangement_session(db, asset, arrangement, session_id=payload.session_id, title=payload.version_label)
     return _render_arrangement(db, asset, arrangement, payload.output_format, payload.version_label, payload.create_notification)
 
+
+
+
+@router.get("/assets/{asset_id}/beatgrid", response_model=dict)
+def get_daw_beatgrid(asset_id: int, rebuild: bool = False, db: Session = Depends(get_db)):
+    asset = _asset_or_404(db, asset_id)
+    source_path = _resolve_audio_path(asset)
+    beatgrid = build_daw_beatgrid(asset, source_path, rebuild=rebuild)
+    if beatgrid.get("ok"):
+        persist_daw_beatgrid(asset, beatgrid)
+        db.add(asset)
+        db.commit()
+        db.refresh(asset)
+    return {"ok": bool(beatgrid.get("ok")), "beatgrid": beatgrid}
+
+
+@router.post("/assets/{asset_id}/beatgrid/rebuild", response_model=dict)
+def rebuild_daw_beatgrid(asset_id: int, db: Session = Depends(get_db)):
+    asset = _asset_or_404(db, asset_id)
+    source_path = _resolve_audio_path(asset)
+    beatgrid = build_daw_beatgrid(asset, source_path, rebuild=True)
+    if beatgrid.get("ok"):
+        persist_daw_beatgrid(asset, beatgrid)
+        db.add(asset)
+        db.commit()
+        db.refresh(asset)
+    return {"ok": bool(beatgrid.get("ok")), "beatgrid": beatgrid}
 
 @router.get("/assets/{asset_id}", response_model=dict)
 def get_daw_project(asset_id: int, db: Session = Depends(get_db)):
@@ -1539,3 +1979,81 @@ async def resolve_daw_command(payload: DawCommandRequest, db: Session = Depends(
         response["rendered_asset"] = AudioAssetRead.model_validate(rendered)
         response["message"] = f"Erledigt: Neue DAW-Version „{rendered.version_label}“ wurde gespeichert."
     return response
+
+
+# ---------------------------------------------------------------------------
+# DAW-KI: natürliche Arrangement-Befehle (neu, additiv)
+# ---------------------------------------------------------------------------
+
+class DawArrangementAiCommandRequest(BaseModel):
+    message: str = Field(min_length=1, max_length=1000)
+    arrangement: DawArrangementState | None = None
+    selected_clip_id: str | None = Field(default=None, max_length=80)
+    selected_section_id: str | None = Field(default=None, max_length=120)
+    current_time: float | None = Field(default=None, ge=0)
+    selection: dict[str, Any] | None = None
+    execute: bool = False
+
+
+@router.post("/assets/{asset_id}/arrangement/ai-command", response_model=dict)
+async def arrangement_ai_command(asset_id: int, payload: DawArrangementAiCommandRequest, db: Session = Depends(get_db)):
+    """Natürlichen DAW-Befehl in geprüfte Arrangement-Operationen übersetzen.
+
+    Beispiele: „Setze die erste Hook doppelt“, „Schneide exakt nach 4 Takten“,
+    „Kürze das Intro auf 8 Takte“. Der KI-Plan wird serverseitig deterministisch
+    auf das Arrangement angewendet (taktgenau über Beatgrid/BPM) und mit
+    execute=true dauerhaft in SQLite gespeichert (metadata_json.daw_arrangement).
+    Jeder Befehl wird zusätzlich in der Tabelle daw_ai_actions protokolliert.
+    """
+    from app.models import DawAiAction
+    from app.services.daw_ai_command_service import DawAiCommandService
+
+    asset = _asset_or_404(db, asset_id)
+    arrangement = _sanitize_arrangement(
+        asset,
+        payload.arrangement.model_dump() if payload.arrangement else _get_saved_arrangement(asset),
+    )
+    service = DawAiCommandService()
+    result = await service.resolve(
+        db,
+        asset,
+        arrangement,
+        message=payload.message.strip(),
+        selected_clip_id=payload.selected_clip_id,
+        selected_section_id=payload.selected_section_id,
+        current_time=float(payload.current_time or 0),
+        selection=payload.selection,
+    )
+
+    status = "failed"
+    if result.get("ok") and isinstance(result.get("arrangement"), dict):
+        result["arrangement"] = _sanitize_arrangement(asset, result["arrangement"])
+        status = "planned"
+        if payload.execute:
+            result["arrangement"] = _save_arrangement_to_asset(db, asset, result["arrangement"])
+            result["persisted"] = True
+            status = "executed"
+
+    try:
+        db.add(DawAiAction(
+            audio_asset_id=asset.id,
+            message=payload.message.strip()[:2000],
+            interpretation=(result.get("interpretation") or result.get("message") or "")[:2000] or None,
+            operations_json=result.get("operations"),
+            status=status,
+            source=result.get("source"),
+            provider=result.get("provider"),
+            model=result.get("model"),
+            meta_json={
+                "execute_requested": bool(payload.execute),
+                "selected_clip_id": payload.selected_clip_id,
+                "current_time": payload.current_time,
+                "actions": result.get("actions"),
+                "warnings": result.get("warnings"),
+            },
+        ))
+        db.commit()
+    except Exception:
+        db.rollback()
+
+    return result

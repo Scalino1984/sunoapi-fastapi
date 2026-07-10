@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Bot, CheckCircle2, Download, FileText, Plus, RefreshCcw, Save, Tag, TestTube2, Trash2, Upload, UserRound } from 'lucide-react';
+import { Bot, CheckCircle2, Copy, Download, FileText, Music2, Plus, RefreshCcw, Save, Tag, TestTube2, Trash2, Upload, UserRound } from 'lucide-react';
 import { api } from '../api/client.js';
 import { SectionHeader } from '../components/SectionHeader.jsx';
 import { downloadTextFile } from '../utils.js';
@@ -32,9 +32,11 @@ export function AdminPage({ notify }) {
   const [profiles, setProfiles] = useState([]);
   const [instructionFiles, setInstructionFiles] = useState([]);
   const [vocalTags, setVocalTags] = useState([]);
+  const [dawPromptHooks, setDawPromptHooks] = useState([]);
   const [activePanel, setActivePanel] = useState('assistant');
   const [saving, setSaving] = useState(false);
   const [newTag, setNewTag] = useState({ label: '', tag: '', category: 'Vocal Tags', description: '', sort_order: 100, is_active: true });
+  const [newDawPromptHook, setNewDawPromptHook] = useState({ title: '', prompt: '', description: '', scope: 'daw', sort_order: 100, is_active: true });
   const [newFile, setNewFile] = useState({ title: '', content: '', description: '', is_active: true });
   const [newProfile, setNewProfile] = useState({
     name: '',
@@ -61,12 +63,13 @@ export function AdminPage({ notify }) {
   }, []);
 
   async function load() {
-    const [u, s, p, files, tags] = await Promise.all([
+    const [u, s, p, files, tags, dawHooks] = await Promise.all([
       api.admin.users(),
       api.admin.aiSettings(),
       api.admin.profiles(),
       api.admin.instructionFiles(),
-      api.admin.vocalTags()
+      api.admin.vocalTags(),
+      api.admin.dawPromptHooks()
     ]);
     const safeSettings = s || {};
     setUsers(u || []);
@@ -74,6 +77,7 @@ export function AdminPage({ notify }) {
     setProfiles(p || []);
     setInstructionFiles(files || []);
     setVocalTags(tags || []);
+    setDawPromptHooks(dawHooks || []);
     setNewProfile((prev) => {
       const provider = prev.provider || safeSettings.default_provider || 'openai';
       const model = prev.model || defaultModelForProvider(safeSettings, provider);
@@ -194,6 +198,37 @@ export function AdminPage({ notify }) {
     load();
   }
 
+  async function createDawPromptHook() {
+    if (!newDawPromptHook.title || !newDawPromptHook.prompt) return notify('Titel und Prompt sind erforderlich.', 'error');
+    await api.admin.createDawPromptHook(newDawPromptHook);
+    setNewDawPromptHook({ title: '', prompt: '', description: '', scope: 'daw', sort_order: 100, is_active: true });
+    notify('DAW-Prompt gespeichert.', 'success');
+    load();
+  }
+
+  async function updateDawPromptHook(hook, patch) {
+    await api.admin.updateDawPromptHook(hook.id, { ...patch });
+    notify('DAW-Prompt aktualisiert.', 'success');
+    load();
+  }
+
+  function patchDawPromptHookState(hookId, patch) {
+    setDawPromptHooks((items) => items.map((item) => (item.id === hookId ? { ...item, ...patch } : item)));
+  }
+
+  async function duplicateDawPromptHook(hook) {
+    await api.admin.duplicateDawPromptHook(hook.id);
+    notify('DAW-Prompt dupliziert.', 'success');
+    load();
+  }
+
+  async function deleteDawPromptHook(hook) {
+    if (!confirm(`DAW-Prompt wirklich löschen?\n\n${hook.title}`)) return;
+    await api.admin.deleteDawPromptHook(hook.id);
+    notify('DAW-Prompt gelöscht.', 'success');
+    load();
+  }
+
   async function createFile() {
     if (!newFile.title || !newFile.content) return notify(t('admin.messages.titleContentRequired', 'Titel und Inhalt sind erforderlich.'), 'error');
     await api.admin.createInstructionFile(newFile);
@@ -267,6 +302,7 @@ export function AdminPage({ notify }) {
 
   const panels = useMemo(() => [
     ['assistant', t('admin.tabs.assistant', 'KI-Assistent'), Bot],
+    ['daw-prompts', 'DAW-Prompts', Music2],
     ['tags', t('admin.tabs.vocalTags', 'Vocal Tags'), Tag],
     ['users', t('admin.tabs.users', 'Benutzer'), UserRound]
   ], [t]);
@@ -544,6 +580,100 @@ export function AdminPage({ notify }) {
             </div>
           </article>
         </div>
+      )}
+
+      {activePanel === 'daw-prompts' && (
+        <article className="panel stack">
+          <div className="panel-title-row">
+            <div>
+              <h2>DAW-Prompts</h2>
+              <p className="muted">Wiederverwendbare Gesprächsaufhänger für die DAW-KI. In der DAW werden aktive Einträge über <code>/prompts</code> angezeigt und per Klick in das Nachrichtenfeld übernommen.</p>
+            </div>
+            <button type="button" onClick={load}><RefreshCcw size={16} /> {t('topbar.refresh', 'Aktualisieren')}</button>
+          </div>
+
+          <div className="form-grid compact-grid">
+            <input
+              placeholder="Titel"
+              value={newDawPromptHook.title}
+              onChange={(event) => setNewDawPromptHook({ ...newDawPromptHook, title: event.target.value })}
+            />
+            <input
+              placeholder="Beschreibung"
+              value={newDawPromptHook.description}
+              onChange={(event) => setNewDawPromptHook({ ...newDawPromptHook, description: event.target.value })}
+            />
+            <label>Sortierung
+              <input
+                type="number"
+                value={newDawPromptHook.sort_order}
+                onChange={(event) => setNewDawPromptHook({ ...newDawPromptHook, sort_order: Number(event.target.value || 0) })}
+              />
+            </label>
+            <label className="check"><input type="checkbox" checked={newDawPromptHook.is_active} onChange={(event) => setNewDawPromptHook({ ...newDawPromptHook, is_active: event.target.checked })} /> Aktiv</label>
+            <label className="wide">Prompt
+              <textarea
+                className="large"
+                placeholder="z. B. Verdopple die erste Hook anhand von Lyrics-/SRT-Struktur und BeatNet+-Downbeats..."
+                value={newDawPromptHook.prompt}
+                onChange={(event) => setNewDawPromptHook({ ...newDawPromptHook, prompt: event.target.value })}
+              />
+            </label>
+            <button className="primary" type="button" onClick={createDawPromptHook}><Plus size={16} /> Prompt speichern</button>
+          </div>
+
+          <div className="instruction-grid">
+            {dawPromptHooks.map((hook) => (
+              <div className="panel slim-panel stack" key={hook.id}>
+                <div className="form-grid compact-grid">
+                  <label>Titel
+                    <input
+                      value={hook.title || ''}
+                      onChange={(event) => patchDawPromptHookState(hook.id, { title: event.target.value })}
+                      onBlur={(event) => updateDawPromptHook(hook, { title: event.target.value })}
+                    />
+                  </label>
+                  <label>Beschreibung
+                    <input
+                      value={hook.description || ''}
+                      onChange={(event) => patchDawPromptHookState(hook.id, { description: event.target.value })}
+                      onBlur={(event) => updateDawPromptHook(hook, { description: event.target.value })}
+                    />
+                  </label>
+                  <label>Sortierung
+                    <input
+                      type="number"
+                      value={hook.sort_order ?? 0}
+                      onChange={(event) => patchDawPromptHookState(hook.id, { sort_order: Number(event.target.value || 0) })}
+                      onBlur={(event) => updateDawPromptHook(hook, { sort_order: Number(event.target.value || 0) })}
+                    />
+                  </label>
+                  <label className="check">
+                    <input
+                      type="checkbox"
+                      checked={hook.is_active !== false}
+                      onChange={(event) => updateDawPromptHook(hook, { is_active: event.target.checked })}
+                    />
+                    Aktiv
+                  </label>
+                  <label className="wide">Prompt
+                    <textarea
+                      rows={6}
+                      value={hook.prompt || ''}
+                      onChange={(event) => patchDawPromptHookState(hook.id, { prompt: event.target.value })}
+                      onBlur={(event) => updateDawPromptHook(hook, { prompt: event.target.value })}
+                    />
+                  </label>
+                </div>
+                <div className="inline-actions">
+                  <button type="button" onClick={() => duplicateDawPromptHook(hook)}><Copy size={15} /> Duplizieren</button>
+                  <button type="button" className="danger" onClick={() => deleteDawPromptHook(hook)}><Trash2 size={15} /> {t('texts.delete', 'Löschen')}</button>
+                </div>
+              </div>
+            ))}
+            {!dawPromptHooks.length && <p className="muted">Noch keine DAW-Prompts gespeichert.</p>}
+          </div>
+        </article>
       )}
 
       {activePanel === 'tags' && (

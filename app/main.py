@@ -14,6 +14,7 @@ from app.database import init_db
 from app.services.startup_database_guard import create_initial_admin_if_needed, ensure_jwt_secret, prepare_initial_database_credentials
 from app.services.startup_task_recovery import run_startup_task_recovery, run_startup_library_repair
 from app.services.library_content_polling_service import run_library_content_polling
+from app.services.portable_backup_service import run_portable_backup_scheduler
 from app.services.task_lifecycle_service import run_periodic_task_watchdog
 from app.routers import admin, ai_chat, archive, audio, audio_assets, assistant, auth, credits, daw, files, library, lyrics, music, notifications, production, songs_srt, srt, system, webhooks
 from app.suno_client import SunoAPIError
@@ -52,6 +53,9 @@ async def lifespan(app: FastAPI):
 
     logger.info("Plane optionales Library-Content-Polling nach FastAPI-Start.")
     background_tasks.append(asyncio.create_task(run_library_content_polling(), name="library-content-polling"))
+
+    logger.info("Plane optionalen Auto-Backup-Scheduler nach FastAPI-Start.")
+    background_tasks.append(asyncio.create_task(run_portable_backup_scheduler(), name="portable-backup-scheduler"))
 
     try:
         yield

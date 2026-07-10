@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowUp, BookOpenText, Brush, ChevronDown, CircleHelp, Command, FileText, Home, ListMusic, Menu, Mic2, Moon, MoreHorizontal, Music, RefreshCw, Scissors, Search, Settings, Shield, Sun, Trash, Trash2, UploadCloud, X } from 'lucide-react';
+import { ArrowLeft, ArrowUp, BookOpenText, Brush, ChevronDown, CircleHelp, Command, FileText, Home, ListMusic, Menu, Mic2, Moon, MoreHorizontal, Music, RefreshCw, Scissors, Search, Settings, Shield, Sun, Trash, Trash2, UploadCloud, X } from 'lucide-react';
 import { api } from './api/client.js';
 import { assetSearchText, friendlyNotification } from './utils.js';
 import { Login } from './components/Login.jsx';
@@ -986,6 +986,13 @@ export default function App() {
     setPlayerState({ currentAssetId: null, isPlaying: false, currentTime: 0, duration: 0 });
   }, [sendPlayerCommand]);
 
+  useEffect(() => {
+    if (activeTab !== 'daw') return;
+    const activeDawAssetId = String(dawOpenAssetId || (typeof window !== 'undefined' ? dawAssetIdFromLocation() : '') || '').trim();
+    if (!activeDawAssetId || !queue?.length) return;
+    closeAudioPlayer();
+  }, [activeTab, dawOpenAssetId, queue?.length, closeAudioPlayer]);
+
   const replayLastPlayedAsset = useCallback(() => {
     const lastId = String(lastPlayedAsset?.id || playerState.currentAssetId || '').trim();
     if (!lastId) {
@@ -1070,7 +1077,7 @@ export default function App() {
       if (isKeyboardInputTarget(event) || event.altKey || event.ctrlKey || event.metaKey) return;
       const key = event.key;
       const lower = String(key || '').toLowerCase();
-      const dawManagedKeys = new Set([' ', 'k', 'p', 's', 'm', 'delete', 'backspace', 'escape', 'arrowleft', 'arrowright']);
+      const dawManagedKeys = new Set([' ', 'k', 'p', 's', 'delete', 'backspace', 'escape', 'arrowleft', 'arrowright']);
       if (activeTab === 'daw' && dawManagedKeys.has(lower === ' ' ? ' ' : lower)) return;
       const hasQueue = Boolean(queue?.length);
       const hasLibraryDetails = activeTab === 'library' && Boolean(String(libraryRouteTitle || '').trim() || routeDetailSegment(routePathname, 'library'));
@@ -1225,6 +1232,7 @@ export default function App() {
     } catch {
       // localStorage ist nur Komfortzustand; URL bleibt die Quelle.
     }
+    if (queue?.length) closeAudioPlayer();
     setLibraryRouteTitle('');
     setOpenNavGroup(null);
     setMobileNavOpen(false);
@@ -1251,6 +1259,35 @@ export default function App() {
   function openTabLink(event, key, options = {}) {
     event?.preventDefault?.();
     openMainTab(key, options);
+  }
+
+
+  function handleHeaderBack(event) {
+    event?.preventDefault?.();
+    if (activeTab === 'library' && (libraryRouteTitle || routeDetailSegment(routePathname, 'library'))) {
+      closeLibraryDetails();
+      return;
+    }
+    if (activeTab === 'daw' && (dawOpenAssetId || dawAssetIdFromLocation())) {
+      setDawOpenAssetId('');
+      try {
+        localStorage.removeItem('react-daw-asset-id');
+      } catch {
+        // localStorage ist nur Komfortzustand; Navigation bleibt zustandsbasiert.
+      }
+      setActiveTab('daw');
+      if (typeof window !== 'undefined') {
+        const targetPath = tabPath('daw', window.location.pathname);
+        window.history.pushState({ activeTab: 'daw' }, '', targetPath);
+        setRoutePathname(window.location.pathname);
+      }
+      return;
+    }
+    if (typeof window !== 'undefined' && window.history.length > 1) {
+      window.history.back();
+      return;
+    }
+    openMainTab('home');
   }
 
   function cycleSidebarMode() {
@@ -1739,10 +1776,15 @@ export default function App() {
   const openTaskCount = activeTaskCount(tasks);
   const SidebarTrashIcon = trashHasItems ? Trash2 : Trash;
   const trashLabel = localizedTabLabels.trash || t('nav.trash', 'Papierkorb');
+  const currentHeaderPath = tabHref(activeTab, activeTab === 'library' ? libraryRouteTitle : '');
+  const routeBackTitle = t('topbar.back', 'Zurueck');
 
   return (
     <AppAssistantProvider value={{ activeTab, assets, lyrics, styles, voices, playlists, tasks, notifications, executeFrontendAction, buildAssistantContext }}>
       <div className={`studio-shell sidebar-${sidebarMode} ${mobileNavOpen ? 'sidebar-mobile-open' : ''} ${workspaceFocus ? 'workspace-focus' : ''}`}>
+        {/* Header-Vertrag: Keine zusätzlichen Desktop-Grid-Siblings in die Topbar einfügen.
+            Desktop bleibt: Brand/Back | Suche | Aktionen. Zusätzliche Header-Aktionen
+            gehören in .studio-top-actions, sonst bricht die Topbar in mehrere Zeilen. */}
         <header className={`studio-topbar ${mobileSearchOpen ? 'search-open' : ''} ${topbarMenuOpen ? 'menu-open' : ''}`}>
           <div className="topbar-brand-zone">
             <button className="sidebar-mobile-button" type="button" onClick={() => setMobileNavOpen((value) => !value)} aria-expanded={mobileNavOpen} aria-controls="studioSidebar">
@@ -1758,9 +1800,15 @@ export default function App() {
                 <span>{t('app.suite', 'AI Music Production Suite')}</span>
               </div>
             </div>
-            <a className="studio-route-link" href={tabHref(activeTab, activeTab === 'library' ? libraryRouteTitle : '')} onClick={(event) => openTabLink(event, activeTab)} title={t('topbar.directLink', 'Direktlink: {{url}}', { url: tabFullHref(activeTab) })}>
-              {tabHref(activeTab, activeTab === 'library' ? libraryRouteTitle : '')}
-            </a>
+            <button
+              className="studio-route-back-button"
+              type="button"
+              onClick={handleHeaderBack}
+              title={`${routeBackTitle}: ${currentHeaderPath}`}
+              aria-label={`${routeBackTitle}: ${currentHeaderPath}`}
+            >
+              <ArrowLeft size={17} />
+            </button>
           </div>
 
           <form className={`studio-commandbar ${mobileSearchOpen ? 'is-open' : ''}`} onSubmit={(event) => { event.preventDefault(); runCommand(commandQuery); }}>
@@ -1776,8 +1824,13 @@ export default function App() {
             <button type="button" onClick={() => setTopbarMenuOpen((value) => { const next = !value; if (next) setMobileSearchOpen(false); return next; })} className={topbarMenuOpen ? 'active' : ''} title={t('topbar.quickMenu', 'Schnellmenü')} aria-expanded={topbarMenuOpen}><MoreHorizontal size={18} /></button>
           </div>
 
+
           <div className={`studio-top-actions ${topbarMenuOpen ? 'is-open' : ''}`}>
-            <button type="button" className={`header-scroll-top-button ${showMobileScrollTop ? 'is-visible' : ''}`} onClick={scrollToPageTop} title={t('topbar.scrollTop', 'Nach oben')} aria-label={t('topbar.scrollTop', 'Nach oben')} aria-hidden={!showMobileScrollTop} tabIndex={showMobileScrollTop ? 0 : -1}><ArrowUp size={17} /></button>
+            <div className={`header-scroll-top-bridge ${showMobileScrollTop ? 'is-visible' : ''}`} aria-hidden={!showMobileScrollTop}>
+              <button type="button" className={`header-scroll-top-button ${showMobileScrollTop ? 'is-visible' : ''}`} onClick={scrollToPageTop} title={t('topbar.scrollTop', 'Nach oben')} aria-label={t('topbar.scrollTop', 'Nach oben')} aria-hidden={!showMobileScrollTop} tabIndex={showMobileScrollTop ? 0 : -1}>
+                <ArrowUp size={15} />
+              </button>
+            </div>
             {openTaskCount > 0 && <button className="task-poll-pill live-pill" onClick={() => refreshPendingAndReload({ manual: true })} title={t('topbar.openTasksNow', 'Offene Suno-Tasks jetzt prüfen')}><RefreshCw size={14} className={taskRefreshState.running ? 'spin-icon' : ''} /> {t('topbar.activeTasksShort', '{{count}} aktiv', { count: openTaskCount })}</button>}
             <span className="credits topbar-credits">{t('topbar.credits', 'Credits: {{value}}', { value: credits ?? '—' })}</span>
             <button className={workspaceFocus ? 'active focus-toggle-button' : 'focus-toggle-button'} type="button" onClick={() => setWorkspaceFocus((value) => !value)} title={t('topbar.focusTitle', 'Zusatzcontainer ein-/ausblenden')}><Command size={16} /><span>{t('topbar.focus', 'Fokus')}</span></button>

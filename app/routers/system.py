@@ -21,13 +21,17 @@ from app.services.system_status_notification_service import create_system_status
 from app.services.portable_path_service import to_portable_path
 from app.services.portable_backup_service import (
     create_portable_backup,
+    create_scoped_portable_backup,
     get_portable_backup_download,
     get_portable_backup_job,
+    get_portable_backup_schedule,
     import_portable_backup,
     normalize_portable_paths,
     portable_backup_status,
+    run_scheduled_portable_backup_once,
     start_portable_backup_export_job,
     start_portable_backup_import_job,
+    update_portable_backup_schedule,
 )
 from app.models import (
     AudioAsset,
@@ -820,11 +824,21 @@ def normalize_portable_storage_paths(payload: dict[str, Any] | None = None, db: 
 @router.post("/portable-backup/export")
 def create_portable_backup_endpoint(payload: dict[str, Any] | None = None, db: Session = Depends(get_db)) -> FileResponse:
     payload = payload or {}
-    backup_path = create_portable_backup(
-        db,
-        normalize_paths=bool(payload.get("normalize_paths", True)),
-        note=payload.get("note") if isinstance(payload.get("note"), str) else None,
-    )
+    mode = str(payload.get("mode") or "full").strip().lower()
+    scopes = payload.get("scopes") if isinstance(payload.get("scopes"), dict) else None
+    if mode == "partial":
+        backup_path = create_scoped_portable_backup(
+            db,
+            scopes=scopes,
+            note=payload.get("note") if isinstance(payload.get("note"), str) else None,
+        )
+    else:
+        backup_path = create_portable_backup(
+            db,
+            normalize_paths=bool(payload.get("normalize_paths", True)),
+            note=payload.get("note") if isinstance(payload.get("note"), str) else None,
+            scopes=scopes,
+        )
     create_system_status_notification(
         db,
         event_type="portable_backup_export_completed",
@@ -855,7 +869,27 @@ def start_portable_backup_export_endpoint(payload: dict[str, Any] | None = None)
     return start_portable_backup_export_job(
         normalize_paths=bool(payload.get("normalize_paths", True)),
         note=payload.get("note") if isinstance(payload.get("note"), str) else None,
+        mode=payload.get("mode") if isinstance(payload.get("mode"), str) else "full",
+        scopes=payload.get("scopes") if isinstance(payload.get("scopes"), dict) else None,
     )
+
+
+@router.get("/portable-backup/schedule")
+def get_portable_backup_schedule_endpoint(db: Session = Depends(get_db)) -> dict[str, Any]:
+    return {"ok": True, "schedule": get_portable_backup_schedule(db)}
+
+
+@router.put("/portable-backup/schedule")
+def update_portable_backup_schedule_endpoint(payload: dict[str, Any] | None = None, db: Session = Depends(get_db)) -> dict[str, Any]:
+    return {"ok": True, "schedule": update_portable_backup_schedule(db, payload or {})}
+
+
+@router.post("/portable-backup/schedule/run-now")
+def run_portable_backup_schedule_now_endpoint(db: Session = Depends(get_db)) -> dict[str, Any]:
+    try:
+        return run_scheduled_portable_backup_once(db, force=True)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=f"Automatisches Backup konnte nicht ausgeführt werden: {exc}") from exc
 
 
 @router.get("/portable-backup/jobs/{job_id}")
@@ -950,4 +984,3 @@ async def start_portable_backup_import_endpoint(
         except OSError:
             pass
         raise HTTPException(status_code=500, detail=f"Portable-Backup-Import konnte nicht gestartet werden: {exc}") from exc
-
