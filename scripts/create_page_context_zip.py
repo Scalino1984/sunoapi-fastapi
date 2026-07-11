@@ -155,7 +155,6 @@ LIBRARY_BACKEND_FILES = (
     "app/services/forced_alignment_service.py",
     "app/services/srt_transcript_service.py",
     "app/services/srt_parser.py",
-    "app/services/srt_export.py",
     "app/services/srt_validation.py",
     "app/services/id3_tag_service.py",
     "app/services/portable_path_service.py",
@@ -257,7 +256,6 @@ APP_ROUTE_PAGE_IMPORTS = (
     "frontend-react/src/pages/StatusPage.jsx",
     "frontend-react/src/pages/TrashPage.jsx",
     "frontend-react/src/pages/ImportPage.jsx",
-    "frontend-react/src/pages/ProductionPage.jsx",
 )
 
 

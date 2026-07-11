@@ -713,11 +713,40 @@ export default function App() {
         return next;
       });
       setQueue((current) => updateRows(current));
+
+      const status = String(transcript.status || detail.status || '').toLowerCase();
+      const hasTaskHandle = Boolean(transcript.task_local_id || transcript.task_id || detail.task_local_id || detail.task_id);
+      const shouldRefreshTasks = hasTaskHandle || ['running', 'queued', 'pending', 'processing'].includes(status);
+
+      if (shouldRefreshTasks) {
+        // SRT-Erzeugungen koennen auch ausserhalb der Library-Detailseite
+        // gestartet werden, z. B. im MiniPlayer. Dort gibt es kein onReload(),
+        // deshalb muss die globale Task-/Notification-Leiste explizit nachziehen.
+        setPollingUntil(Date.now() + POLLING_AFTER_CREATE_MS);
+        const refreshTaskSnapshot = () => {
+          refreshAll({
+            silent: true,
+            content: false,
+            tasks: true,
+            credits: false,
+            notifications: true,
+          })
+            .then((snapshot) => {
+              const count = activeTaskCount(snapshot?.tasks || []);
+              setTaskRefreshState((current) => ({ ...current, activeCount: count }));
+              if (count > 0) setPollingUntil(Date.now() + POLLING_AFTER_CREATE_MS);
+            })
+            .catch(() => null);
+        };
+
+        refreshTaskSnapshot();
+        window.setTimeout(refreshTaskSnapshot, 800);
+      }
     }
 
     window.addEventListener('srt:updated', handleSrtUpdated);
     return () => window.removeEventListener('srt:updated', handleSrtUpdated);
-  }, []);
+  }, [refreshAll]);
 
   // Wichtig: Keine assets/tasks/notifications in diese Dependencies aufnehmen.
   // Die Funktion pollt Live-Statuswerte. Wenn sie bei jeder Task-/Notification-

@@ -1,7 +1,6 @@
 import pytest
 from fastapi import HTTPException
 
-from app.routers.srt import SrtRawPayload, SrtSegmentsPayload, export_srt_from_segments, parse_raw_srt, validate_srt
 from app.services.srt_parser import export_srt, parse_srt, parse_srt_timestamp, srt_timestamp
 from app.services.srt_validation import normalize_or_raise, validate_srt_segments
 
@@ -29,23 +28,21 @@ erste Zeile
     assert export_srt(segments).startswith("1\n00:00:00,000 --> 00:00:01,000")
 
 
-def test_validate_route_reports_errors_and_export_route_returns_srt_text():
-    payload = SrtSegmentsPayload(segments=[{"start": 5, "end": 4, "text": "kaputt"}])
-    result = validate_srt(payload)
+def test_validate_reports_errors_and_export_returns_srt_text():
+    result = validate_srt_segments([{"start": 5, "end": 4, "text": "kaputt"}])
 
     assert result["valid"] is True
     assert any(issue["type"] == "short_duration" for issue in result["issues"])
 
-    ok_payload = SrtSegmentsPayload(segments=[{"start": 0, "end": 1.2, "text": "ok"}])
-    exported = export_srt_from_segments(ok_payload)
-    assert exported["srt"] == "1\n00:00:00,000 --> 00:00:01,200\nok\n"
+    exported = export_srt(validate_srt_segments([{"start": 0, "end": 1.2, "text": "ok"}])["segments"])
+    assert exported == "1\n00:00:00,000 --> 00:00:01,200\nok\n"
 
 
-def test_parse_route_and_normalize_or_raise():
-    parsed = parse_raw_srt(SrtRawPayload(srt="1\n00:00:00,000 --> 00:00:01,000\nHallo"))
+def test_parse_and_normalize_or_raise():
+    parsed = parse_srt("1\n00:00:00,000 --> 00:00:01,000\nHallo")
 
-    assert parsed["segments"][0]["text"] == "Hallo"
-    assert normalize_or_raise(parsed["segments"])[0]["text"] == "Hallo"
+    assert parsed[0]["text"] == "Hallo"
+    assert normalize_or_raise(parsed)[0]["text"] == "Hallo"
 
     with pytest.raises(HTTPException) as exc:
         normalize_or_raise([])

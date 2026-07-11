@@ -10,21 +10,12 @@
     "lint": "eslint ."
   },
   "dependencies": {
-    "@dnd-kit/react": "^0.3.0",
     "@vitejs/plugin-react": "latest",
-    "@waveform-playlist/browser": "^15.3.0",
-    "@waveform-playlist/core": "^12.6.0",
-    "@waveform-playlist/playout": "^12.5.1",
-    "@wavesurfer/react": "^1.0.12",
-    "interactjs": "^1.10.27",
     "lucide-react": "latest",
     "react": "latest",
     "react-dom": "latest",
     "react-hotkeys-hook": "^5.3.3",
-    "styled-components": "^6.4.3",
-    "tone": "^15.1.22",
     "vite": "latest",
-    "wavesurfer.js": "^7.12.8",
     "zustand": "^5.0.14"
   }
 }

@@ -6,6 +6,8 @@ import { EmptyState } from '../components/EmptyState.jsx';
 import { Modal } from '../components/Modal.jsx';
 import { SectionHeader } from '../components/SectionHeader.jsx';
 import { Waveform } from '../components/Waveform.jsx';
+import { LibrarySongDetails } from '../components/library/LibrarySongDetails.jsx';
+import { LibraryDetailAccordion } from '../components/library/LibraryDetailAccordion.jsx';
 import { useI18n } from '../i18n/I18nContext.jsx';
 import { assetSearchText, copyToClipboard, downloadTextFile, formatBoolean, formatDate, parseBackendDate, formatDuration, formatVocalGender, getGenerationOptions, groupAssetsByProject, handleCoverImageError, hasGenerationOptions, isPlayable, operationKey, operationLabel, pickCover, isCoverCached, pickLyrics, pickModel, pickPrompt, pickStyle, pickTitle, safeFilename, shortId, stableLibrarySortValue, updatedLibrarySortValue, summarizeStyle } from '../utils.js';
 
@@ -1179,6 +1181,20 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
     return preserveWindowScroll(action, { strong: true });
   }
 
+  function isLibraryInteractiveClickTarget(target) {
+    return Boolean(target?.closest?.('button, a, input, select, textarea, summary, details, [role="button"], [data-library-no-open]'));
+  }
+
+  function openProjectFromLibraryClickArea(project, event) {
+    if (event?.target && event?.currentTarget && event.target !== event.currentTarget && isLibraryInteractiveClickTarget(event.target)) return;
+    openProjectDetails(project, event);
+  }
+
+  function openAssetFromLibraryClickArea(project, asset, event) {
+    if (event?.target && event?.currentTarget && event.target !== event.currentTarget && isLibraryInteractiveClickTarget(event.target)) return;
+    openGalleryAssetDetails(project, asset, event);
+  }
+
   async function preserveWindowScrollAsync(action) {
     const snapshot = windowScrollSnapshot();
     try {
@@ -1967,8 +1983,12 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
         }
       }
       if (workflowCaptureState.stems) {
-        await api.archive.generateStems(asset.id);
-        results.push(t('library.workflow.stemsCreated', 'Stems erzeugt'));
+        const stems = await api.archive.generateStems(asset.id);
+        if (stems?.queued || stems?.task_local_id || String(stems?.status || '').toUpperCase() === 'RUNNING') {
+          results.push(t('library.workflow.stemsStarted', 'Stems gestartet (#{{task}})', { task: stems.task_local_id || '—' }));
+        } else {
+          results.push(t('library.workflow.stemsCreated', 'Stems erzeugt'));
+        }
       }
       if (workflowCaptureState.waveform) {
         await api.archive.rebuildWaveform(asset.id);
@@ -1991,8 +2011,14 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
     setStemLoadingIds((current) => new Set([...current, asset.id]));
     try {
       const result = await api.archive.generateStems(asset.id);
-      notify(result?.exists ? t('library.messages.stemsCreated', 'Stem-Dateien wurden erzeugt.') : t('library.messages.stemsDone', 'Stem-Erzeugung wurde abgeschlossen.'), 'success');
-      await onReload?.();
+      if (result?.queued || result?.task_local_id || String(result?.status || '').toUpperCase() === 'RUNNING') {
+        notify(t('library.messages.stemsGenerationStarted', 'Stem-Erzeugung gestartet: Task #{{task}}.', { task: result.task_local_id || '—' }), 'info');
+        await onReload?.();
+        window.setTimeout(() => onReload?.(), 1200);
+      } else {
+        notify(result?.exists ? t('library.messages.stemsCreated', 'Stem-Dateien wurden erzeugt.') : t('library.messages.stemsDone', 'Stem-Erzeugung wurde abgeschlossen.'), 'success');
+        await onReload?.();
+      }
     } catch (err) {
       notify(err?.message || t('library.messages.stemsFailed', 'Stem-Erzeugung fehlgeschlagen.'), 'error');
     } finally {
@@ -3138,7 +3164,7 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
             >
               {rawOpen ? t('library.srt.hideRaw', 'Roh-SRT ausblenden') : t('library.srt.showRaw', 'Roh-SRT anzeigen')}
             </button>
-            {rawOpen && <pre className="large-pre srt-preview keyboard-scroll-region" onWheel={(event) => event.stopPropagation()} onTouchMove={(event) => event.stopPropagation()}>{state.srt_text}</pre>}
+            {rawOpen && <pre className="large-pre srt-preview keyboard-scroll-region">{state.srt_text}</pre>}
           </div>
         )}
       </div>
@@ -4005,26 +4031,27 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
     const text = pickPrompt(asset) || pickLyrics(asset) || '';
     const manualOverride = asset?.metadata_json?.lyrics_manual_override;
     return (
-      <div className="meta-card wide prompt-lyrics-card">
-        <div className="row between align-start prompt-lyrics-head">
-          <div>
-            <h4>{t('library.promptLyrics.title', 'Prompt / Lyrics')}</h4>
-            <small className="muted">{t('library.promptLyrics.sourceOfTruth', 'Source of Truth für Wiederverwenden und neue SRT-Erzeugungen')}</small>
-          </div>
+      <LibraryDetailAccordion
+        title={t('library.promptLyrics.title', 'Prompt / Lyrics')}
+        description={t('library.promptLyrics.sourceOfTruth', 'Source of Truth für Wiederverwenden und neue SRT-Erzeugungen')}
+        text={text}
+        maxPreviewLines={5}
+        className="prompt-lyrics-card"
+        actionSlot={(
           <div className="button-row compact prompt-lyrics-actions">
             <button type="button" onClick={async (event) => { event.stopPropagation(); await copyToClipboard(text); notify(t('library.messages.textCopied', 'Text kopiert.'), 'success'); }} disabled={!text}><Copy size={14} /> {t('common.copy', 'Kopieren')}</button>
             <button type="button" className="primary" onClick={(event) => openLyricsEditor(asset, event)}><Edit3 size={14} /> {t('stylesPage.edit', 'Bearbeiten')}</button>
           </div>
-        </div>
-        {manualOverride?.enabled && (
-          <p className="status cached prompt-lyrics-override-note">{t('library.promptLyrics.manuallyCorrected', 'Manuell korrigiert')} · {formatDate(manualOverride.updated_at)}</p>
         )}
-        <pre className="keyboard-scroll-region" onWheel={(event) => event.stopPropagation()} onTouchMove={(event) => event.stopPropagation()}>{text || '—'}</pre>
+        noticeSlot={manualOverride?.enabled ? (
+          <p className="status cached prompt-lyrics-override-note">{t('library.promptLyrics.manuallyCorrected', 'Manuell korrigiert')} · {formatDate(manualOverride.updated_at)}</p>
+        ) : null}
+      >
         <div className="button-row wrap">
           <button type="button" onClick={(event) => { event.stopPropagation(); saveAssetLyricsToArchive(asset); }} disabled={!text}>{t('library.promptLyrics.saveUnderLyrics', 'Unter Songtexte speichern')}</button>
           <button type="button" onClick={(event) => openLyricsEditor(asset, event)}><Edit3 size={14} /> {t('library.promptLyrics.correctForSrt', 'Für SRT korrigieren')}</button>
         </div>
-      </div>
+      </LibraryDetailAccordion>
     );
   }
 
@@ -4719,7 +4746,13 @@ ${generationOptionsText(asset)}`,
     const badges = assetContentBadges(asset, srtByAsset);
     const advanced = libraryFlatListMode === 'advanced';
     return (
-      <article className={`asset-flat-row is-${libraryFlatListMode} ${active ? 'is-playing-row' : ''} ${selectedIds.has(asset.id) ? 'is-selected' : ''}`} key={`flat-asset-${asset.id}`} data-react-asset-row={asset.id}>
+      <article
+        className={`asset-flat-row is-${libraryFlatListMode} ${active ? 'is-playing-row' : ''} ${selectedIds.has(asset.id) ? 'is-selected' : ''}`}
+        key={`flat-asset-${asset.id}`}
+        data-react-asset-row={asset.id}
+        onClick={(event) => openAssetFromLibraryClickArea(project, asset, event)}
+        title={t('library.openSongDetails', 'Songdetails öffnen')}
+      >
         <label className="asset-flat-select" title={t('library.selectAsset', '{{title}} auswählen', { title: pickTitle(asset) })} onPointerDown={(event) => event.stopPropagation()} onClick={(event) => event.stopPropagation()}>
           <input type="checkbox" checked={selectedIds.has(asset.id)} onChange={() => toggleSelected(asset.id)} aria-label={t('library.selectAsset', '{{title}} auswählen', { title: pickTitle(asset) })} />
         </label>
@@ -4918,185 +4951,93 @@ ${generationOptionsText(asset)}`,
       || activeProject.playable?.find?.((asset) => !isFallbackCoverUrl(pickCover(asset)))
       || activeProject.assets.find((asset) => !isFallbackCoverUrl(pickCover(asset)))
       || null;
+    const detailContext = {
+      activeProject,
+      playbackState,
+      closeProjectDetails,
+      previousProject,
+      nextProject,
+      openProjectDetails,
+      isCurrentProject,
+      isPlayingProject,
+      preservePlaybackClick,
+      playProject,
+      projectCoverAsset,
+      openPictureViewer,
+      downloadCoverImage,
+      isAssetFavorite,
+      toggleAssetFavorite,
+      favoriteSavingIds,
+      exportProjectJson,
+      exportProjectText,
+      saveProjectLyrics,
+      reuseProjectPrompt,
+      bulkActionBusy,
+      generateProjectSrt,
+      generateProjectStems,
+      selectedIds,
+      setSelectedIds,
+      openAllVariants,
+      collapseAllVariants,
+      deleteSelected,
+      dossierStats,
+      onPlay,
+      withVariantPlaybackMeta,
+      isVariantAccordionOpen,
+      toggleVariantAccordion,
+      liveSrtLineForAsset,
+      toggleSelected,
+      playAsset,
+      isCurrentAsset,
+      isPlayingAsset,
+      hasAssetVideo,
+      openVideoModalFromEvent,
+      variantEyebrow,
+      variantTitle,
+      isAssetFullyLocal,
+      audioStatusClass,
+      storageStatusLabel,
+      assetContentBadges,
+      srtByAsset,
+      voiceLabelForAsset,
+      setActionAsset,
+      openWorkflowWizard,
+      setPlaylistAsset,
+      renameAsset,
+      copyAssetInfo,
+      reuseAssetPrompt,
+      setTimestampAsset,
+      generateSrt,
+      srtLoadingIds,
+      generateLibraryAiTags,
+      convertAssetToWav,
+      wavLoadingIds,
+      canConvertAssetToWav,
+      readAssetWavConversion,
+      generateAssetStems,
+      stemLoadingIds,
+      isAudioLocal,
+      songDatabaseId,
+      assetDatabaseSummary,
+      isFallbackCoverUrl,
+      readLibraryAiTags,
+      voiceInfoForAsset,
+      notify,
+      InlineRenameTitle,
+      GenerationOptionsCard,
+      PromptLyricsCard,
+      LibraryAiTagsCard,
+      AudioAiAnalysisCard,
+      StemCard,
+      VideoSummaryCard,
+      SrtCard,
+      AssetContentManager,
+      AudioActionMenu,
+      t,
+    };
     return (
-      <section className={`page stack library-detail-page ${playbackState?.isPlaying ? 'is-playback-stable' : ''}`}>
-        <div className="detail-navigation-bar">
-          <button className="ghost compact" type="button" onClick={closeProjectDetails}><ArrowLeft size={16} /> {t('library.detail.backToLibrary', 'Zurück zur Library')}</button>
-          <div className="detail-navigation-actions">
-            <button className="ghost compact" type="button" disabled={!previousProject} onClick={(event) => previousProject && openProjectDetails(previousProject, event)}>← {t('library.detail.previousSong', 'Vorheriger Song')}</button>
-            <button className="ghost compact" type="button" disabled={!nextProject} onClick={(event) => nextProject && openProjectDetails(nextProject, event)}>{t('library.detail.nextSong', 'Nächster Song')} →</button>
-          </div>
-        </div>
-        <div className="detail-hero library-hero">
-          <button className={`hero-cover-button ${isCurrentProject(activeProject) ? 'is-active-cover' : ''}`} type="button" onClick={(event) => preservePlaybackClick(event, () => playProject(activeProject))} title={isPlayingProject(activeProject) ? t('player.pause', 'Pause') : t('library.detail.playBestVersion', 'Beste Version abspielen')}>
-            <img src={activeProject.cover || '/static/favicon.ico'} alt="Cover" onError={handleCoverImageError} />
-            <span>{isPlayingProject(activeProject) ? <Pause size={18} /> : <Play size={18} fill="currentColor" />}</span>
-          </button>
-          <div>
-            <p className="eyebrow">{t('library.detail.projectSong', 'Projekt / Song')}</p>
-            <InlineRenameTitle asset={activeProject.assets[0]} title={activeProject.title} className="detail-hero-title" heading />
-            <p className="muted">{t('library.detail.projectMeta', '{{variants}} Varianten · {{operations}} Vorgänge · erstellt {{created}} · aktualisiert {{updated}}', { variants: activeProject.assets.length, operations: activeProject.operations.length, created: formatDate(activeProject.created_at), updated: formatDate(activeProject.updated_at) })}</p>
-            <p className="muted">{summarizeStyle(pickStyle(activeProject.assets.find((asset) => pickStyle(asset))), 220, t)}</p>
-            {activeProject.assets.some((asset) => voiceLabelForAsset(asset)) && <p className="muted voice-detail-line">{t('library.detail.voice', 'Stimme')}: <strong>{voiceLabelForAsset(activeProject.assets.find((asset) => voiceLabelForAsset(asset)))}</strong></p>}
-            <div className="button-row wrap">
-              <button type="button" onClick={() => openPictureViewer(projectCoverAsset)} disabled={!projectCoverAsset}><Maximize2 size={16} /> {t('library.actions.viewCoverLarge', 'Cover groß anzeigen')}</button>
-              <button type="button" onClick={() => downloadCoverImage(projectCoverAsset)} disabled={!projectCoverAsset}><Download size={16} /> {t('library.actions.downloadCover', 'Cover herunterladen')}</button>
-              <button type="button" onClick={() => { const best = activeProject.assets.find((item) => isAssetFavorite(item)) || activeProject.playable?.[0] || activeProject.assets[0]; if (best) toggleAssetFavorite(best, !isAssetFavorite(best)); }} disabled={!activeProject.assets.length || Boolean(favoriteSavingIds.size)}><ThumbsUp size={16} fill={activeProject.assets.some((item) => isAssetFavorite(item)) ? 'currentColor' : 'none'} /> {activeProject.assets.some((item) => isAssetFavorite(item)) ? t('library.actions.removeFavorite', 'Favorit entfernen') : t('library.actions.saveFavorite', 'Als Favorit speichern')}</button>
-              <button type="button" onClick={() => exportProjectJson(activeProject)}>Projekt JSON</button>
-              <button type="button" onClick={() => exportProjectText(activeProject)}>TXT Export</button>
-              <button type="button" onClick={() => saveProjectLyrics(activeProject)}>{t('library.actions.saveLyrics', 'Songtext speichern')}</button>
-              <button type="button" onClick={() => reuseProjectPrompt(activeProject)}>{t('library.actions.reuse', 'Reuse Prompt')}</button>
-              <button type="button" onClick={() => generateProjectSrt(activeProject)} disabled={Boolean(bulkActionBusy)}><FileText size={16} /> {bulkActionBusy === 'srt' ? t('library.bulk.srtRunning', 'SRT läuft…') : t('library.detail.createAllSrt', 'Alle SRT erzeugen')}</button>
-              <button type="button" onClick={() => generateProjectStems(activeProject)} disabled={Boolean(bulkActionBusy)}><Headphones size={16} /> {bulkActionBusy === 'stems' ? t('library.bulk.stemsRunning', 'Stems laufen…') : t('library.detail.createAllStems', 'Alle Stems erzeugen')}</button>
-              <a className="button primary" href={api.archive.bulkAssetBundleUrl(activeProject.assets.map((asset) => asset.id))}><Download size={16} /> {t('library.detail.allAsZip', 'Alle als ZIP')}</a>
-              <button type="button" onClick={() => setSelectedIds(new Set(activeProject.assets.map((asset) => asset.id)))}>{t('library.detail.selectAll', 'Alle auswählen')}</button>
-              <button type="button" onClick={() => setSelectedIds(new Set())}>{t('library.bulk.clearSelection', 'Auswahl aufheben')}</button>
-              <button type="button" onClick={() => openAllVariants(activeProject)}>{t('library.detail.openAllVariants', 'Alle Varianten öffnen')}</button>
-              <button type="button" onClick={() => collapseAllVariants(activeProject)}>{t('library.detail.collapseAllVariants', 'Alle Varianten zuklappen')}</button>
-              <button className="danger" type="button" onClick={() => deleteSelected(activeProject)} disabled={!selectedIds.size}><Trash2 size={16} /> {t('library.detail.deleteSelection', 'Auswahl löschen')}</button>
-            </div>
-          </div>
-        </div>
-
-        <section className="panel project-dossier-panel">
-          <div>
-            <p className="eyebrow">{t('library.detail.dossier', 'Projektakte')}</p>
-            <h2>{t('library.detail.backupVersions', 'Sicherung & Versionen')}</h2>
-            <p className="muted">{t('library.detail.dossierText', 'Alle Varianten, lokalen Dateien und Produktionsdaten dieses Songs auf einen Blick.')}</p>
-          </div>
-          <div className="live-status-grid dossier-grid">
-            <span><strong>{dossierStats.audioLocal}/{activeProject.assets.length}</strong><small>{t('library.localFilter.audioLocal', 'Audio lokal')}</small></span>
-            <span><strong>{dossierStats.coverLocal}/{activeProject.assets.length}</strong><small>{t('library.localFilter.coverLocal', 'Cover lokal')}</small></span>
-            <span><strong>{dossierStats.prompts}</strong><small>Prompts/Lyrics</small></span>
-            <span><strong>{dossierStats.payloads}</strong><small>Payloads</small></span>
-            <span><strong>{dossierStats.favorite}</strong><small>{t('library.favorites', 'Favoriten')}</small></span>
-            <span><strong>{dossierStats.final ? t('common.yes', 'Ja') : t('common.no', 'Nein')}</strong><small>{t('library.detail.finalMarked', 'Final markiert')}</small></span>
-          </div>
-        </section>
-
-        {(() => {
-          const projectQueue = activeProject.assets.filter(isPlayable).map((asset) => withVariantPlaybackMeta(asset, activeProject));
-          return (
-            <article className="operation-section" key={`${activeProject.id}-variants`}>
-              <header className="operation-header">
-                <div>
-                  <p className="eyebrow">{t('library.stats.variants', 'Varianten')}</p>
-                  <h2>{activeProject.title} · {t('library.detail.variantCount', '{{count}} Variante(n)', { count: activeProject.assets.length })}</h2>
-                  <p className="muted">{t('library.detail.operationsCreatedUpdated', '{{operations}} Vorgänge · erstellt {{created}} · zuletzt aktualisiert {{updated}}', { operations: activeProject.operations.length, created: formatDate(activeProject.created_at), updated: formatDate(activeProject.updated_at) })}</p>
-                </div>
-                <button type="button" onClick={() => onPlay(projectQueue, 0)} disabled={!projectQueue.length}>{t('library.detail.playAllVariants', 'Alle Varianten abspielen')}</button>
-              </header>
-              <div className="variant-grid compact-variants">
-                {activeProject.assets.map((asset, index) => {
-                  const playbackAsset = withVariantPlaybackMeta(asset, activeProject);
-                  const variantOpen = isVariantAccordionOpen(asset, index);
-                  const collapsedSrtLine = !variantOpen ? liveSrtLineForAsset(asset) : null;
-                  return (
-                    <article className={`variant-card horizontal variant-accordion-card ${variantOpen ? 'is-open' : 'is-collapsed'} ${isCurrentAsset(asset) ? 'is-playing-row' : ''}`} key={asset.id} data-react-asset-row={asset.id}>
-                      <label className="select-box"><input type="checkbox" checked={selectedIds.has(asset.id)} onChange={() => toggleSelected(asset.id)} /></label>
-                      <div className="variant-cover-column">
-                        <button className={`variant-cover-button ${isCurrentAsset(asset) ? 'is-active-cover' : ''}`} type="button" onClick={(event) => preservePlaybackClick(event, () => playAsset(playbackAsset, projectQueue, index, activeProject))} disabled={!isPlayable(asset)} title={isPlayingAsset(asset) ? t('player.pause', 'Pause') : t('player.play', 'Abspielen')}>
-                          <img src={pickCover(asset)} alt="Cover" onError={handleCoverImageError} />
-                          <span>{isPlayingAsset(asset) ? <Pause size={18} /> : <Play size={18} fill="currentColor" />}</span>
-                        </button>
-                        {hasAssetVideo(asset) && <button type="button" className="primary mp4-watch-button variant-cover-mp4-button" onClick={(event) => openVideoModalFromEvent(event, asset)}><Film size={14} /> {t('library.video.watchMp4Short', 'MP4')}</button>}
-                      </div>
-                      <div className="variant-body">
-                        <button className="variant-accordion-toggle" type="button" onClick={() => toggleVariantAccordion(asset, index)} aria-expanded={variantOpen}>
-                          <span className="variant-accordion-title">
-                            <span className="variant-accordion-icon">{variantOpen ? <ChevronDown size={17} /> : <ChevronRight size={17} />}</span>
-                            <span>
-                              <p className="eyebrow">{variantEyebrow(asset, activeProject, t)}</p>
-                              <h3>{variantTitle(asset, activeProject)}</h3>
-                            </span>
-                          </span>
-                          <span className="variant-accordion-badges">
-                            <span className={`status ${isAssetFullyLocal(asset) ? 'cached' : audioStatusClass(asset)}`}>{storageStatusLabel(asset, t)}</span>
-                            {assetContentBadges(asset, srtByAsset).map((badge) => <span key={badge.key} className={`status ${badge.className || 'cached'}`}>{badge.label}</span>)}
-                            <span className="muted compact-only">{formatDuration(asset.duration_seconds)}</span>
-                          </span>
-                        </button>
-                        <button
-                          type="button"
-                          className="variant-title-edit-button inline-title-edit-button"
-                          onClick={(event) => { event.preventDefault(); event.stopPropagation(); renameAsset(asset); }}
-                          title={t('library.actions.renameTitle', 'Titel ändern')}
-                          aria-label={t('library.actions.renameTitle', 'Titel ändern')}
-                        >
-                          <Edit3 size={13} />
-                        </button>
-                        {variantOpen && (
-                          <>
-                        <p className="muted">{formatDuration(asset.duration_seconds)} · songs.id {songDatabaseId(asset) ?? '—'} · audio_assets.id {asset.id} · Audio-ID {shortId(asset.audio_id, 14)} · Task {shortId(asset.suno_task_id, 14)}{voiceLabelForAsset(asset) ? ` · ${t('library.detail.voice', 'Stimme')} ${voiceLabelForAsset(asset)}` : ''}</p>
-                          {isCurrentAsset(asset) && <div className="library-inline-waveform"><span>{playbackState?.isPlaying ? t('library.playback.running', 'Läuft') : t('library.playback.ready', 'Bereit')} · {formatDuration(playbackState?.currentTime || 0)} / {formatDuration(playbackState?.duration || asset.duration_seconds)}</span><Waveform asset={asset} compact currentTime={playbackState?.currentTime || 0} durationSeconds={playbackState?.duration || asset.duration_seconds} interactive={false} /></div>}
-                          <div className="button-row wrap">
-                            <button type="button" className={isAssetFavorite(asset) ? 'favorite-action is-favorite' : 'favorite-action'} onClick={() => toggleAssetFavorite(asset)} disabled={favoriteSavingIds.has(asset.id)}><ThumbsUp size={15} fill={isAssetFavorite(asset) ? 'currentColor' : 'none'} /> {t('library.favorites', 'Favoriten')}</button>
-                            <button type="button" className="stable-detail-action-button" onClick={() => setActionAsset(playbackAsset)}><MoreHorizontal size={15} /> {t('library.actionModal.title', 'Aktionen')}</button>
-                            <button type="button" onClick={() => openPictureViewer(asset)} disabled={isFallbackCoverUrl(pickCover(asset))}><Maximize2 size={15} /> {t('library.actions.viewCoverLarge', 'Cover groß anzeigen')}</button>
-                            <button type="button" onClick={() => downloadCoverImage(asset)} disabled={isFallbackCoverUrl(pickCover(asset))}><Download size={15} /> {t('library.actions.downloadCover', 'Cover')}</button>
-                            <button type="button" onClick={() => convertAssetToWav(asset, { download: true })} disabled={wavLoadingIds.has(asset.id) || !canConvertAssetToWav(asset)}><Download size={15} /> {wavLoadingIds.has(asset.id) ? t('library.actions.converting', 'Konvertiere…') : t('library.actions.convertToWav', 'Convert to WAV')}</button>
-                            {readAssetWavConversion(asset).available && <a className="button" href={api.archive.wavDownloadUrl(asset.id)}><Download size={15} /> WAV</a>}
-                            <button type="button" onClick={() => renameAsset(asset)}><Edit3 size={15} /> {t('common.title', 'Titel')}</button>
-                            <button type="button" onClick={() => copyAssetInfo(asset)}><Copy size={15} /> {t('common.copy', 'Kopieren')}</button>
-                            <button type="button" onClick={() => reuseAssetPrompt(asset)}>{t('library.actions.reusePrompt', 'Reuse Prompt')}</button>
-                            <button type="button" onClick={() => setTimestampAsset(asset)}><Clock3 size={15} /> {t('library.timestamped.title', 'Timestamped Lyrics')}</button>
-                            <button type="button" onClick={() => openWorkflowWizard(asset)}><FileText size={15} /> {t('library.workflow.audioWizard', 'Audio-Wizard')}</button>
-                            <button type="button" onClick={() => generateSrt(asset)} disabled={srtLoadingIds.has(asset.id)}><FileText size={15} /> {srtLoadingIds.has(asset.id) ? t('library.bulk.srtRunning', 'SRT läuft…') : t('library.bulk.createSrt', 'SRT erzeugen')}</button>
-                            <button type="button" onClick={() => generateAssetStems(asset)} disabled={stemLoadingIds.has(asset.id) || !isAudioLocal(asset)}><Headphones size={15} /> {stemLoadingIds.has(asset.id) ? t('library.bulk.stemsRunning', 'Stems laufen…') : t('library.content.stemFiles', 'Stem-Dateien')}</button>
-                            <button type="button" onClick={() => generateLibraryAiTags(asset, Boolean(readLibraryAiTags(asset)))}><Tag size={15} /> {t('library.aiTags.title', 'KI-Tags')}</button>
-                            <button type="button" onClick={() => onOpenDaw?.(asset)}><Scissors size={15} /> {t('library.actions.openInMiniDaw', 'In Mini-DAW öffnen')}</button>
-                            <button type="button" onClick={() => setPlaylistAsset(asset)}><Plus size={15} /> {t('nav.playlists', 'Playlists')}</button>
-                            <a className="button primary" href={api.archive.assetBundleUrl(asset.id)}><Download size={15} /> {t('library.actions.audioPackageZip', 'Audio-Paket ZIP')}</a>
-                            <a className="button" href={api.archive.downloadUrl(asset.id)}><Download size={15} /> {t('library.actions.downloadAudio', 'Audio herunterladen')}</a>
-                          </div>
-                          <div className="variant-meta-grid">
-                            <div className="meta-card"><div className="row between"><h4>{t('library.meta.database', 'Datenbank')}</h4><button type="button" onClick={async () => { await copyToClipboard(assetDatabaseSummary(asset)); notify(t('library.messages.databaseIdsCopied', 'Datenbank-IDs kopiert.'), 'success'); }}><Copy size={14} /></button></div><p>songs.id: {songDatabaseId(asset) ?? '—'}<br />audio_assets.id: {asset.id}</p></div>
-                            <div className="meta-card"><div className="row between"><h4>{t('library.meta.model', 'Modell')}</h4><button type="button" onClick={async () => { await copyToClipboard(pickModel(asset)); notify(t('library.messages.modelCopied', 'Modell kopiert.'), 'success'); }}><Copy size={14} /></button></div><p>{pickModel(asset) || '—'}</p></div>
-                            <div className="meta-card"><div className="row between"><h4>Audio-ID</h4><button type="button" onClick={async () => { await copyToClipboard(asset.audio_id); notify(t('library.messages.audioIdCopied', 'Audio-ID kopiert.'), 'success'); }}><Copy size={14} /></button></div><p>{asset.audio_id || '—'}</p></div>
-                            <div className="meta-card"><div className="row between"><h4>Task-ID</h4><button type="button" onClick={async () => { await copyToClipboard(asset.suno_task_id || asset.task_id); notify(t('library.messages.taskIdCopied', 'Task-ID kopiert.'), 'success'); }}><Copy size={14} /></button></div><p>{asset.suno_task_id || asset.task_id || '—'}</p></div>
-                            <div className="meta-card"><div className="row between"><h4>{t('library.detail.voice', 'Stimme')}</h4><button type="button" disabled={!voiceInfoForAsset(asset)?.id} onClick={async () => { await copyToClipboard(voiceInfoForAsset(asset)?.id || ''); notify(t('library.messages.voiceIdCopied', 'Voice-ID kopiert.'), 'success'); }}><Copy size={14} /></button></div><p>{voiceLabelForAsset(asset) || '—'}</p></div>
-                            <GenerationOptionsCard asset={asset} />
-                            <div className="meta-card wide"><div className="row between"><h4>Style</h4><button type="button" onClick={async () => { await copyToClipboard(pickStyle(asset)); notify(t('library.messages.styleCopied', 'Style kopiert.'), 'success'); }}><Copy size={14} /></button></div><p>{pickStyle(asset) || '—'}</p></div>
-                            <PromptLyricsCard asset={asset} />
-                            <LibraryAiTagsCard asset={asset} />
-                            <AudioAiAnalysisCard asset={asset} />
-                            <StemCard asset={asset} />
-                            {hasAssetVideo(asset) && <VideoSummaryCard asset={asset} />}
-                            <SrtCard asset={asset} />
-                            <AssetContentManager asset={asset} />
-                          </div>
-                          <details className="tech-details"><summary>{t('library.meta.rawTechnicalData', 'Technische Rohdaten')}</summary><pre className="keyboard-scroll-region" onWheel={(event) => event.stopPropagation()} onTouchMove={(event) => event.stopPropagation()}>{JSON.stringify(asset, null, 2)}</pre></details>
-                            </>
-                        )}
-                        {!variantOpen && (
-                          <div className="variant-collapsed-summary">
-                            <div className="variant-collapsed-copy">
-                              <span className="variant-collapsed-meta">{formatDuration(asset.duration_seconds)} · songs.id {songDatabaseId(asset) ?? '—'} · audio_assets.id {asset.id} · Audio-ID {shortId(asset.audio_id, 12)} · Task {shortId(asset.suno_task_id, 12)}</span>
-                              {collapsedSrtLine?.text && (
-                                <span className={`variant-collapsed-srt ${collapsedSrtLine.isPlaying ? 'is-live' : ''}`}>
-                                  <span>SRT</span>
-                                  <strong>{collapsedSrtLine.text}</strong>
-                                </span>
-                              )}
-                            </div>
-                            <div className="button-row wrap">
-                              <button type="button" className={isAssetFavorite(asset) ? 'favorite-action is-favorite' : 'favorite-action'} onClick={() => toggleAssetFavorite(asset)} disabled={favoriteSavingIds.has(asset.id)}><ThumbsUp size={15} fill={isAssetFavorite(asset) ? 'currentColor' : 'none'} /></button>
-                              <AudioActionMenu asset={playbackAsset} compact label="" dropUp />
-                              <button type="button" onClick={() => toggleVariantAccordion(asset, index)}>{t('library.detail.showDetails', 'Details anzeigen')}</button>
-                              <button type="button" onClick={() => openWorkflowWizard(asset)}><FileText size={15} /> Wizard</button>
-                              <a className="button primary" href={api.archive.assetBundleUrl(asset.id)}><Download size={15} /> ZIP</a>
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    </article>
-                  );
-                })}
-              </div>
-            </article>
-          );
-        })()}
-
+      <>
+        <LibrarySongDetails ctx={detailContext} />
         <AssetWorkflowWizardModal asset={workflowWizardAsset} />
         <ManualAudioImportModal />
         {renderAiCoverModal()}
@@ -5135,8 +5076,7 @@ ${generationOptionsText(asset)}`,
           onClose={() => setActionAsset(null)}
           onAction={runAction}
           onDelete={deleteAsset}
-          onOpenDaw={onOpenDaw}
-          onReuse={reuseAssetPrompt}
+            onReuse={reuseAssetPrompt}
           onPrepareExtend={prepareAssetExtendInMusic}
           onRename={renameAsset}
           onCopy={copyAssetInfo}
@@ -5158,7 +5098,7 @@ ${generationOptionsText(asset)}`,
           isAssetFavorite={isAssetFavorite}
           favoriteSavingIds={favoriteSavingIds}
         />
-      </section>
+      </>
     );
   }
 
@@ -5212,72 +5152,116 @@ ${generationOptionsText(asset)}`,
           const projectActive = Boolean(currentProjectAsset);
           const projectPlaying = isPlayingProject(project);
           const projectQueue = (project.playable.length ? project.playable : project.assets.filter(isPlayable)).map((asset) => withVariantPlaybackMeta(asset, project)).filter(isPlayable);
+          const projectStyleSummary = summarizeStyle(pickStyle(project.assets.find((asset) => pickStyle(asset))), 180, t);
           return (
-            <article className={`project-row suno-row ${projectActive ? 'is-playing-row' : ''}`} key={project.id}>
-              <button className={`cover-button ${projectActive ? 'is-active-cover' : ''}`} type="button" onClick={() => playProject(project)} title={projectPlaying ? t('player.pause', 'Pause') : t('library.playDirectly', 'Direkt abspielen')}>
+            <article className={`project-row suno-row library-song-row ${projectActive ? 'is-playing-row' : ''}`} key={project.id}>
+              <button className={`cover-button library-song-cover ${projectActive ? 'is-active-cover' : ''}`} type="button" onClick={(event) => preservePlaybackClick(event, () => playProject(project))} title={projectPlaying ? t('player.pause', 'Pause') : t('library.playDirectly', 'Direkt abspielen')}>
                 <img src={project.cover || '/static/favicon.ico'} alt="Cover" onError={handleCoverImageError} />
                 <span className="cover-play">{projectPlaying ? <Pause size={18} /> : <Play size={18} fill="currentColor" />}</span>
               </button>
-              <div className="project-row-main">
-                <InlineRenameTitle
-                  asset={project.assets[0]}
-                  title={project.title}
-                  subtitle={t('library.projectStatsLine', '{{variants}} Varianten · {{operations}} Vorgänge · {{playable}} abspielbar', { variants: project.assets.length, operations: project.operations.length, playable: project.playable.length })}
-                  className="title-button"
-                  onOpen={(event) => openProjectDetails(project, event)}
-                />
-                <small className="title-button-summary">{summarizeStyle(pickStyle(project.assets.find((asset) => pickStyle(asset))), 160, t)}</small>
-                {projectActive && currentProjectAsset && (
-                  <div className="library-inline-waveform project-waveform">
-                    <span>{projectPlaying ? t('library.playback.nowPlaying', 'Jetzt läuft') : t('library.playback.ready', 'Bereit')} · {formatDuration(playbackState?.currentTime || 0)} / {formatDuration(playbackState?.duration || currentProjectAsset.duration_seconds)}</span>
-                    <Waveform asset={currentProjectAsset} compact currentTime={playbackState?.currentTime || 0} durationSeconds={playbackState?.duration || currentProjectAsset.duration_seconds} interactive={false} />
-                  </div>
-                )}
-                <div className="project-audio-actions-strip" aria-label={t('library.audioQuickActions', 'Audio-Schnellaktionen')}>
-                  {project.assets.map((asset, index) => {
-                    return (
-	                    <div className={`project-audio-action-pill ${isCurrentAsset(asset) ? 'is-current' : ''} ${selectedIds.has(asset.id) ? 'is-selected' : ''}`} key={`project-action-${project.id}-${asset.id}`}>
-	                      <label className="project-audio-select-mini" title={t('library.selectAsset', '{{title}} auswählen', { title: variantTitle(asset, project) })}>
-	                        <input type="checkbox" checked={selectedIds.has(asset.id)} onChange={() => toggleSelected(asset.id)} aria-label={t('library.selectAsset', '{{title}} auswählen', { title: variantTitle(asset, project) })} />
-	                      </label>
-                      <span className="project-audio-title-mini inline-title-edit">
-                        <button type="button" className="inline-title-main" onClick={(event) => openProjectDetails(project, event)} title={variantTitle(asset, project)}>
-                          <strong>{index + 1}/{project.assets.length || 1}</strong>
-                          <span>{variantTitle(asset, project)}</span>
-                        </button>
-                        <button
-                          type="button"
-                          className="inline-title-edit-button"
-                          onClick={(event) => { event.preventDefault(); event.stopPropagation(); renameAsset(asset); }}
-                          title={t('library.actions.renameTitle', 'Titel ändern')}
-                          aria-label={t('library.actions.renameTitle', 'Titel ändern')}
-                        >
-                          <Edit3 size={12} />
-                        </button>
-                      </span>
-                      <button type="button" className={isAssetFavorite(asset) ? 'project-audio-favorite-mini is-favorite' : 'project-audio-favorite-mini'} onClick={(event) => { event.stopPropagation(); toggleAssetFavorite(asset); }} disabled={favoriteSavingIds.has(asset.id)} title={isAssetFavorite(asset) ? t('library.actions.removeFavorite', 'Favorit entfernen') : t('library.actions.saveFavorite', 'Als Favorit speichern')}>
-                        <ThumbsUp size={13} fill={isAssetFavorite(asset) ? 'currentColor' : 'none'} />
-                      </button>
-                      <AudioActionMenu asset={asset} compact label="" dropUp />
+              <div className="project-row-main library-song-main">
+                <div
+                  className="library-song-open-zone"
+                  onClick={(event) => openProjectFromLibraryClickArea(project, event)}
+                  title={t('library.openSongDetails', 'Songdetails öffnen')}
+                >
+                  <div className="library-song-head">
+                    <InlineRenameTitle
+                      asset={project.assets[0]}
+                      title={project.title}
+                      subtitle={t('library.projectStatsLine', '{{variants}} Varianten · {{operations}} Vorgänge · {{playable}} abspielbar', { variants: project.assets.length, operations: project.operations.length, playable: project.playable.length })}
+                      className="title-button library-song-title"
+                      onOpen={(event) => openProjectDetails(project, event)}
+                    />
+                    <div className="project-actions library-song-status" aria-label={t('library.projectStatus', 'Projektstatus')}>
+                      <div className="project-badges library-song-badges">
+                        <span className="status cached"><ListMusic size={14} /> {formatDuration(project.duration)}</span>
+                        {isProjectFullyLocal(project) && <span className="status cached">{fullLocalLabel(t)}</span>}
+                        {projectContentBadgeLabel(project, isDawAsset, 'DAW') && <span className="status cached">{projectContentBadgeLabel(project, isDawAsset, 'DAW')}</span>}
+                        {projectContentBadgeLabel(project, isUploadedAudioAsset, 'UPLOAD') && <span className="status cached">{projectContentBadgeLabel(project, isUploadedAudioAsset, 'UPLOAD')}</span>}
+                        {projectContentBadgeLabel(project, isSunoComImportAsset, 'SUNO') && <span className="status cached">{projectContentBadgeLabel(project, isSunoComImportAsset, 'SUNO')}</span>}
+                        {projectContentBadgeLabel(project, isSunoApiImportAsset, 'API') && <span className="status cached">{projectContentBadgeLabel(project, isSunoApiImportAsset, 'API')}</span>}
+                        {projectContentBadgeLabel(project, isExtendedAsset, 'EXT') && <span className="status cached">{projectContentBadgeLabel(project, isExtendedAsset, 'EXT')}</span>}
+                        {projectContentBadgeLabel(project, (asset) => hasAssetSrt(asset, srtByAsset), 'SRT') && <span className="status cached">{projectContentBadgeLabel(project, (asset) => hasAssetSrt(asset, srtByAsset), 'SRT')}</span>}
+                        {projectContentBadgeLabel(project, (asset) => assetContentBadges(asset, srtByAsset).some((badge) => badge.key === 'stems'), 'STEMS') && <span className="status cached">{projectContentBadgeLabel(project, (asset) => assetContentBadges(asset, srtByAsset).some((badge) => badge.key === 'stems'), 'STEMS')}</span>}
+                        {projectContentBadgeLabel(project, (asset) => assetContentBadges(asset, srtByAsset).some((badge) => badge.key === 'wav'), 'WAV') && <span className="status cached">{projectContentBadgeLabel(project, (asset) => assetContentBadges(asset, srtByAsset).some((badge) => badge.key === 'wav'), 'WAV')}</span>}
+                      </div>
                     </div>
-                  );})}
+                  </div>
+                  {projectStyleSummary && <small className="title-button-summary library-song-summary">{projectStyleSummary}</small>}
+                  {projectActive && currentProjectAsset && (
+                    <div className="library-inline-waveform project-waveform">
+                      <span>{projectPlaying ? t('library.playback.nowPlaying', 'Jetzt läuft') : t('library.playback.ready', 'Bereit')} · {formatDuration(playbackState?.currentTime || 0)} / {formatDuration(playbackState?.duration || currentProjectAsset.duration_seconds)}</span>
+                      <Waveform asset={currentProjectAsset} compact currentTime={playbackState?.currentTime || 0} durationSeconds={playbackState?.duration || currentProjectAsset.duration_seconds} interactive={false} />
+                    </div>
+                  )}
                 </div>
-              </div>
-              <div className="project-actions">
-                <div className="project-badges">
-                  <span className="status cached"><ListMusic size={14} /> {formatDuration(project.duration)}</span>
-                  {isProjectFullyLocal(project) && <span className="status cached">{fullLocalLabel(t)}</span>}
-                  {projectContentBadgeLabel(project, isDawAsset, 'DAW') && <span className="status cached">{projectContentBadgeLabel(project, isDawAsset, 'DAW')}</span>}
-                  {projectContentBadgeLabel(project, isUploadedAudioAsset, 'UPLOAD') && <span className="status cached">{projectContentBadgeLabel(project, isUploadedAudioAsset, 'UPLOAD')}</span>}
-                  {projectContentBadgeLabel(project, isSunoComImportAsset, 'SUNO') && <span className="status cached">{projectContentBadgeLabel(project, isSunoComImportAsset, 'SUNO')}</span>}
-                  {projectContentBadgeLabel(project, isSunoApiImportAsset, 'API') && <span className="status cached">{projectContentBadgeLabel(project, isSunoApiImportAsset, 'API')}</span>}
-                  {projectContentBadgeLabel(project, isExtendedAsset, 'EXT') && <span className="status cached">{projectContentBadgeLabel(project, isExtendedAsset, 'EXT')}</span>}
-                  {projectContentBadgeLabel(project, (asset) => hasAssetSrt(asset, srtByAsset), 'SRT') && <span className="status cached">{projectContentBadgeLabel(project, (asset) => hasAssetSrt(asset, srtByAsset), 'SRT')}</span>}
-                  {projectContentBadgeLabel(project, (asset) => assetContentBadges(asset, srtByAsset).some((badge) => badge.key === 'stems'), 'STEMS') && <span className="status cached">{projectContentBadgeLabel(project, (asset) => assetContentBadges(asset, srtByAsset).some((badge) => badge.key === 'stems'), 'STEMS')}</span>}
-                  {projectContentBadgeLabel(project, (asset) => assetContentBadges(asset, srtByAsset).some((badge) => badge.key === 'wav'), 'WAV') && <span className="status cached">{projectContentBadgeLabel(project, (asset) => assetContentBadges(asset, srtByAsset).some((badge) => badge.key === 'wav'), 'WAV')}</span>}
-                </div>
-                <div className="project-action-buttons">
-                  <button type="button" onClick={() => onOpenDaw?.(project.playable[0] || project.assets[0])}><Scissors size={16} /> {t('library.actions.openInMiniDaw', 'In Mini-DAW öffnen')}</button>
+                <div className="library-variant-panel" aria-label={t('library.audioQuickActions', 'Audio-Schnellaktionen')}>
+                  <div className="library-variant-panel-head">
+                    <span>{t('library.stats.variants', 'Varianten')}</span>
+                    <small>{t('library.variantsPlayableShort', '{{variants}} Varianten · {{playable}} abspielbar', { variants: project.assets.length, playable: project.playable.length })}</small>
+                  </div>
+                  <div className="library-variant-list" role="list">
+                    {project.assets.map((asset, index) => {
+                      const playbackAsset = withVariantPlaybackMeta(asset, project);
+                      const variantBadges = assetContentBadges(asset, srtByAsset).slice(0, 4);
+                      const variantPlayable = isPlayable(asset);
+                      const variantCurrent = isCurrentAsset(asset);
+                      const variantPlaying = isPlayingAsset(asset);
+                      const variantDuration = formatDuration(asset.duration_seconds || 0);
+                      const variantStatus = isAudioLocal(asset) ? fullLocalLabel(t) : audioStatusLabel(asset, t);
+                      const variantDisplayTitle = variantTitle(asset, project);
+                      const variantOperation = operationLabel(asset.operation_type || asset.task_type || asset.operation_label, t);
+                      return (
+                        <div className={`library-variant-row ${variantCurrent ? 'is-current' : ''} ${selectedIds.has(asset.id) ? 'is-selected' : ''}`} key={`project-action-${project.id}-${asset.id}`} role="listitem" data-react-asset-row={asset.id}>
+                          <button
+                            type="button"
+                            className="library-variant-row-play"
+                            onClick={(event) => preservePlaybackClick(event, () => playAsset(playbackAsset, projectQueue, index, project))}
+                            disabled={!variantPlayable}
+                            title={variantPlaying ? t('player.pause', 'Pause') : t('player.play', 'Abspielen')}
+                            aria-label={variantPlaying ? t('player.pause', 'Pause') : t('player.play', 'Abspielen')}
+                          >
+                            {variantPlaying ? <Pause size={14} /> : <Play size={14} fill="currentColor" />}
+                          </button>
+                          <label className="library-variant-row-select" title={t('library.selectAsset', '{{title}} auswählen', { title: variantDisplayTitle })}>
+                            <input type="checkbox" checked={selectedIds.has(asset.id)} onChange={() => toggleSelected(asset.id)} aria-label={t('library.selectAsset', '{{title}} auswählen', { title: variantDisplayTitle })} />
+                          </label>
+                          <button type="button" className="library-variant-row-main" onClick={(event) => openProjectDetails(project, event)} title={variantDisplayTitle}>
+                            <span className="library-variant-row-version">V{index + 1}</span>
+                            <span className="library-variant-row-copy">
+                              <strong>{variantOperation}</strong>
+                              <small>{variantDisplayTitle}</small>
+                            </span>
+                          </button>
+                          <span className="library-variant-row-meta" aria-label={t('library.variantMeta', 'Varianten-Metadaten')}>
+                            <span>{variantDuration}</span>
+                            <span>{variantStatus}</span>
+                          </span>
+                          {!!variantBadges.length && (
+                            <span className="library-variant-row-badges" aria-label={t('library.content.availableContent', 'Verfügbare Inhalte')}>
+                              {variantBadges.map((badge) => <span className={`status ${badge.className || 'cached'}`} key={`${asset.id}-${badge.key}`}>{badge.label}</span>)}
+                            </span>
+                          )}
+                          <span className="library-variant-row-actions">
+                            <button
+                              type="button"
+                              className="inline-title-edit-button library-variant-row-edit"
+                              onClick={(event) => { event.preventDefault(); event.stopPropagation(); renameAsset(asset); }}
+                              title={t('library.actions.renameTitle', 'Titel ändern')}
+                              aria-label={t('library.actions.renameTitle', 'Titel ändern')}
+                            >
+                              <Edit3 size={12} />
+                            </button>
+                            <button type="button" className={isAssetFavorite(asset) ? 'library-variant-row-favorite is-favorite' : 'library-variant-row-favorite'} onClick={(event) => { event.stopPropagation(); toggleAssetFavorite(asset); }} disabled={favoriteSavingIds.has(asset.id)} title={isAssetFavorite(asset) ? t('library.actions.removeFavorite', 'Favorit entfernen') : t('library.actions.saveFavorite', 'Als Favorit speichern')}>
+                              <ThumbsUp size={13} fill={isAssetFavorite(asset) ? 'currentColor' : 'none'} />
+                            </button>
+                            <AudioActionMenu asset={asset} compact label="" dropUp playQueue={projectQueue} playIndex={index} project={project} />
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
                 </div>
               </div>
             </article>
@@ -5333,7 +5317,6 @@ ${generationOptionsText(asset)}`,
         onClose={() => setActionAsset(null)}
         onAction={runAction}
         onDelete={deleteAsset}
-        onOpenDaw={onOpenDaw}
         onReuse={reuseAssetPrompt}
         onPrepareExtend={prepareAssetExtendInMusic}
         onRename={renameAsset}
@@ -5361,7 +5344,7 @@ ${generationOptionsText(asset)}`,
   );
 }
 
-function ActionModal({ asset, onClose, onAction, onDelete, onOpenDaw, onReuse, onPrepareExtend, onRename, onCopy, onSaveLyrics, onEditLyrics, onOpenWizard, onPlaylist, onTimestamp, onGenerateSrt, onGenerateStems, onGenerateAudioAnalysis, onGenerateAiTags, onOpenAudioAnalysisReport, onOpenAiCover, onReplaceCover, onOpenCoverViewer, onDownloadCover, onOpenVideo, onToggleFavorite, isAssetFavorite = () => false, favoriteSavingIds = new Set() }) {
+function ActionModal({ asset, onClose, onAction, onDelete, onReuse, onPrepareExtend, onRename, onCopy, onSaveLyrics, onEditLyrics, onOpenWizard, onPlaylist, onTimestamp, onGenerateSrt, onGenerateStems, onGenerateAudioAnalysis, onGenerateAiTags, onOpenAudioAnalysisReport, onOpenAiCover, onReplaceCover, onOpenCoverViewer, onDownloadCover, onOpenVideo, onToggleFavorite, isAssetFavorite = () => false, favoriteSavingIds = new Set() }) {
   const { t } = useI18n();
   const audioAnalysis = readAudioAiAnalysis(asset);
   const aiTags = readLibraryAiTags(asset);
@@ -5390,7 +5373,6 @@ function ActionModal({ asset, onClose, onAction, onDelete, onOpenDaw, onReuse, o
           <button type="button" onClick={() => { onOpenWizard?.(asset); onClose?.(); }}><FileText size={16} /> {t('library.workflow.audioWizard', 'Audio-Wizard')}</button>
           <button type="button" onClick={() => { onPlaylist?.(asset); onClose?.(); }}><Plus size={16} /> {t('library.actions.toPlaylist', 'Zur Playlist')}</button>
           <button type="button" onClick={(event) => { onEditLyrics?.(asset, event); onClose?.(); }}><Edit3 size={16} /> {t('library.actions.editLyrics', 'Songtext bearbeiten')}</button>
-          <button type="button" onClick={() => { onOpenDaw?.(asset); onClose?.(); }}><Scissors size={16} /> {t('library.actions.openInMiniDaw', 'In Mini-DAW öffnen')}</button>
           <button type="button" onClick={() => { onCopy?.(asset); onClose?.(); }}><Copy size={16} /> {t('library.actions.copyTrackData', 'Trackdaten kopieren')}</button>
           <button type="button" onClick={() => { onSaveLyrics?.(asset); onClose?.(); }}><FileText size={16} /> {t('library.actions.saveLyrics', 'Songtext speichern')}</button>
           <button type="button" onClick={() => { onRename?.(asset); onClose?.(); }}><Edit3 size={16} /> {t('library.actions.renameTitle', 'Titel ändern')}</button>

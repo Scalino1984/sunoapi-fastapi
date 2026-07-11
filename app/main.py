@@ -16,7 +16,7 @@ from app.services.startup_task_recovery import run_startup_task_recovery, run_st
 from app.services.library_content_polling_service import run_library_content_polling
 from app.services.portable_backup_service import run_portable_backup_scheduler
 from app.services.task_lifecycle_service import run_periodic_task_watchdog
-from app.routers import admin, ai_chat, archive, audio, audio_assets, assistant, auth, credits, daw, files, library, lyrics, music, notifications, production, songs_srt, srt, system, webhooks
+from app.routers import admin, ai_chat, archive, audio, audio_assets, assistant, auth, credits, daw, files, library, lyrics, music, notifications, production, system, webhooks
 from app.suno_client import SunoAPIError
 from app.middleware import ActionStatusFallbackMiddleware, RequestContextMiddleware
 from app.auth import get_current_active_user
@@ -124,8 +124,6 @@ app.include_router(system.router, dependencies=auth_dependency)
 app.include_router(lyrics.router, dependencies=auth_dependency)
 app.include_router(audio.router, dependencies=auth_dependency)
 app.include_router(audio_assets.router, dependencies=auth_dependency)
-app.include_router(srt.router, dependencies=auth_dependency)
-app.include_router(songs_srt.router, dependencies=auth_dependency)
 app.include_router(files.router, dependencies=auth_dependency)
 app.include_router(credits.router, dependencies=auth_dependency)
 app.include_router(daw.router, dependencies=auth_dependency)

@@ -5711,6 +5711,7 @@ a.button.disabled {
   border-radius: 14px;
   background: linear-gradient(180deg, color-mix(in srgb, var(--panel) 96%, white 4%), color-mix(in srgb, var(--panel) 92%, black 8%));
   box-shadow: 0 10px 26px rgba(0,0,0,.12);
+  cursor: pointer;
 }
 
 .asset-flat-list.mode-simple {
@@ -12450,4 +12451,1696 @@ body[data-theme="light"] .header-scroll-top-button {
     height: 48px;
     min-width: 48px;
   }
+}
+
+/* Library Listenansicht 2026-07-10: kompakte Songzeile mit Varianten-Aktionen.
+   Bestehende Handler bleiben erhalten; Mini-DAW liegt nur noch im Varianten-Drei-Punkt-Menü. */
+.project-row.suno-row.library-song-row {
+  grid-template-columns: 72px minmax(0, 1fr);
+  align-items: start;
+  gap: 14px;
+  min-height: 0;
+  padding: 12px 14px;
+  border-radius: 18px;
+  background:
+    linear-gradient(180deg, rgba(15, 23, 42, 0.92), rgba(8, 13, 28, 0.96)),
+    var(--panel);
+}
+
+.library-song-cover.cover-button {
+  width: 66px;
+  height: 66px;
+  border-radius: 16px;
+  align-self: start;
+}
+
+.library-song-cover.cover-button img {
+  border-radius: 15px;
+}
+
+.library-song-cover .cover-play {
+  width: 30px;
+  height: 30px;
+  inset: auto 6px 6px auto;
+}
+
+.library-song-main.project-row-main {
+  min-width: 0;
+  gap: 8px;
+}
+
+.library-song-open-zone {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  border-radius: 12px;
+  cursor: pointer;
+}
+
+.library-song-open-zone:hover .library-song-title strong,
+.library-song-open-zone:hover .library-song-summary {
+  color: color-mix(in srgb, var(--text) 86%, var(--accent-2) 14%);
+}
+
+.library-song-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 14px;
+  align-items: start;
+  min-width: 0;
+}
+
+.library-song-title.title-button {
+  min-width: 0;
+  width: 100%;
+}
+
+.library-song-title.title-button strong {
+  font-size: 1rem;
+  line-height: 1.15;
+  color: var(--text);
+}
+
+.library-song-title.title-button span,
+.library-song-title.title-button small {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.library-song-summary.title-button-summary {
+  max-width: min(980px, 100%);
+  margin-top: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: .78rem;
+  line-height: 1.35;
+  opacity: .82;
+}
+
+.library-song-status.project-actions {
+  min-width: 0;
+  max-width: min(46vw, 520px);
+  justify-content: flex-end;
+  align-self: start;
+}
+
+.library-song-badges.project-badges {
+  justify-content: flex-end;
+  gap: 5px;
+  min-width: 0;
+}
+
+.library-song-badges.project-badges .status {
+  min-height: 22px;
+  padding: 3px 7px;
+  font-size: .68rem;
+  line-height: 1;
+}
+
+.library-variant-panel {
+  margin-top: 7px;
+  border: 1px solid color-mix(in srgb, var(--line) 78%, transparent);
+  border-radius: 16px;
+  background:
+    linear-gradient(180deg, rgba(255,255,255,.035), rgba(255,255,255,.018)),
+    rgba(2, 6, 23, .22);
+  overflow: hidden;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.035);
+}
+
+.library-variant-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 32px;
+  padding: 7px 10px;
+  border-bottom: 1px solid color-mix(in srgb, var(--line) 68%, transparent);
+  color: var(--muted);
+  background: rgba(255,255,255,.025);
+}
+
+.library-variant-panel-head span {
+  color: var(--text);
+  font-size: .72rem;
+  font-weight: 900;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+
+.library-variant-panel-head small {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: .68rem;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.library-variant-list {
+  display: grid;
+  grid-template-columns: 1fr;
+}
+
+.library-variant-row {
+  display: grid;
+  grid-template-columns: 30px 22px minmax(210px, 1.15fr) minmax(100px, .36fr) minmax(120px, auto) auto;
+  align-items: center;
+  column-gap: 9px;
+  min-height: 42px;
+  padding: 6px 8px;
+  border-bottom: 1px solid color-mix(in srgb, var(--line) 55%, transparent);
+  background: rgba(15, 23, 42, .18);
+  contain: layout paint;
+}
+
+.library-variant-row:last-child {
+  border-bottom: 0;
+}
+
+.library-variant-row:nth-child(even) {
+  background: rgba(15, 23, 42, .28);
+}
+
+.library-variant-row.is-current {
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--accent-2) 15%, transparent), transparent 68%),
+    rgba(15, 23, 42, .32);
+}
+
+.library-variant-row.is-selected {
+  box-shadow: inset 3px 0 0 var(--accent-2);
+}
+
+.library-variant-row-play,
+.library-variant-row-favorite,
+.library-variant-row-edit {
+  width: 30px;
+  min-width: 30px;
+  height: 30px;
+  min-height: 30px;
+  padding: 0;
+  border-radius: 999px;
+  display: inline-grid;
+  place-items: center;
+}
+
+.library-variant-row-play {
+  color: var(--text);
+  background: rgba(2, 6, 23, .52);
+}
+
+.library-variant-row-select {
+  display: inline-grid;
+  place-items: center;
+  width: 22px;
+  height: 30px;
+}
+
+.library-variant-row-select input {
+  width: 14px;
+  height: 14px;
+  accent-color: var(--accent-2);
+}
+
+.library-variant-row-main {
+  display: grid;
+  grid-template-columns: 38px minmax(0, 1fr);
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  box-shadow: none;
+}
+
+.library-variant-row-main:hover {
+  transform: none;
+  box-shadow: none;
+}
+
+.library-variant-row-version {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  min-width: 38px;
+  height: 24px;
+  border: 1px solid color-mix(in srgb, var(--accent-2) 34%, var(--line) 66%);
+  border-radius: 999px;
+  color: var(--accent-2);
+  background: color-mix(in srgb, var(--accent-2) 10%, transparent);
+  font-size: .7rem;
+  font-weight: 950;
+  letter-spacing: .04em;
+}
+
+.library-variant-row-copy {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+}
+
+.library-variant-row-copy strong,
+.library-variant-row-copy small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.library-variant-row-copy strong {
+  color: var(--text);
+  font-size: .78rem;
+  font-weight: 850;
+  line-height: 1.15;
+}
+
+.library-variant-row-copy small {
+  color: var(--muted);
+  font-size: .67rem;
+  line-height: 1.15;
+  opacity: .82;
+}
+
+.library-variant-row-meta {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 6px;
+  min-width: 0;
+  color: var(--muted);
+  font-size: .68rem;
+  font-weight: 750;
+  white-space: nowrap;
+}
+
+.library-variant-row-meta span:first-child {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.library-variant-row-badges {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.library-variant-row-badges .status {
+  min-height: 18px;
+  padding: 2px 5px;
+  font-size: .58rem;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.library-variant-row-actions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 5px;
+  min-width: max-content;
+}
+
+.library-variant-row-edit.inline-title-edit-button {
+  opacity: .58;
+}
+
+.library-variant-row-edit.inline-title-edit-button:hover,
+.library-variant-row-favorite:hover {
+  opacity: 1;
+}
+
+.library-variant-row-favorite {
+  color: var(--muted);
+}
+
+.library-variant-row-favorite.is-favorite {
+  color: var(--accent-2);
+  background: color-mix(in srgb, var(--accent-2) 16%, transparent);
+}
+
+.library-variant-row-actions > .audio-action-menu-shell.compact {
+  width: 32px;
+  min-width: 32px;
+  height: 30px;
+  min-height: 30px;
+}
+
+.library-variant-row-actions > .audio-action-menu-shell.compact .audio-action-trigger.compact {
+  width: 32px;
+  min-width: 32px;
+  height: 30px;
+  min-height: 30px;
+}
+
+body[data-theme="light"] .project-row.suno-row.library-song-row {
+  background:
+    linear-gradient(180deg, rgba(255,255,255,.92), rgba(248,250,252,.96)),
+    var(--panel);
+}
+
+body[data-theme="light"] .library-variant-panel {
+  background:
+    linear-gradient(180deg, rgba(15,23,42,.035), rgba(15,23,42,.018)),
+    rgba(255,255,255,.64);
+}
+
+body[data-theme="light"] .library-variant-row,
+body[data-theme="light"] .library-variant-row:nth-child(even) {
+  background: rgba(255,255,255,.56);
+}
+
+body[data-theme="light"] .library-variant-row.is-current {
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--accent-2) 14%, transparent), transparent 68%),
+    rgba(255,255,255,.72);
+}
+
+@media (max-width: 1180px) {
+  .library-song-head {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .library-song-status.project-actions {
+    max-width: 100%;
+    justify-content: flex-start;
+  }
+
+  .library-song-badges.project-badges {
+    justify-content: flex-start;
+  }
+}
+
+@media (max-width: 980px) {
+  .project-row.suno-row.library-song-row {
+    grid-template-columns: 64px minmax(0, 1fr);
+    position: relative;
+    align-items: start;
+  }
+
+  .project-row.suno-row.library-song-row .project-row-main {
+    grid-column: 2;
+    grid-row: 1;
+    padding-right: 0;
+  }
+
+  .project-row.suno-row.library-song-row .project-actions {
+    grid-column: auto;
+    grid-row: auto;
+    width: auto;
+    justify-self: stretch;
+    align-self: start;
+    display: flex;
+    overflow: visible;
+  }
+
+  .library-song-cover.cover-button {
+    width: 58px;
+    height: 58px;
+  }
+
+  .library-variant-row {
+    grid-template-columns: 30px 22px minmax(180px, 1fr) minmax(92px, auto) auto;
+  }
+
+  .library-variant-row-badges {
+    display: none;
+  }
+
+  .library-variant-chip.project-audio-action-pill {
+    flex-basis: clamp(260px, 48vw, 360px);
+    grid-template-columns: 30px 22px minmax(120px, 1fr) 30px 34px;
+  }
+
+  .library-variant-badges {
+    display: none;
+  }
+
+  .library-variant-favorite.project-audio-favorite-mini {
+    grid-column: 4;
+  }
+
+  .library-variant-chip > .audio-action-menu-shell.compact {
+    grid-column: 5;
+  }
+}
+
+@media (max-width: 640px) {
+  .project-row.suno-row.library-song-row {
+    grid-template-columns: 54px minmax(0, 1fr);
+    padding: 11px;
+    gap: 10px;
+  }
+
+  .library-song-cover.cover-button {
+    width: 50px;
+    height: 50px;
+    border-radius: 14px;
+  }
+
+  .library-song-cover.cover-button img {
+    border-radius: 13px;
+  }
+
+  .library-song-cover .cover-play {
+    width: 26px;
+    height: 26px;
+    inset: auto 5px 5px auto;
+  }
+
+  .library-variant-panel {
+    margin-top: 8px;
+    border-radius: 14px;
+  }
+
+  .library-variant-panel-head {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 2px;
+    padding: 7px 9px;
+  }
+
+  .library-variant-row {
+    grid-template-columns: 30px 22px minmax(0, 1fr) auto;
+    row-gap: 5px;
+    padding: 7px;
+  }
+
+  .library-variant-row-main {
+    grid-column: 3 / 4;
+  }
+
+  .library-variant-row-meta {
+    grid-column: 3 / 4;
+    padding-left: 47px;
+  }
+
+  .library-variant-row-actions {
+    grid-column: 4;
+    grid-row: 1 / span 2;
+  }
+
+  .project-row.suno-row.library-song-row .title-button strong,
+  .project-row.suno-row.library-song-row .title-button > span {
+    padding-right: 0;
+  }
+
+  .project-row.suno-row.library-song-row .title-button small {
+    display: block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    -webkit-line-clamp: unset;
+  }
+
+  .project-row.suno-row.library-song-row .project-audio-actions-strip {
+    display: grid;
+    grid-template-columns: 1fr;
+    width: 100%;
+    gap: 7px;
+    margin-top: 7px;
+  }
+
+  .library-variant-chip.project-audio-action-pill {
+    flex: 0 0 auto;
+    width: 100%;
+    grid-template-columns: 30px 22px minmax(0, 1fr) 30px 34px;
+    min-height: 46px;
+  }
+
+  .library-song-summary.title-button-summary {
+    white-space: normal;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+  }
+}
+
+/* --------------------------------------------------------------------------
+   Patch 2026-07-10: Songdetail-Textbereiche duerfen Seiten-Scroll nicht blockieren
+   --------------------------------------------------------------------------
+   Read-only-Texte in den Songdetails sind keine eigenen Wheel-Fallen. Prompt,
+   Lyrics, Style- und Metadatenfelder wachsen im normalen Seitenfluss mit; echte
+   Arbeitsbereiche wie SRT-/Rohdaten-Previews behalten internes Scrollen, geben
+   Wheel-Gesten aber wieder an die Seite weiter, sobald ihre Grenzen erreicht sind.
+*/
+.library-detail-page .prompt-lyrics-card > pre,
+.library-detail-page .prompt-lyrics-card > .detail-scroll-passthrough,
+.library-detail-page .variant-meta-grid .meta-card > p,
+.library-detail-page .variant-meta-grid .meta-card > pre:not(.keyboard-scroll-region) {
+  max-height: none !important;
+  overflow: visible !important;
+  overscroll-behavior: auto !important;
+  touch-action: pan-y !important;
+}
+
+.library-detail-page .detail-scroll-passthrough {
+  white-space: pre-wrap;
+  color: var(--muted);
+}
+
+.library-detail-page .srt-preview,
+.library-detail-page .tech-details > pre,
+.library-detail-page .large-pre.keyboard-scroll-region {
+  overscroll-behavior: auto !important;
+}
+
+
+/* Patch 2026-07-10: Songdetails-Varianten klarer in Bedienung, Inhalt, Assets und Technik gliedern. */
+.library-detail-page .variant-detail-layout {
+  display: grid;
+  gap: 12px;
+  margin-top: 10px;
+}
+
+.library-detail-page .variant-detail-section {
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-radius: 18px;
+  background: rgba(8, 13, 27, 0.38);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.035);
+  padding: 13px;
+}
+
+.library-detail-page .variant-detail-section--summary {
+  background: linear-gradient(135deg, rgba(34, 211, 238, 0.08), rgba(124, 58, 237, 0.06) 48%, rgba(8, 13, 27, 0.44));
+  border-color: rgba(34, 211, 238, 0.18);
+}
+
+.library-detail-page .variant-detail-section--actions {
+  background: rgba(15, 23, 42, 0.42);
+}
+
+.library-detail-page .variant-detail-section--content {
+  border-color: rgba(34, 211, 238, 0.16);
+}
+
+.library-detail-page .variant-detail-section--assets {
+  border-color: rgba(16, 185, 129, 0.16);
+}
+
+.library-detail-page .variant-detail-section--technical {
+  border-style: dashed;
+  border-color: rgba(148, 163, 184, 0.2);
+  background: rgba(2, 6, 23, 0.26);
+}
+
+.library-detail-page .variant-detail-section-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  margin-bottom: 10px;
+}
+
+.library-detail-page .variant-detail-section-head.compact {
+  margin-bottom: 9px;
+}
+
+.library-detail-page .variant-detail-section-head h4 {
+  margin: 0;
+  color: var(--text);
+  font-size: 0.98rem;
+  letter-spacing: 0.01em;
+}
+
+.library-detail-page .variant-detail-section-head .eyebrow {
+  margin: 0 0 3px;
+  color: var(--accent-2);
+}
+
+.library-detail-page .variant-detail-status-row {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 180px;
+}
+
+.library-detail-page .variant-identity-strip {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(118px, 1fr));
+  gap: 7px;
+}
+
+.library-detail-page .variant-identity-strip > span {
+  min-width: 0;
+  border: 1px solid rgba(148, 163, 184, 0.13);
+  border-radius: 13px;
+  background: rgba(2, 6, 23, 0.34);
+  padding: 8px 10px;
+}
+
+.library-detail-page .variant-identity-strip strong,
+.library-detail-page .variant-identity-strip small {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.library-detail-page .variant-identity-strip strong {
+  color: var(--text);
+  font-size: 0.86rem;
+}
+
+.library-detail-page .variant-identity-strip small {
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.library-detail-page .variant-action-groups {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.library-detail-page .variant-action-group {
+  min-width: 0;
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  border-radius: 15px;
+  background: rgba(2, 6, 23, 0.26);
+  padding: 10px;
+}
+
+.library-detail-page .variant-action-group > strong {
+  display: block;
+  margin-bottom: 8px;
+  color: var(--accent-2);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.library-detail-page .button-row.compact-actions {
+  gap: 6px;
+}
+
+.library-detail-page .button-row.compact-actions > *,
+.library-detail-page .variant-action-group .button,
+.library-detail-page .variant-action-group button {
+  min-height: 30px;
+  padding: 6px 9px;
+  border-radius: 10px;
+  font-size: 0.76rem;
+}
+
+.library-detail-page .variant-detail-card-grid {
+  gap: 9px;
+}
+
+.library-detail-page .variant-detail-card-grid .meta-card {
+  background: rgba(15, 23, 42, 0.42);
+  border-color: rgba(148, 163, 184, 0.12);
+  box-shadow: none;
+}
+
+.library-detail-page .variant-detail-card-grid .meta-card h4 {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.library-detail-page .variant-detail-card-grid--content,
+.library-detail-page .variant-detail-card-grid--assets {
+  grid-template-columns: 1fr;
+}
+
+.library-detail-page .variant-detail-card-grid--content .meta-card.wide,
+.library-detail-page .variant-detail-card-grid--assets .meta-card.wide {
+  grid-column: 1 / -1;
+}
+
+.library-detail-page .variant-detail-card-grid--content .prompt-lyrics-card pre,
+.library-detail-page .variant-detail-card-grid--content .meta-card > p,
+.library-detail-page .variant-detail-card-grid--content .meta-card > pre:not(.keyboard-scroll-region) {
+  line-height: 1.55;
+}
+
+.library-detail-page .variant-detail-section--technical .tech-details {
+  margin: 0;
+}
+
+.library-detail-page .variant-detail-section--technical .tech-details summary {
+  color: var(--muted);
+}
+
+body[data-theme="light"] .library-detail-page .variant-detail-section {
+  background: rgba(255, 255, 255, 0.74);
+  border-color: rgba(15, 23, 42, 0.1);
+}
+
+body[data-theme="light"] .library-detail-page .variant-detail-section--summary {
+  background: linear-gradient(135deg, rgba(14, 165, 233, 0.11), rgba(124, 58, 237, 0.06), rgba(255, 255, 255, 0.8));
+}
+
+body[data-theme="light"] .library-detail-page .variant-identity-strip > span,
+body[data-theme="light"] .library-detail-page .variant-action-group,
+body[data-theme="light"] .library-detail-page .variant-detail-card-grid .meta-card {
+  background: rgba(248, 250, 252, 0.78);
+  border-color: rgba(15, 23, 42, 0.1);
+}
+
+@media (max-width: 1180px) {
+  .library-detail-page .variant-action-groups {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 760px) {
+  .library-detail-page .variant-detail-section {
+    padding: 10px;
+  }
+
+  .library-detail-page .variant-detail-section-head {
+    display: grid;
+  }
+
+  .library-detail-page .variant-detail-status-row {
+    justify-content: flex-start;
+    min-width: 0;
+  }
+
+  .library-detail-page .variant-identity-strip {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+/* --------------------------------------------------------------------------
+   Library Songdetails Phase 3: lange Inhalte als kontrollierte Accordions
+   -------------------------------------------------------------------------- */
+.library-detail-page .library-detail-accordion {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 18px;
+  background: linear-gradient(180deg, rgba(15, 23, 42, 0.88), rgba(15, 23, 42, 0.68));
+}
+
+.library-detail-page .library-detail-accordion-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 12px;
+}
+
+.library-detail-page .library-detail-accordion-toggle {
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr);
+  align-items: start;
+  gap: 10px;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  box-shadow: none;
+}
+
+.library-detail-page .library-detail-accordion-toggle:hover,
+.library-detail-page .library-detail-accordion-toggle:focus-visible {
+  background: transparent;
+  box-shadow: none;
+}
+
+.library-detail-page .library-detail-accordion-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 10px;
+  background: rgba(34, 211, 238, 0.1);
+  color: #67e8f9;
+}
+
+.library-detail-page .library-detail-accordion-title-wrap {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.library-detail-page .library-detail-accordion-title-wrap strong {
+  font-size: 15px;
+  line-height: 1.25;
+}
+
+.library-detail-page .library-detail-accordion-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.library-detail-page .library-detail-accordion-notice {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.library-detail-page .library-detail-accordion-notice .prompt-lyrics-override-note {
+  margin: 0;
+}
+
+.library-detail-page .library-detail-accordion-content-pre,
+.library-detail-page .prompt-lyrics-card .library-detail-accordion-content-pre,
+body.audio-player-open .library-detail-page .prompt-lyrics-card .library-detail-accordion-content-pre,
+body.audio-playback-active .library-detail-page .prompt-lyrics-card .library-detail-accordion-content-pre {
+  width: 100%;
+  max-width: 100%;
+  max-height: none !important;
+  margin: 0;
+  padding: 13px 14px;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-radius: 14px;
+  background: rgba(2, 6, 23, 0.34);
+  color: rgba(226, 232, 240, 0.92);
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  overflow: visible !important;
+  overscroll-behavior: auto !important;
+  contain: none !important;
+  box-sizing: border-box;
+  display: block;
+  position: relative;
+}
+
+.library-detail-page .library-detail-accordion-content-pre.is-preview {
+  max-height: calc((1.55em * var(--library-detail-preview-lines, 5)) + 28px) !important;
+  overflow: hidden !important;
+}
+
+.library-detail-page .library-detail-accordion-content-pre.is-open {
+  display: block;
+  max-height: none !important;
+  overflow: visible !important;
+}
+
+.library-detail-page .library-detail-accordion-more {
+  justify-self: start;
+  min-height: 34px;
+  padding: 7px 11px;
+  border-radius: 999px;
+  color: #bae6fd;
+}
+
+.library-detail-page .library-detail-accordion-footer {
+  display: grid;
+  gap: 10px;
+}
+
+.library-detail-page .style-detail-accordion .library-detail-accordion-content-pre.is-preview {
+  max-height: calc((1.55em * var(--library-detail-preview-lines, 3)) + 28px) !important;
+}
+
+body[data-theme="light"] .library-detail-page .library-detail-accordion {
+  border-color: rgba(15, 23, 42, 0.12);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(248, 250, 252, 0.92));
+}
+
+body[data-theme="light"] .library-detail-page .library-detail-accordion-icon {
+  background: rgba(14, 165, 233, 0.12);
+  color: #0369a1;
+}
+
+body[data-theme="light"] .library-detail-page .library-detail-accordion-content-pre {
+  border-color: rgba(15, 23, 42, 0.1);
+  background: rgba(241, 245, 249, 0.88);
+  color: #0f172a;
+}
+
+@media (max-width: 760px) {
+  .library-detail-page .library-detail-accordion-head {
+    grid-template-columns: 1fr;
+  }
+
+  .library-detail-page .library-detail-accordion-actions {
+    justify-content: flex-start;
+  }
+}
+
+/* --------------------------------------------------------------------------
+   Library Songdetails Phase 4: produktreife Detail-Sektionen
+   -------------------------------------------------------------------------- */
+.library-detail-page .library-detail-section-shell {
+  padding: 0;
+  overflow: hidden;
+}
+
+.library-detail-page .library-detail-section-shell-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 13px 14px;
+}
+
+.library-detail-page .library-detail-section-shell-toggle {
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  box-shadow: none;
+}
+
+.library-detail-page .library-detail-section-shell-toggle:hover,
+.library-detail-page .library-detail-section-shell-toggle:focus-visible {
+  background: transparent;
+  box-shadow: none;
+}
+
+.library-detail-page .library-detail-section-shell-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 11px;
+  background: rgba(148, 163, 184, 0.08);
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  color: #93c5fd;
+}
+
+.library-detail-page .library-detail-section-shell-title {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.library-detail-page .library-detail-section-shell-title strong {
+  color: var(--text);
+  font-size: 0.95rem;
+  line-height: 1.2;
+}
+
+.library-detail-page .library-detail-section-shell-title small {
+  line-height: 1.35;
+}
+
+.library-detail-page .library-detail-section-shell-summary {
+  display: flex;
+  justify-content: flex-end;
+  min-width: 0;
+}
+
+.library-detail-page .library-detail-section-mini-summary {
+  display: inline-block;
+  max-width: min(360px, 42vw);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  font-size: 0.76rem;
+}
+
+.library-detail-page .library-detail-section-shell-content {
+  padding: 0 14px 14px;
+}
+
+.library-detail-page .library-detail-section-shell.is-collapsed {
+  background: rgba(2, 6, 23, 0.18);
+}
+
+.library-detail-page .library-detail-section-shell.is-collapsed .library-detail-section-shell-head {
+  padding-top: 11px;
+  padding-bottom: 11px;
+}
+
+.library-detail-page .variant-detail-section--metadata.is-collapsed,
+.library-detail-page .variant-detail-section--technical.is-collapsed {
+  border-style: dashed;
+  opacity: 0.92;
+}
+
+.library-detail-page .variant-detail-section--content .library-detail-section-shell-icon {
+  background: rgba(34, 211, 238, 0.1);
+  color: #67e8f9;
+}
+
+.library-detail-page .variant-detail-section--assets .library-detail-section-shell-icon {
+  background: rgba(16, 185, 129, 0.1);
+  color: #6ee7b7;
+}
+
+.library-detail-page .variant-detail-section--technical .library-detail-section-shell-icon,
+.library-detail-page .variant-detail-section--metadata .library-detail-section-shell-icon {
+  background: rgba(148, 163, 184, 0.08);
+  color: #cbd5e1;
+}
+
+body[data-theme="light"] .library-detail-page .library-detail-section-shell.is-collapsed {
+  background: rgba(248, 250, 252, 0.72);
+}
+
+body[data-theme="light"] .library-detail-page .library-detail-section-shell-icon {
+  background: rgba(15, 23, 42, 0.04);
+  border-color: rgba(15, 23, 42, 0.08);
+  color: #2563eb;
+}
+
+@media (max-width: 760px) {
+  .library-detail-page .library-detail-section-shell-head {
+    grid-template-columns: 1fr;
+    align-items: start;
+  }
+
+  .library-detail-page .library-detail-section-shell-summary {
+    justify-content: flex-start;
+  }
+
+  .library-detail-page .library-detail-section-mini-summary {
+    max-width: 100%;
+  }
+}
+
+/* --------------------------------------------------------------------------
+   Library Songdetails Phase 5: Responsive Feinschliff
+   --------------------------------------------------------------------------
+   Reiner Layout-Patch: keine Handler, Datenfluesse oder React-Logik werden
+   veraendert. Ziel ist eine stabilere Songdetail-Darstellung auf Notebook-
+   und schmalen Viewports ohne Ueberlappungen, abgeschnittene Aktionsbereiche
+   oder horizontale Scroll-Brueche.
+*/
+.library-detail-page,
+.library-detail-page * {
+  min-width: 0;
+}
+
+.library-detail-page .variant-card.horizontal.variant-accordion-card,
+.library-detail-page .variant-body,
+.library-detail-page .variant-detail-layout,
+.library-detail-page .library-detail-section-shell,
+.library-detail-page .library-detail-accordion,
+.library-detail-page .variant-action-group,
+.library-detail-page .variant-detail-card-grid .meta-card {
+  max-width: 100%;
+}
+
+.library-detail-page .variant-card.horizontal.variant-accordion-card,
+.library-detail-page .library-detail-section-shell,
+.library-detail-page .library-detail-accordion {
+  overflow: hidden;
+}
+
+.library-detail-page .variant-accordion-toggle,
+.library-detail-page .variant-accordion-title,
+.library-detail-page .variant-accordion-title > span:last-child,
+.library-detail-page .library-detail-section-shell-toggle,
+.library-detail-page .library-detail-accordion-toggle {
+  min-width: 0;
+}
+
+.library-detail-page .variant-accordion-title h3,
+.library-detail-page .variant-accordion-title .eyebrow,
+.library-detail-page .library-detail-section-shell-title strong,
+.library-detail-page .library-detail-section-shell-title small,
+.library-detail-page .library-detail-accordion-title-wrap strong,
+.library-detail-page .library-detail-accordion-title-wrap small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.library-detail-page .variant-action-groups {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 230px), 1fr));
+  align-items: stretch;
+}
+
+.library-detail-page .variant-action-group {
+  display: grid;
+  align-content: start;
+}
+
+.library-detail-page .variant-action-group .button-row.compact-actions,
+.library-detail-page .library-detail-accordion-actions,
+.library-detail-page .prompt-lyrics-actions,
+.library-detail-page .asset-content-actions,
+.library-detail-page .stem-actions,
+.library-detail-page .srt-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: stretch;
+  gap: 7px;
+  max-width: 100%;
+}
+
+.library-detail-page .variant-action-group .button-row.compact-actions > *,
+.library-detail-page .library-detail-accordion-actions > *,
+.library-detail-page .prompt-lyrics-actions > *,
+.library-detail-page .asset-content-actions > *,
+.library-detail-page .stem-actions > *,
+.library-detail-page .srt-actions > * {
+  flex: 1 1 138px;
+  min-width: 0;
+  max-width: 100%;
+  justify-content: center;
+  white-space: normal;
+  text-align: center;
+}
+
+.library-detail-page .library-detail-section-shell-head,
+.library-detail-page .library-detail-accordion-head,
+.library-detail-page .variant-detail-section-head {
+  min-width: 0;
+}
+
+.library-detail-page .library-detail-section-shell-summary,
+.library-detail-page .variant-detail-status-row,
+.library-detail-page .variant-accordion-badges {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.library-detail-page .variant-detail-card-grid {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 230px), 1fr));
+}
+
+.library-detail-page .variant-detail-card-grid--content,
+.library-detail-page .variant-detail-card-grid--assets {
+  grid-template-columns: 1fr;
+}
+
+.library-detail-page .library-detail-accordion-content-pre,
+.library-detail-page .tech-details pre,
+.library-detail-page .srt-preview,
+.library-detail-page .large-pre.keyboard-scroll-region {
+  max-width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+@media (max-width: 1180px) {
+  .library-detail-page .variant-action-groups {
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr));
+  }
+
+  .library-detail-page .library-detail-section-shell-head,
+  .library-detail-page .library-detail-accordion-head {
+    grid-template-columns: minmax(0, 1fr);
+    align-items: start;
+  }
+
+  .library-detail-page .library-detail-section-shell-summary,
+  .library-detail-page .library-detail-accordion-actions {
+    justify-content: flex-start;
+  }
+
+  .library-detail-page .library-detail-section-mini-summary {
+    max-width: 100%;
+  }
+}
+
+@media (max-width: 860px) {
+  .library-detail-page .variant-card.horizontal.variant-accordion-card {
+    grid-template-columns: 30px 66px minmax(0, 1fr);
+    gap: 10px;
+    padding: 12px;
+  }
+
+  .library-detail-page .variant-card.horizontal.variant-accordion-card > .select-box {
+    grid-column: 1;
+    grid-row: 1;
+    align-self: center;
+    justify-self: center;
+  }
+
+  .library-detail-page .variant-card.horizontal.variant-accordion-card > .variant-cover-column {
+    grid-column: 2;
+    grid-row: 1;
+    width: 66px;
+    align-self: center;
+  }
+
+  .library-detail-page .variant-card.horizontal.variant-accordion-card > .variant-cover-column .variant-cover-button {
+    width: 66px;
+    height: 66px;
+  }
+
+  .library-detail-page .variant-card.horizontal.variant-accordion-card > .variant-body {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+
+  .library-detail-page .variant-accordion-toggle {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 9px;
+  }
+
+  .library-detail-page .variant-accordion-badges {
+    justify-content: flex-start;
+    max-width: 100%;
+  }
+
+  .library-detail-page .variant-detail-section,
+  .library-detail-page .library-detail-accordion {
+    border-radius: 16px;
+  }
+
+  .library-detail-page .variant-detail-section-head {
+    display: grid;
+    gap: 9px;
+  }
+
+  .library-detail-page .variant-detail-status-row {
+    justify-content: flex-start;
+  }
+
+  .library-detail-page .variant-collapsed-summary {
+    display: grid;
+    gap: 10px;
+  }
+}
+
+@media (max-width: 640px) {
+  .library-detail-page .variant-card.horizontal.variant-accordion-card {
+    grid-template-columns: 26px 54px minmax(0, 1fr);
+    padding: 10px;
+    gap: 8px;
+  }
+
+  .library-detail-page .variant-card.horizontal.variant-accordion-card > .variant-cover-column {
+    width: 54px;
+  }
+
+  .library-detail-page .variant-card.horizontal.variant-accordion-card > .variant-cover-column .variant-cover-button {
+    width: 54px;
+    height: 54px;
+  }
+
+  .library-detail-page .variant-detail-layout {
+    gap: 10px;
+  }
+
+  .library-detail-page .variant-detail-section {
+    padding: 10px;
+    border-radius: 15px;
+  }
+
+  .library-detail-page .library-detail-section-shell-head,
+  .library-detail-page .library-detail-section-shell-content,
+  .library-detail-page .library-detail-accordion {
+    padding-inline: 11px;
+  }
+
+  .library-detail-page .library-detail-section-shell-head,
+  .library-detail-page .library-detail-accordion-head {
+    gap: 9px;
+  }
+
+  .library-detail-page .variant-identity-strip {
+    grid-template-columns: 1fr;
+  }
+
+  .library-detail-page .variant-action-groups {
+    grid-template-columns: 1fr;
+    gap: 8px;
+  }
+
+  .library-detail-page .variant-action-group {
+    padding: 9px;
+    border-radius: 13px;
+  }
+
+  .library-detail-page .variant-action-group .button-row.compact-actions > *,
+  .library-detail-page .library-detail-accordion-actions > *,
+  .library-detail-page .prompt-lyrics-actions > *,
+  .library-detail-page .asset-content-actions > *,
+  .library-detail-page .stem-actions > *,
+  .library-detail-page .srt-actions > * {
+    flex-basis: min(100%, 150px);
+    min-height: 36px;
+  }
+
+  .library-detail-page .library-detail-accordion-content-pre {
+    padding: 11px 12px;
+    font-size: 12.5px;
+  }
+}
+
+@media (max-width: 460px) {
+  .library-detail-page .variant-card.horizontal.variant-accordion-card {
+    grid-template-columns: 24px minmax(0, 1fr);
+  }
+
+  .library-detail-page .variant-card.horizontal.variant-accordion-card > .variant-cover-column {
+    grid-column: 2;
+    grid-row: 1;
+    width: 48px;
+  }
+
+  .library-detail-page .variant-card.horizontal.variant-accordion-card > .variant-cover-column .variant-cover-button {
+    width: 48px;
+    height: 48px;
+  }
+
+  .library-detail-page .variant-card.horizontal.variant-accordion-card > .variant-body {
+    grid-column: 1 / -1;
+  }
+
+  .library-detail-page .variant-accordion-title {
+    grid-template-columns: 28px minmax(0, 1fr);
+  }
+
+  .library-detail-page .variant-accordion-icon,
+  .library-detail-page .library-detail-section-shell-icon,
+  .library-detail-page .library-detail-accordion-icon {
+    width: 28px;
+    height: 28px;
+  }
+
+  .library-detail-page .variant-action-group .button-row.compact-actions,
+  .library-detail-page .library-detail-accordion-actions,
+  .library-detail-page .prompt-lyrics-actions,
+  .library-detail-page .asset-content-actions,
+  .library-detail-page .stem-actions,
+  .library-detail-page .srt-actions {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .library-detail-page .variant-action-group .button-row.compact-actions > *,
+  .library-detail-page .library-detail-accordion-actions > *,
+  .library-detail-page .prompt-lyrics-actions > *,
+  .library-detail-page .asset-content-actions > *,
+  .library-detail-page .stem-actions > *,
+  .library-detail-page .srt-actions > * {
+    width: 100%;
+    flex-basis: auto;
+  }
+}
+
+/* --------------------------------------------------------------------------
+   Library Songdetails Phase 5.5: Product-UX-Polish
+   Reduziert sichtbaren Button-Lärm, stärkt die Song-/Varianten-Hierarchie
+   und begrenzt lange geöffnete Lesebereiche ohne bestehende Aktionen zu entfernen.
+   -------------------------------------------------------------------------- */
+.library-detail-page .library-hero-actions {
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.library-detail-page .library-hero-primary-actions {
+  align-items: center;
+}
+
+.library-detail-page .library-hero-primary-actions > * {
+  min-height: 34px;
+}
+
+.library-detail-page .library-hero-action-details,
+.library-detail-page .variant-secondary-actions {
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-radius: 14px;
+  background: rgba(2, 6, 23, 0.16);
+  overflow: hidden;
+}
+
+.library-detail-page .library-hero-action-details > summary,
+.library-detail-page .variant-secondary-actions > summary {
+  cursor: pointer;
+  list-style: none;
+  padding: 8px 11px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  user-select: none;
+}
+
+.library-detail-page .library-hero-action-details > summary::-webkit-details-marker,
+.library-detail-page .variant-secondary-actions > summary::-webkit-details-marker {
+  display: none;
+}
+
+.library-detail-page .library-hero-action-details > summary::before,
+.library-detail-page .variant-secondary-actions > summary::before {
+  content: '▸';
+  display: inline-block;
+  margin-right: 8px;
+  color: var(--accent);
+  transition: transform 0.16s ease;
+}
+
+.library-detail-page .library-hero-action-details[open] > summary::before,
+.library-detail-page .variant-secondary-actions[open] > summary::before {
+  transform: rotate(90deg);
+}
+
+.library-detail-page .library-hero-action-menu-grid,
+.library-detail-page .variant-secondary-action-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  padding: 0 10px 10px;
+}
+
+.library-detail-page .library-hero-action-menu-group,
+.library-detail-page .variant-secondary-action-grid .variant-action-group {
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  border-radius: 12px;
+  background: rgba(15, 23, 42, 0.34);
+  padding: 10px;
+}
+
+.library-detail-page .library-hero-action-menu-group > strong,
+.library-detail-page .variant-secondary-action-grid .variant-action-group > strong {
+  display: block;
+  margin-bottom: 8px;
+  color: var(--text);
+  font-size: 12px;
+}
+
+.library-detail-page .project-dossier-panel {
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.13), rgba(20, 184, 166, 0.08));
+}
+
+.library-detail-page .project-dossier-panel h2 {
+  font-size: 18px;
+}
+
+.library-detail-page .project-dossier-panel .dossier-grid span {
+  min-height: 58px;
+}
+
+.library-detail-page .variant-product-summary {
+  border-color: rgba(34, 211, 238, 0.14);
+  background: linear-gradient(135deg, rgba(12, 23, 43, 0.88), rgba(20, 184, 166, 0.055));
+}
+
+.library-detail-page .variant-product-summary-main {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: flex-start;
+}
+
+.library-detail-page .variant-product-summary-main h4 {
+  margin: 2px 0 4px;
+  font-size: 17px;
+}
+
+.library-detail-page .variant-product-summary-main .muted {
+  margin: 0;
+}
+
+.library-detail-page .variant-identity-strip--product {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  margin-top: 12px;
+}
+
+.library-detail-page .variant-identity-strip--product > span {
+  background: rgba(2, 6, 23, 0.36);
+  border-color: rgba(148, 163, 184, 0.10);
+}
+
+.library-detail-page .variant-action-groups--product {
+  grid-template-columns: 1fr;
+  gap: 10px;
+}
+
+.library-detail-page .variant-action-group--primary {
+  border-color: rgba(56, 189, 248, 0.16);
+  background: rgba(8, 13, 30, 0.48);
+}
+
+.library-detail-page .variant-action-group--primary .button-row {
+  gap: 8px;
+}
+
+.library-detail-page .variant-action-group--primary .audio-action-menu-shell:not(.compact) .audio-action-trigger {
+  min-height: 30px;
+  border-radius: 10px;
+}
+
+.library-detail-page .library-detail-section-shell {
+  box-shadow: none;
+}
+
+.library-detail-page .library-detail-section-shell.is-collapsed {
+  opacity: 0.84;
+}
+
+.library-detail-page .library-detail-accordion-content-pre.is-open,
+.library-detail-page .prompt-lyrics-card .library-detail-accordion-content-pre.is-open {
+  max-height: min(56vh, 520px);
+  overflow: auto;
+  overscroll-behavior: auto;
+  padding-right: 12px;
+}
+
+.library-detail-page .style-detail-accordion .library-detail-accordion-content-pre.is-open {
+  max-height: min(38vh, 320px);
+}
+
+.library-detail-page .variant-detail-section--technical {
+  opacity: 0.86;
+}
+
+.library-detail-page .variant-detail-section--technical.is-collapsed {
+  opacity: 0.68;
+}
+
+.library-detail-page .variant-collapsed-summary .button-row {
+  align-items: center;
+}
+
+body[data-theme="light"] .library-detail-page .library-hero-action-details,
+body[data-theme="light"] .library-detail-page .variant-secondary-actions,
+body[data-theme="light"] .library-detail-page .library-hero-action-menu-group,
+body[data-theme="light"] .library-detail-page .variant-secondary-action-grid .variant-action-group {
+  background: rgba(255, 255, 255, 0.72);
+  border-color: rgba(15, 23, 42, 0.10);
+}
+
+@media (max-width: 980px) {
+  .library-detail-page .library-hero-action-menu-grid,
+  .library-detail-page .variant-secondary-action-grid,
+  .library-detail-page .variant-product-summary-main {
+    grid-template-columns: 1fr;
+  }
+
+  .library-detail-page .variant-product-summary-main {
+    display: grid;
+  }
+
+  .library-detail-page .variant-identity-strip--product {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 640px) {
+  .library-detail-page .library-hero-primary-actions > *,
+  .library-detail-page .variant-action-group--primary .button-row > *,
+  .library-detail-page .library-hero-action-menu-group .button-row > *,
+  .library-detail-page .variant-secondary-action-grid .button-row > * {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .library-detail-page .variant-identity-strip--product {
+    grid-template-columns: 1fr;
+  }
+
+  .library-detail-page .library-detail-accordion-content-pre.is-open,
+  .library-detail-page .prompt-lyrics-card .library-detail-accordion-content-pre.is-open {
+    max-height: min(62vh, 460px);
+  }
+}
+
+
+/* --------------------------------------------------------------------------
+   Library Songdetails Phase 5.6: Kundenfreundlicher Detail-Polish
+   Reine UI-/Wording-/Spacing-Schicht. Keine Handler, API-Aufrufe oder
+   Datenfluesse werden veraendert.
+   -------------------------------------------------------------------------- */
+.library-detail-page .project-dossier-panel .eyebrow {
+  color: rgba(125, 211, 252, 0.96);
+}
+
+.library-detail-page .project-dossier-panel h2 {
+  letter-spacing: -0.01em;
+}
+
+.library-detail-page .variant-product-summary-main h4 {
+  letter-spacing: -0.01em;
+}
+
+.library-detail-page .variant-product-summary-main .muted {
+  max-width: 720px;
+}
+
+.library-detail-page .variant-detail-section--summary .variant-identity-strip--product {
+  gap: 9px;
+}
+
+.library-detail-page .variant-detail-section--summary .variant-identity-strip--product > span {
+  padding: 9px 11px;
+  background: rgba(2, 6, 23, 0.30);
+}
+
+.library-detail-page .variant-detail-section--metadata.is-collapsed .library-detail-section-shell-title strong,
+.library-detail-page .variant-detail-section--technical.is-collapsed .library-detail-section-shell-title strong {
+  color: rgba(226, 232, 240, 0.76);
+}
+
+.library-detail-page .variant-detail-section--assets .library-detail-section-shell-content {
+  padding-top: 2px;
+}
+
+.library-detail-page .variant-detail-card-grid--assets {
+  gap: 12px;
+}
+
+.library-detail-page .variant-detail-card-grid--assets > .meta-card,
+.library-detail-page .variant-detail-card-grid--assets > .wide,
+.library-detail-page .variant-detail-card-grid--assets > * {
+  border-color: rgba(16, 185, 129, 0.13);
+}
+
+.library-detail-page .variant-detail-section--assets .button-row,
+.library-detail-page .variant-detail-section--assets .stem-actions,
+.library-detail-page .variant-detail-section--assets .srt-actions,
+.library-detail-page .variant-detail-section--assets .asset-content-actions {
+  gap: 8px;
+}
+
+.library-detail-page .variant-detail-section--assets .status {
+  margin-left: auto;
+}
+
+body[data-theme="light"] .library-detail-page .variant-detail-section--metadata.is-collapsed .library-detail-section-shell-title strong,
+body[data-theme="light"] .library-detail-page .variant-detail-section--technical.is-collapsed .library-detail-section-shell-title strong {
+  color: rgba(15, 23, 42, 0.76);
 }

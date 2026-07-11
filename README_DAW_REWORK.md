@@ -7,7 +7,7 @@ alle Erweiterungen sind additiv/kompatibel.**
 
 ---
 
-## 1. Datei-Änderungsliste (20 Dateien)
+## 1. Datei-Änderungsliste (19 Dateien)
 
 ### Frontend – NEU: `frontend-react/src/daw/`
 | Datei | Inhalt |
@@ -19,7 +19,6 @@ alle Erweiterungen sind additiv/kompatibel.**
 | `aiParser.js` | Lokaler, deterministischer DAW-KI-Parser (Deutsch) – läuft sofort/offline; als pure Funktion mit Kontext-Objekt |
 | `audioEngine.js` | **NEU: Web-Audio-Engine** – Echtzeit-Multi-Clip-Playback (BufferSource → Clip-Gain/Fades → Track-Gain/Mute/Solo → Master). Kein Server-Preview mehr nötig, um Änderungen zu hören; Buffer-Cache pro `source_audio_id` über die bestehende Stream-Route |
 | `store.js` | zustand-Store: Arrangement, Undo/Redo (60 Schritte), Auswahl, Werkzeuge, Transport, Kommandovorschau |
-| `usePointerDrag.js` | Pointer-Drag-Hook (Port) |
 | `daw.css` | Styles der neuen Komponenten (nutzt die bestehenden App-Design-Tokens) |
 | `components/TransportBar.jsx` | Play/Pause/Stop, Zeit + Takt-Anzeige, BPM/Taktart, Snap + Einheit, Werkzeuge, Zoom, Undo/Redo, Volume, DAW-KI-Button |
 | `components/TimelineRuler.jsx` | Ticks, Bar-Grid (Beatgrid oder BPM-Fallback), Marker, Bereichsauswahl, Snap-Guide, Playhead |

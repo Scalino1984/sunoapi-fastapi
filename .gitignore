@@ -33,6 +33,8 @@ logs/
 *.db-wal
 
 # Generated/local media and cache
+src.zip
+_work/
 storage/
 covers/
 test-suno/
