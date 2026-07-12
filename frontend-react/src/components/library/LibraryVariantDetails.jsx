@@ -125,8 +125,44 @@ export function LibraryVariantDetails({ ctx, asset, index, activeProject, projec
                 <span><strong>{formatDuration(asset.duration_seconds)}</strong><small>{t('library.duration', 'Dauer')}</small></span>
                 <span><strong>{songDatabaseId(asset) ?? '—'}</strong><small>songs.id</small></span>
                 <span><strong>{asset.id}</strong><small>audio_assets.id</small></span>
-                <span><strong>{shortId(asset.audio_id, 14)}</strong><small>Audio-ID</small></span>
-                <span><strong>{shortId(asset.suno_task_id || asset.task_id, 14) || '—'}</strong><small>Task</small></span>
+                <span className="variant-identity-copy-cell">
+                  <span className="variant-identity-value-row">
+                    <strong title={asset.audio_id || ''}>{shortId(asset.audio_id, 14) || '—'}</strong>
+                    <button
+                      type="button"
+                      className="variant-identity-copy-button"
+                      disabled={!asset.audio_id}
+                      title={t('library.actions.copyAudioId', 'Vollständige Audio-ID kopieren')}
+                      aria-label={t('library.actions.copyAudioId', 'Vollständige Audio-ID kopieren')}
+                      onClick={async () => {
+                        await copyToClipboard(asset.audio_id || '');
+                        notify(t('library.messages.audioIdCopied', 'Audio-ID kopiert.'), 'success');
+                      }}
+                    >
+                      <Copy size={12} />
+                    </button>
+                  </span>
+                  <small>Audio-ID</small>
+                </span>
+                <span className="variant-identity-copy-cell">
+                  <span className="variant-identity-value-row">
+                    <strong title={asset.suno_task_id || asset.task_id || ''}>{shortId(asset.suno_task_id || asset.task_id, 14) || '—'}</strong>
+                    <button
+                      type="button"
+                      className="variant-identity-copy-button"
+                      disabled={!(asset.suno_task_id || asset.task_id)}
+                      title={t('library.actions.copyTaskId', 'Vollständige Task-ID kopieren')}
+                      aria-label={t('library.actions.copyTaskId', 'Vollständige Task-ID kopieren')}
+                      onClick={async () => {
+                        await copyToClipboard(asset.suno_task_id || asset.task_id || '');
+                        notify(t('library.messages.taskIdCopied', 'Task-ID kopiert.'), 'success');
+                      }}
+                    >
+                      <Copy size={12} />
+                    </button>
+                  </span>
+                  <small>Task</small>
+                </span>
                 {voiceLabelForAsset(asset) && <span><strong>{voiceLabelForAsset(asset)}</strong><small>{t('library.detail.voice', 'Stimme')}</small></span>}
               </div>
               {isCurrentAsset(asset) && <div className="library-inline-waveform"><span>{playbackState?.isPlaying ? t('library.playback.running', 'Läuft') : t('library.playback.ready', 'Bereit')} · {formatDuration(playbackState?.currentTime || 0)} / {formatDuration(playbackState?.duration || asset.duration_seconds)}</span><Waveform asset={asset} compact currentTime={playbackState?.currentTime || 0} durationSeconds={playbackState?.duration || asset.duration_seconds} interactive={false} /></div>}

@@ -1,0 +1,13 @@
+{
+  "generated_at_utc": "2026-07-11T23:43:36.932463+00:00",
+  "mode": "dry-run",
+  "database": "/home/astier/Projekte/sunoapi-fastapi/suno_fastapi_app.db",
+  "backup": null,
+  "integrity_before": "ok",
+  "integrity_after": "ok",
+  "candidate_task_count": 0,
+  "planned_or_applied_change_count": 0,
+  "changes_by_table": {},
+  "candidate_tasks": [],
+  "changes": []
+}

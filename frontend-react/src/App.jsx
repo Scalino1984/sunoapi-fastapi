@@ -1387,6 +1387,26 @@ export default function App() {
     notify(isInstrumentalBlueprint ? 'Instrumental-Bauplan wurde für Musik übernommen.' : 'Songtext wurde für Musik übernommen.', 'success');
   }
 
+  async function useStyleForMusic(item) {
+    if (!item) return;
+    try {
+      if (item.id) await api.library.useStyle(item.id);
+      setMusicDraft({
+        title: '',
+        prompt: '',
+        style: item.style_text || item.content || item.description || '',
+        instrumental: false,
+        customMode: true,
+        work_mode: 'lyrics'
+      });
+      setActiveTab('music');
+      notify('Style wurde für Musik übernommen.', 'success');
+      refreshAll();
+    } catch (error) {
+      notify(error?.message || 'Style konnte nicht für Musik übernommen werden.', 'error');
+    }
+  }
+
   function reusePromptForMusic(payload) {
     setMusicDraft({
       title: payload?.title || '',
@@ -1791,9 +1811,9 @@ export default function App() {
     if (activeTab === 'texts') return <LibraryTextPage lyrics={lyrics} notify={notify} onReload={refreshAll} useForMusic={useLyricForMusic} searchQuery={commandQuery} />;
     if (activeTab === 'playlists') return <PlaylistsPage playlists={playlists} assets={assets} notify={notify} onReload={refreshAll} onPlay={play} searchQuery={commandQuery} />;
     if (activeTab === 'trash') return <TrashPage notify={notify} onReload={refreshAll} onTrashChanged={setTrashHasItems} />;
-    if (activeTab === 'styles') return <StylesPage styles={styles} notify={notify} onReload={refreshAll} searchQuery={commandQuery} />;
+    if (activeTab === 'styles') return <StylesPage styles={styles} notify={notify} onReload={refreshAll} useForMusic={useStyleForMusic} searchQuery={commandQuery} />;
     if (activeTab === 'daw') return <DawPage assets={assets} selectedAssetId={dawOpenAssetId || dawAssetIdFromLocation()} onSelectedHandled={() => {}} onAssetChange={(id) => setDawOpenAssetId(String(id || '').trim())} onBackToLibrary={() => openMainTab('library')} onPlay={play} notify={notify} onReload={refreshAll} />;
-    if (activeTab === 'admin') return <AdminPage notify={notify} />;
+    if (activeTab === 'admin') return <AdminPage notify={notify} onReload={refreshAll} />;
     if (activeTab === 'status') return <StatusPage notifications={notifications} tasks={tasks} onReload={refreshAll} onCheckStatus={() => refreshPendingAndReload({ manual: true })} taskRefreshState={taskRefreshState} onOpenNotification={openNotification} onOpenTaskDetails={openTaskDetails} notify={notify} />;
     if (activeTab === 'help') return <HelpPage onNavigate={openMainTab} notify={notify} />;
     return <SystemPage notify={notify} uploadedFiles={uploadedFiles} onRefresh={refreshAll} />;

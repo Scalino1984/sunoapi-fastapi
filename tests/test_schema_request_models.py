@@ -28,8 +28,13 @@ def test_import_suno_task_request_accepts_known_task_types_and_rejects_unknown()
 
 
 def test_batch_import_task_ids_are_split_trimmed_and_deduplicated():
-    request = BatchImportSunoTaskRequest(task_ids="a, b\na; a\n\n c ")
+    request = BatchImportSunoTaskRequest(
+        task_ids="a, b\na; a\n\n c ",
+        cache_video=False,
+    )
     assert request.parsed_task_ids == ["a", "b", "c"]
+    assert request.cache_video is False
+    assert request.model_dump()["cache_video"] is False
 
 
 def test_batch_import_song_ids_are_split_trimmed_and_deduplicated():

@@ -1,0 +1,873 @@
+{
+  "generated_at_utc": "2026-07-11T23:36:55.792409+00:00",
+  "mode": "apply",
+  "database": "/home/astier/Projekte/sunoapi-fastapi/suno_fastapi_app.db",
+  "backup": "/home/astier/Projekte/sunoapi-fastapi/backups/before_manual_import_provenance_repair_20260711T233655Z.db",
+  "integrity_before": "ok",
+  "integrity_after": "ok",
+  "candidate_task_count": 15,
+  "planned_or_applied_change_count": 61,
+  "changes_by_table": {
+    "suno_tasks": 15,
+    "songs": 15,
+    "audio_assets": 31
+  },
+  "candidate_tasks": [
+    {
+      "task_local_id": 591,
+      "task_id": "cefb9f3fd72e5d01627501f951b4eb29",
+      "task_type": "generate_music",
+      "status": "SUCCESS"
+    },
+    {
+      "task_local_id": 1217,
+      "task_id": "b35e7961593d8e54bbec19e4c034ad91",
+      "task_type": "generate_music",
+      "status": "SUCCESS"
+    },
+    {
+      "task_local_id": 1218,
+      "task_id": "3b0bfaf57f3548dcfa878108e6c1e66e",
+      "task_type": "generate_music",
+      "status": "SUCCESS"
+    },
+    {
+      "task_local_id": 1254,
+      "task_id": "a9cfe379beec87a1e6158d5e5c233f0d",
+      "task_type": "generate_music",
+      "status": "SUCCESS"
+    },
+    {
+      "task_local_id": 1359,
+      "task_id": "2aa6908d438945ce706ec205c15a53e9",
+      "task_type": "generate_music",
+      "status": "SUCCESS"
+    },
+    {
+      "task_local_id": 1373,
+      "task_id": "10f9f7c336e1dc0ee794f0b8be88dfa1",
+      "task_type": "generate_music",
+      "status": "SUCCESS"
+    },
+    {
+      "task_local_id": 1441,
+      "task_id": "b47136f7f1e22ff22bfb3c7dc83d3be9",
+      "task_type": "generate_music",
+      "status": "SUCCESS"
+    },
+    {
+      "task_local_id": 1452,
+      "task_id": "e13311e696140b0a377441f4817c40e9",
+      "task_type": "generate_music",
+      "status": "SUCCESS"
+    },
+    {
+      "task_local_id": 1456,
+      "task_id": "b073ae5598b22748ee7e7d8b1b1543ad",
+      "task_type": "generate_music",
+      "status": "SUCCESS"
+    },
+    {
+      "task_local_id": 1641,
+      "task_id": "ec739fee6cfed8ced55e3f6b4fa5a2f8",
+      "task_type": "generate_music",
+      "status": "SUCCESS"
+    },
+    {
+      "task_local_id": 1689,
+      "task_id": "5ffea773739211566fcfde7999258825",
+      "task_type": "generate_music",
+      "status": "SUCCESS"
+    },
+    {
+      "task_local_id": 1810,
+      "task_id": "ad4c02c723582db04230ff702ff97559",
+      "task_type": "generate_music",
+      "status": "SUCCESS"
+    },
+    {
+      "task_local_id": 1981,
+      "task_id": "7dbccecd48598d3288fe111a007bde0d",
+      "task_type": "generate_music",
+      "status": "SUCCESS"
+    },
+    {
+      "task_local_id": 1983,
+      "task_id": "2be17bb5b54df3d719ce9e26c1caf0f1",
+      "task_type": "generate_music",
+      "status": "SUCCESS"
+    },
+    {
+      "task_local_id": 2053,
+      "task_id": "072aa3ca5ae57524015307e6436ac660",
+      "task_type": "extend_music",
+      "status": "SUCCESS"
+    }
+  ],
+  "changes": [
+    {
+      "table": "suno_tasks",
+      "id": 591,
+      "task_id": "cefb9f3fd72e5d01627501f951b4eb29",
+      "field": "request_payload.source",
+      "before": "manual_sunoapi_import",
+      "after": null
+    },
+    {
+      "table": "songs",
+      "id": 147,
+      "task_id": "cefb9f3fd72e5d01627501f951b4eb29",
+      "field": "metadata provenance",
+      "before": {
+        "source": null,
+        "request_source": "manual_sunoapi_import"
+      },
+      "after": {
+        "source": null,
+        "request_source": null
+      }
+    },
+    {
+      "table": "audio_assets",
+      "id": 315,
+      "task_id": "cefb9f3fd72e5d01627501f951b4eb29",
+      "field": "metadata provenance",
+      "before": {
+        "source": null,
+        "request_source": "manual_sunoapi_import"
+      },
+      "after": {
+        "source": null,
+        "request_source": null
+      }
+    },
+    {
+      "table": "audio_assets",
+      "id": 316,
+      "task_id": "cefb9f3fd72e5d01627501f951b4eb29",
+      "field": "metadata provenance",
+      "before": {
+        "source": null,
+        "request_source": "manual_sunoapi_import"
+      },
+      "after": {
+        "source": null,
+        "request_source": null
+      }
+    },
+    {
+      "table": "suno_tasks",
+      "id": 1217,
+      "task_id": "b35e7961593d8e54bbec19e4c034ad91",
+      "field": "request_payload.source",
+      "before": "manual_sunoapi_import",
+      "after": null
+    },
+    {
+      "table": "songs",
+      "id": 155,
+      "task_id": "b35e7961593d8e54bbec19e4c034ad91",
+      "field": "metadata provenance",
+      "before": {
+        "source": null,
+        "request_source": "manual_sunoapi_import"
+      },
+      "after": {
+        "source": null,
+        "request_source": null
+      }
+    },
+    {
+      "table": "audio_assets",
+      "id": 331,
+      "task_id": "b35e7961593d8e54bbec19e4c034ad91",
+      "field": "metadata provenance",
+      "before": {
+        "source": null,
+        "request_source": "manual_sunoapi_import"
+      },
+      "after": {
+        "source": null,
+        "request_source": null
+      }
+    },
+    {
+      "table": "audio_assets",
+      "id": 332,
+      "task_id": "b35e7961593d8e54bbec19e4c034ad91",
+      "field": "metadata provenance",
+      "before": {
+        "source": null,
+        "request_source": "manual_sunoapi_import"
+      },
+      "after": {
+        "source": null,
+        "request_source": null
+      }
+    },
+    {
+      "table": "suno_tasks",
+      "id": 1218,
+      "task_id": "3b0bfaf57f3548dcfa878108e6c1e66e",
+      "field": "request_payload.source",
+      "before": "manual_sunoapi_import",
+      "after": null
+    },
+    {
+      "table": "songs",
+      "id": 156,
+      "task_id": "3b0bfaf57f3548dcfa878108e6c1e66e",
+      "field": "metadata provenance",
+      "before": {
+        "source": null,
+        "request_source": "manual_sunoapi_import"
+      },
+      "after": {
+        "source": null,
+        "request_source": null
+      }
+    },
+    {
+      "table": "audio_assets",
+      "id": 333,
+      "task_id": "3b0bfaf57f3548dcfa878108e6c1e66e",
+      "field": "metadata provenance",
+      "before": {
+        "source": null,
+        "request_source": "manual_sunoapi_import"
+      },
+      "after": {
+        "source": null,
+        "request_source": null
+      }
+    },
+    {
+      "table": "audio_assets",
+      "id": 334,
+      "task_id": "3b0bfaf57f3548dcfa878108e6c1e66e",
+      "field": "metadata provenance",
+      "before": {
+        "source": null,
+        "request_source": "manual_sunoapi_import"
+      },
+      "after": {
+        "source": null,
+        "request_source": null
+      }
+    },
+    {
+      "table": "suno_tasks",
+      "id": 1254,
+      "task_id": "a9cfe379beec87a1e6158d5e5c233f0d",
+      "field": "request_payload.source",
+      "before": "manual_sunoapi_import",
+      "after": null
+    },
+    {
+      "table": "songs",
+      "id": 157,
+      "task_id": "a9cfe379beec87a1e6158d5e5c233f0d",
+      "field": "metadata provenance",
+      "before": {
+        "source": null,
+        "request_source": "manual_sunoapi_import"
+      },
+      "after": {
+        "source": null,
+        "request_source": null
+      }
+    },
+    {
+      "table": "audio_assets",
+      "id": 335,
+      "task_id": "a9cfe379beec87a1e6158d5e5c233f0d",
+      "field": "metadata provenance",
+      "before": {
+        "source": null,
+        "request_source": "manual_sunoapi_import"
+      },
+      "after": {
+        "source": null,
+        "request_source": null
+      }
+    },
+    {
+      "table": "audio_assets",
+      "id": 336,
+      "task_id": "a9cfe379beec87a1e6158d5e5c233f0d",
+      "field": "metadata provenance",
+      "before": {
+        "source": null,
+        "request_source": "manual_sunoapi_import"
+      },
+      "after": {
+        "source": null,
+        "request_source": null
+      }
+    },
+    {
+      "table": "suno_tasks",
+      "id": 1359,
+      "task_id": "2aa6908d438945ce706ec205c15a53e9",
+      "field": "request_payload.source",
+      "before": "manual_sunoapi_import",
+      "after": null
+    },
+    {
+      "table": "songs",
+      "id": 160,
+      "task_id": "2aa6908d438945ce706ec205c15a53e9",
+      "field": "metadata provenance",
+      "before": {
+        "source": null,
+        "request_source": "manual_sunoapi_import"
+      },
+      "after": {
+        "source": null,
+        "request_source": null
+      }
+    },
+    {
+      "table": "audio_assets",
+      "id": 341,
+      "task_id": "2aa6908d438945ce706ec205c15a53e9",
+      "field": "metadata provenance",
+      "before": {
+        "source": null,
+        "request_source": "manual_sunoapi_import"
+      },
+      "after": {
+        "source": null,
+        "request_source": null
+      }
+    },
+    {
+      "table": "audio_assets",
+      "id": 342,
+      "task_id": "2aa6908d438945ce706ec205c15a53e9",
+      "field": "metadata provenance",
+      "before": {
+        "source": null,
+        "request_source": "manual_sunoapi_import"
+      },
+      "after": {
+        "source": null,
+        "request_source": null
+      }
+    },
+    {
+      "table": "suno_tasks",
+      "id": 1373,
+      "task_id": "10f9f7c336e1dc0ee794f0b8be88dfa1",
+      "field": "request_payload.source",
+      "before": "manual_sunoapi_import",
+      "after": null
+    },
+    {
+      "table": "songs",
+      "id": 161,
+      "task_id": "10f9f7c336e1dc0ee794f0b8be88dfa1",
+      "field": "metadata provenance",
+      "before": {
+        "source": null,
+        "request_source": "manual_sunoapi_import"
+      },
+      "after": {
+        "source": null,
+        "request_source": null
+      }
+    },
+    {
+      "table": "audio_assets",
+      "id": 343,
+      "task_id": "10f9f7c336e1dc0ee794f0b8be88dfa1",
+      "field": "metadata provenance",
+      "before": {
+        "source": null,
+        "request_source": "manual_sunoapi_import"
+      },
+      "after": {
+        "source": null,
+        "request_source": null
+      }
+    },
+    {
+      "table": "audio_assets",
+      "id": 344,
+      "task_id": "10f9f7c336e1dc0ee794f0b8be88dfa1",
+      "field": "metadata provenance",
+      "before": {
+        "source": null,
+        "request_source": "manual_sunoapi_import"
+      },
+      "after": {
+        "source": null,
+        "request_source": null
+      }
+    },
+    {
+      "table": "suno_tasks",
+      "id": 1441,
+      "task_id": "b47136f7f1e22ff22bfb3c7dc83d3be9",
+      "field": "request_payload.source",
+      "before": "manual_sunoapi_import",
+      "after": null
+    },
+    {
+      "table": "songs",
+      "id": 163,
+      "task_id": "b47136f7f1e22ff22bfb3c7dc83d3be9",
+      "field": "metadata provenance",
+      "before": {
+        "source": null,
+        "request_source": "manual_sunoapi_import"
+      },
+      "after": {
+        "source": null,
+        "request_source": null
+      }
+    },
+    {
+      "table": "audio_assets",
+      "id": 346,
+      "task_id": "b47136f7f1e22ff22bfb3c7dc83d3be9",
+      "field": "metadata provenance",
+      "before": {
+        "source": null,
+        "request_source": "manual_sunoapi_import"
+      },
+      "after": {
+        "source": null,
+        "request_source": null
+      }
+    },
+    {
+      "table": "audio_assets",
+      "id": 347,
+      "task_id": "b47136f7f1e22ff22bfb3c7dc83d3be9",
+      "field": "metadata provenance",
+      "before": {
+        "source": null,
+        "request_source": "manual_sunoapi_import"
+      },
+      "after": {
+        "source": null,
+        "request_source": null
+      }
+    },
+    {
+      "table": "suno_tasks",
+      "id": 1452,
+      "task_id": "e13311e696140b0a377441f4817c40e9",
+      "field": "request_payload.source",
+      "before": "manual_sunoapi_import",
+      "after": null
+    },
+    {
+      "table": "songs",
+      "id": 164,
+      "task_id": "e13311e696140b0a377441f4817c40e9",
+      "field": "metadata provenance",
+      "before": {
+        "source": null,
+        "request_source": "manual_sunoapi_import"
+      },
+      "after": {
+        "source": null,
+        "request_source": null
+      }
+    },
+    {
+      "table": "audio_assets",
+      "id": 348,
+      "task_id": "e13311e696140b0a377441f4817c40e9",
+      "field": "metadata provenance",
+      "before": {
+        "source": null,
+        "request_source": "manual_sunoapi_import"
+      },
+      "after": {
+        "source": null,
+        "request_source": null
+      }
+    },
+    {
+      "table": "audio_assets",
+      "id": 349,
+      "task_id": "e13311e696140b0a377441f4817c40e9",
+      "field": "metadata provenance",
+      "before": {
+        "source": null,
+        "request_source": "manual_sunoapi_import"
+      },
+      "after": {
+        "source": null,
+        "request_source": null
+      }
+    },
+    {
+      "table": "suno_tasks",
+      "id": 1456,
+      "task_id": "b073ae5598b22748ee7e7d8b1b1543ad",
+      "field": "request_payload.source",
+      "before": "manual_sunoapi_import",
+      "after": null
+    },
+    {
+      "table": "songs",
+      "id": 166,
+      "task_id": "b073ae5598b22748ee7e7d8b1b1543ad",
+      "field": "metadata provenance",
+      "before": {
+        "source": null,
+        "request_source": "manual_sunoapi_import"
+      },
+      "after": {
+        "source": null,
+        "request_source": null
+      }
+    },
+    {
+      "table": "audio_assets",
+      "id": 351,
+      "task_id": "b073ae5598b22748ee7e7d8b1b1543ad",
+      "field": "metadata provenance",
+      "before": {
+        "source": null,
+        "request_source": "manual_sunoapi_import"
+      },
+      "after": {
+        "source": null,
+        "request_source": null
+      }
+    },
+    {
+      "table": "audio_assets",
+      "id": 352,
+      "task_id": "b073ae5598b22748ee7e7d8b1b1543ad",
+      "field": "metadata provenance",
+      "before": {
+        "source": null,
+        "request_source": "manual_sunoapi_import"
+      },
+      "after": {
+        "source": null,
+        "request_source": null
+      }
+    },
+    {
+      "table": "audio_assets",
+      "id": 353,
+      "task_id": "b073ae5598b22748ee7e7d8b1b1543ad",
+      "field": "metadata provenance",
+      "before": {
+        "source": null,
+        "request_source": "manual_sunoapi_import"
+      },
+      "after": {
+        "source": null,
+        "request_source": null
+      }
+    },
+    {
+      "table": "suno_tasks",
+      "id": 1641,
+      "task_id": "ec739fee6cfed8ced55e3f6b4fa5a2f8",
+      "field": "request_payload.source",
+      "before": "manual_sunoapi_import",
+      "after": null
+    },
+    {
+      "table": "songs",
+      "id": 168,
+      "task_id": "ec739fee6cfed8ced55e3f6b4fa5a2f8",
+      "field": "metadata provenance",
+      "before": {
+        "source": null,
+        "request_source": "manual_sunoapi_import"
+      },
+      "after": {
+        "source": null,
+        "request_source": null
+      }
+    },
+    {
+      "table": "audio_assets",
+      "id": 356,
+      "task_id": "ec739fee6cfed8ced55e3f6b4fa5a2f8",
+      "field": "metadata provenance",
+      "before": {
+        "source": null,
+        "request_source": "manual_sunoapi_import"
+      },
+      "after": {
+        "source": null,
+        "request_source": null
+      }
+    },
+    {
+      "table": "audio_assets",
+      "id": 357,
+      "task_id": "ec739fee6cfed8ced55e3f6b4fa5a2f8",
+      "field": "metadata provenance",
+      "before": {
+        "source": null,
+        "request_source": "manual_sunoapi_import"
+      },
+      "after": {
+        "source": null,
+        "request_source": null
+      }
+    },
+    {
+      "table": "suno_tasks",
+      "id": 1689,
+      "task_id": "5ffea773739211566fcfde7999258825",
+      "field": "request_payload.source",
+      "before": "manual_sunoapi_import",
+      "after": null
+    },
+    {
+      "table": "songs",
+      "id": 169,
+      "task_id": "5ffea773739211566fcfde7999258825",
+      "field": "metadata provenance",
+      "before": {
+        "source": null,
+        "request_source": "manual_sunoapi_import"
+      },
+      "after": {
+        "source": null,
+        "request_source": null
+      }
+    },
+    {
+      "table": "audio_assets",
+      "id": 358,
+      "task_id": "5ffea773739211566fcfde7999258825",
+      "field": "metadata provenance",
+      "before": {
+        "source": null,
+        "request_source": "manual_sunoapi_import"
+      },
+      "after": {
+        "source": null,
+        "request_source": null
+      }
+    },
+    {
+      "table": "audio_assets",
+      "id": 359,
+      "task_id": "5ffea773739211566fcfde7999258825",
+      "field": "metadata provenance",
+      "before": {
+        "source": null,
+        "request_source": "manual_sunoapi_import"
+      },
+      "after": {
+        "source": null,
+        "request_source": null
+      }
+    },
+    {
+      "table": "suno_tasks",
+      "id": 1810,
+      "task_id": "ad4c02c723582db04230ff702ff97559",
+      "field": "request_payload.source",
+      "before": "manual_sunoapi_import",
+      "after": null
+    },
+    {
+      "table": "songs",
+      "id": 171,
+      "task_id": "ad4c02c723582db04230ff702ff97559",
+      "field": "metadata provenance",
+      "before": {
+        "source": null,
+        "request_source": "manual_sunoapi_import"
+      },
+      "after": {
+        "source": null,
+        "request_source": null
+      }
+    },
+    {
+      "table": "audio_assets",
+      "id": 361,
+      "task_id": "ad4c02c723582db04230ff702ff97559",
+      "field": "metadata provenance",
+      "before": {
+        "source": null,
+        "request_source": "manual_sunoapi_import"
+      },
+      "after": {
+        "source": null,
+        "request_source": null
+      }
+    },
+    {
+      "table": "audio_assets",
+      "id": 362,
+      "task_id": "ad4c02c723582db04230ff702ff97559",
+      "field": "metadata provenance",
+      "before": {
+        "source": null,
+        "request_source": "manual_sunoapi_import"
+      },
+      "after": {
+        "source": null,
+        "request_source": null
+      }
+    },
+    {
+      "table": "suno_tasks",
+      "id": 1981,
+      "task_id": "7dbccecd48598d3288fe111a007bde0d",
+      "field": "request_payload.source",
+      "before": "manual_sunoapi_import",
+      "after": null
+    },
+    {
+      "table": "songs",
+      "id": 172,
+      "task_id": "7dbccecd48598d3288fe111a007bde0d",
+      "field": "metadata provenance",
+      "before": {
+        "source": null,
+        "request_source": "manual_sunoapi_import"
+      },
+      "after": {
+        "source": null,
+        "request_source": null
+      }
+    },
+    {
+      "table": "audio_assets",
+      "id": 363,
+      "task_id": "7dbccecd48598d3288fe111a007bde0d",
+      "field": "metadata provenance",
+      "before": {
+        "source": null,
+        "request_source": "manual_sunoapi_import"
+      },
+      "after": {
+        "source": null,
+        "request_source": null
+      }
+    },
+    {
+      "table": "audio_assets",
+      "id": 364,
+      "task_id": "7dbccecd48598d3288fe111a007bde0d",
+      "field": "metadata provenance",
+      "before": {
+        "source": null,
+        "request_source": "manual_sunoapi_import"
+      },
+      "after": {
+        "source": null,
+        "request_source": null
+      }
+    },
+    {
+      "table": "suno_tasks",
+      "id": 1983,
+      "task_id": "2be17bb5b54df3d719ce9e26c1caf0f1",
+      "field": "request_payload.source",
+      "before": "manual_sunoapi_import",
+      "after": null
+    },
+    {
+      "table": "songs",
+      "id": 173,
+      "task_id": "2be17bb5b54df3d719ce9e26c1caf0f1",
+      "field": "metadata provenance",
+      "before": {
+        "source": null,
+        "request_source": "manual_sunoapi_import"
+      },
+      "after": {
+        "source": null,
+        "request_source": null
+      }
+    },
+    {
+      "table": "audio_assets",
+      "id": 365,
+      "task_id": "2be17bb5b54df3d719ce9e26c1caf0f1",
+      "field": "metadata provenance",
+      "before": {
+        "source": null,
+        "request_source": "manual_sunoapi_import"
+      },
+      "after": {
+        "source": null,
+        "request_source": null
+      }
+    },
+    {
+      "table": "audio_assets",
+      "id": 366,
+      "task_id": "2be17bb5b54df3d719ce9e26c1caf0f1",
+      "field": "metadata provenance",
+      "before": {
+        "source": null,
+        "request_source": "manual_sunoapi_import"
+      },
+      "after": {
+        "source": null,
+        "request_source": null
+      }
+    },
+    {
+      "table": "suno_tasks",
+      "id": 2053,
+      "task_id": "072aa3ca5ae57524015307e6436ac660",
+      "field": "request_payload.source",
+      "before": "manual_sunoapi_import",
+      "after": null
+    },
+    {
+      "table": "songs",
+      "id": 174,
+      "task_id": "072aa3ca5ae57524015307e6436ac660",
+      "field": "metadata provenance",
+      "before": {
+        "source": null,
+        "request_source": "manual_sunoapi_import"
+      },
+      "after": {
+        "source": null,
+        "request_source": null
+      }
+    },
+    {
+      "table": "audio_assets",
+      "id": 367,
+      "task_id": "072aa3ca5ae57524015307e6436ac660",
+      "field": "metadata provenance",
+      "before": {
+        "source": null,
+        "request_source": "manual_sunoapi_import"
+      },
+      "after": {
+        "source": null,
+        "request_source": null
+      }
+    },
+    {
+      "table": "audio_assets",
+      "id": 368,
+      "task_id": "072aa3ca5ae57524015307e6436ac660",
+      "field": "metadata provenance",
+      "before": {
+        "source": null,
+        "request_source": "manual_sunoapi_import"
+      },
+      "after": {
+        "source": null,
+        "request_source": null
+      }
+    }
+  ]
+}

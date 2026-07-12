@@ -329,6 +329,7 @@ class BatchImportSunoTaskRequest(BaseModel):
     task_ids: str = Field(min_length=1)
     task_type: str = Field(default="auto", max_length=100)
     cache_audio: bool = True
+    cache_video: bool = True
     title_prefix: str | None = Field(default=None, max_length=120)
     generate_srt: bool = False
     generate_stems: bool = False
@@ -1880,6 +1881,14 @@ class AiAdminSettingsUpdate(BaseModel):
     library_ai_tagging_enabled: bool = False
     library_ai_tagging_profile_id: int | None = None
     library_ai_tagging_max_tags_per_asset: int = Field(default=5, ge=2, le=8)
+
+
+class LibrarySearchIndexUpdate(BaseModel):
+    tags: list[str] = Field(default_factory=list, max_length=50)
+    moods: list[str] = Field(default_factory=list, max_length=20)
+    genres: list[str] = Field(default_factory=list, max_length=20)
+    language: str = Field(default="unknown", max_length=16)
+    reason: str | None = Field(default=None, max_length=240)
 
 
 class AiProviderTestRequest(BaseModel):

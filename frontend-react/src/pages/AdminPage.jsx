@@ -1,9 +1,10 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Bot, CheckCircle2, Copy, Download, FileText, Music2, Plus, RefreshCcw, Save, Tag, TestTube2, Trash2, Upload, UserRound } from 'lucide-react';
+import { Bot, CheckCircle2, Copy, Download, FileText, Music2, Plus, RefreshCcw, Save, Search, Tag, TestTube2, Trash2, Upload, UserRound } from 'lucide-react';
 import { api } from '../api/client.js';
 import { SectionHeader } from '../components/SectionHeader.jsx';
 import { downloadTextFile } from '../utils.js';
 import { useI18n } from '../i18n/I18nContext.jsx';
+import { LibrarySearchIndexAdmin } from '../components/admin/LibrarySearchIndexAdmin.jsx';
 
 function defaultModelForProvider(settings, provider) {
   const models = settings?.allowed_models?.[provider] || [];
@@ -25,7 +26,7 @@ function providerLabel(settings, provider, t = null) {
   return `${provider} · ${state}`;
 }
 
-export function AdminPage({ notify }) {
+export function AdminPage({ notify, onReload }) {
   const { t } = useI18n();
   const [users, setUsers] = useState([]);
   const [settings, setSettings] = useState(null);
@@ -302,6 +303,7 @@ export function AdminPage({ notify }) {
 
   const panels = useMemo(() => [
     ['assistant', t('admin.tabs.assistant', 'KI-Assistent'), Bot],
+    ['library-search-index', t('admin.tabs.librarySearchIndex', 'Library-Suchindex'), Search],
     ['daw-prompts', 'DAW-Prompts', Music2],
     ['tags', t('admin.tabs.vocalTags', 'Vocal Tags'), Tag],
     ['users', t('admin.tabs.users', 'Benutzer'), UserRound]
@@ -499,10 +501,10 @@ export function AdminPage({ notify }) {
                       {profiles.filter((item) => item.is_active).map((profile) => <option key={profile.id} value={profile.id}>{profile.name} · {profile.provider} / {profile.model}</option>)}
                     </select>
                   </label>
-                  <label>{t('admin.libraryTags.maxTags', 'Max. Tags pro Song')}
+                  <label>{t('admin.libraryTags.maxTags', 'Max. Tags pro Audio-Variante')}
                     <input type="number" min="2" max="8" value={settings.library_ai_tagging_max_tags_per_asset || 5} onChange={(event) => setSettings({ ...settings, library_ai_tagging_max_tags_per_asset: event.target.value })} />
                   </label>
-                  <p className="muted wide">{t('admin.libraryTags.hint', 'Die Tags werden bewusst klein gehalten und ueber die zentrale Header-Suche gefunden. Einzel- und Sammellaeufe starten aus der Library und erscheinen auf der Statusseite.')}</p>
+                  <p className="muted wide">{t('admin.libraryTags.hint', 'Die Tags werden bewusst klein gehalten und über die zentrale Header-Suche gefunden. Einzel- und Sammelläufe werden ausschließlich manuell gestartet und erscheinen auf der Statusseite.')}</p>
                 </div>
               </div>
               <div className="form-actions wide">
@@ -580,6 +582,10 @@ export function AdminPage({ notify }) {
             </div>
           </article>
         </div>
+      )}
+
+      {activePanel === 'library-search-index' && (
+        <LibrarySearchIndexAdmin notify={notify} onTasksChanged={onReload} />
       )}
 
       {activePanel === 'daw-prompts' && (

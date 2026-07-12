@@ -101,6 +101,15 @@ def read_saved_library_ai_tags(asset: AudioAsset | None) -> dict[str, Any] | Non
     return value if isinstance(value, dict) else None
 
 
+def has_library_ai_tag_content(value: dict[str, Any] | None) -> bool:
+    if not isinstance(value, dict):
+        return False
+    if any(value.get(key) for key in ("tags", "moods", "genres")):
+        return True
+    language = str(value.get("language") or "").strip().lower()
+    return bool(language and language != "unknown")
+
+
 def _profile_context(db: Session, profile_id: Any, fallback_provider: str, fallback_model: str) -> tuple[str, str, str, dict[str, Any]]:
     profile = None
     if profile_id is not None:
@@ -151,16 +160,31 @@ def _short_text(value: Any, limit: int) -> str:
     return f"{text[:limit].rstrip()}\n..."
 
 
+def _song_context(song: Song | None) -> dict[str, Any]:
+    if not song:
+        return {}
+    metadata = song.metadata_json if isinstance(song.metadata_json, dict) else {}
+    request = metadata.get("request_payload") if isinstance(metadata.get("request_payload"), dict) else {}
+    candidate = metadata.get("candidate") if isinstance(metadata.get("candidate"), dict) else {}
+    return {
+        "style": candidate.get("tags") or candidate.get("style") or request.get("style") or request.get("tags") or metadata.get("style") or metadata.get("tags"),
+        "prompt": song.prompt or request.get("prompt"),
+        "lyrics": song.lyrics or request.get("lyrics"),
+        "model": song.model or candidate.get("modelName") or candidate.get("model") or request.get("model"),
+    }
+
+
 def _asset_context(asset: AudioAsset, song: Song | None) -> dict[str, Any]:
     metadata = asset.metadata_json if isinstance(asset.metadata_json, dict) else {}
     request = metadata.get("request_payload") if isinstance(metadata.get("request_payload"), dict) else {}
     analysis = metadata.get("audio_ai_analysis") if isinstance(metadata.get("audio_ai_analysis"), dict) else {}
+    song_context = _song_context(song)
     return {
         "title": asset.display_title or asset.title or (song.title if song else None),
-        "style": asset.style or asset.tags or request.get("style") or request.get("tags") or (song.style if song else None) or (song.tags if song else None),
-        "prompt": _short_text(asset.prompt or request.get("prompt") or (song.prompt if song else None), 1800),
-        "lyrics": _short_text(asset.lyrics or request.get("lyrics") or (song.lyrics if song else None), 2400),
-        "model": asset.model_name or request.get("model") or (song.model if song else None),
+        "style": asset.style or asset.tags or request.get("style") or request.get("tags") or song_context.get("style"),
+        "prompt": _short_text(asset.prompt or request.get("prompt") or song_context.get("prompt"), 1800),
+        "lyrics": _short_text(asset.lyrics or request.get("lyrics") or song_context.get("lyrics"), 2400),
+        "model": asset.model_name or request.get("model") or song_context.get("model"),
         "operation_type": asset.operation_type or asset.task_type,
         "duration_seconds": asset.duration_seconds,
         "generation_options": {key: request.get(key) for key in ("negativeTags", "vocalGender", "styleWeight", "weirdnessConstraint", "audioWeight", "customMode", "instrumental", "personaId", "personaModel") if request.get(key) not in (None, "")},
@@ -307,7 +331,9 @@ Antworte ausschliesslich als JSON-Objekt:
 
 
 def create_library_ai_tagging_status_task(db: Session, asset: AudioAsset | None, *, asset_ids: list[int], force: bool = False) -> SunoTask:
-    is_bulk = len(asset_ids) != 1
+    # Der aufrufende Batch-Endpunkt übergibt bewusst kein einzelnes Asset. Das
+    # bleibt auch dann ein Sammellauf, wenn nach Deduplizierung nur eine ID übrig ist.
+    is_bulk = asset is None or len(asset_ids) != 1
     title = "KI-Tagging-Sammellauf gestartet" if is_bulk else f"KI-Tags werden erzeugt: {asset.display_title or asset.title or asset.filename or asset.id}"
     task_type = BULK_TAGGING_TASK_TYPE if is_bulk else TAGGING_TASK_TYPE
     task = SunoTask(

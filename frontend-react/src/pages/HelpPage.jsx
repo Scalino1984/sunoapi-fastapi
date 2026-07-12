@@ -92,7 +92,7 @@ const workflows = [
     title: 'Optionale KI-Funktionen',
     items: [
       'Admin: Lokale Audioanalyse kann aktiviert werden; in der Library startet sie pro Audio über das Drei-Punkt-Menü und öffnet danach einen Report.',
-      'Admin: KI-Library-Tags können aktiviert werden; sie erscheinen in Songdetails und verbessern die zentrale Header-Suche.',
+      'Admin: KI-Library-Tags können aktiviert werden; die zentrale Verwaltung liegt unter „Library-Suchindex“, Einzelaktionen bleiben in den Songdetails verfügbar und die Begriffe verbessern die Header-Suche.',
       'Admin: Extend kann continueAt optional automatisch per Audioanalyse berechnen; ohne Aktivierung bleibt die manuelle Zeitangabe maßgeblich.',
       'Der globale KI-Assistent bleibt ein separates Hilfswerkzeug und nutzt die im Adminbereich konfigurierte KI.'
     ]
@@ -114,7 +114,7 @@ const faqItems = [
   },
   {
     question: 'Wo finde ich KI-Library-Tags nach Aktivierung?',
-    answer: 'In der Library in den Songdetails als Karte „KI-Library-Tags“, im Drei-Punkt-Menü einzelner Varianten und bei Mehrfachauswahl als Sammelaktion „KI-Tags“.'
+    answer: 'Zentral im Adminbereich unter „Library-Suchindex“. Dort lassen sich vorhandene, fehlende, laufende und fehlgeschlagene Einträge suchen, bearbeiten, entfernen oder manuell gesammelt erzeugen. Die Einzelaktion bleibt zusätzlich in den Songdetails verfügbar.'
   },
   {
     question: 'Wo finde ich die lokale Audioanalyse?',

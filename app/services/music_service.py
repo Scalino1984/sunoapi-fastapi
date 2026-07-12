@@ -31,6 +31,13 @@ from app.config import get_settings
 from app.models import AudioAsset, LyricDraft, Persona, Song, StatusNotification, SunoTask, VideoAsset
 from app.services.audio_cache_service import AudioCacheService, CoverCacheService, collect_audio_candidates, collect_image_urls, extract_source_created_at
 from app.services.audio_asset_materialization_service import AudioAssetMaterializationService
+from app.services.import_provenance_service import (
+    MANUAL_SUNOAPI_IMPORT_SOURCE,
+    has_false_manual_sunoapi_import_marker,
+    is_confirmed_manual_sunoapi_import,
+    is_manual_sunoapi_import_payload,
+    strip_manual_sunoapi_import_source,
+)
 from app.services.song_library_sync_service import song_sort_datetime
 from app.services.video_asset_service import VideoAssetService, extract_video_status, extract_video_url, is_video_success_status, is_video_terminal_status
 from app.suno_client import SunoAPIClient
@@ -1248,12 +1255,38 @@ class MusicService:
         if not existing_song and not existing_asset and not existing_video:
             return None
 
+        related_metadata = []
+        for row in (existing_song, existing_asset, existing_video):
+            metadata = row.metadata_json if row is not None and isinstance(row.metadata_json, dict) else {}
+            related_metadata.append(metadata)
+
+        related_requests = [
+            metadata.get("request_payload")
+            for metadata in related_metadata
+            if isinstance(metadata.get("request_payload"), dict)
+        ]
+        related_was_manual_import = any(is_manual_sunoapi_import_payload(payload) for payload in related_requests)
+        recovered_source = MANUAL_SUNOAPI_IMPORT_SOURCE if related_was_manual_import else "existing_library_record"
+
+        recovered_task_type = "generate_music"
+        for metadata in related_metadata:
+            request_payload = metadata.get("request_payload") if isinstance(metadata.get("request_payload"), dict) else {}
+            candidate = (
+                request_payload.get("task_type")
+                or request_payload.get("taskType")
+                or metadata.get("task_type")
+                or metadata.get("taskType")
+            )
+            if candidate:
+                recovered_task_type = str(candidate)
+                break
+
         recovered = SunoTask(
             task_id=task_id,
-            task_type="imported_external",
+            task_type=recovered_task_type,
             status="IMPORTED_ALREADY_EXISTS",
             request_payload={
-                "source": "manual_sunoapi_import",
+                "source": recovered_source,
                 "task_id": task_id,
                 "duplicate_detected": True,
                 "song_id": existing_song.id if existing_song else None,
@@ -1261,7 +1294,7 @@ class MusicService:
                 "video_asset_id": existing_video.id if existing_video else None,
             },
             response_payload={
-                "source": "manual_sunoapi_import",
+                "source": recovered_source,
                 "taskId": task_id,
                 "duplicate_detected": True,
             },
@@ -1480,16 +1513,29 @@ class MusicService:
                 continue
         raise ValueError("Task-Typ konnte nicht automatisch erkannt werden. SunoAPI.org lieferte fuer keinen bekannten Record-Info-Endpunkt Daten.")
 
-    async def _refresh_existing_imported_task_details(self, task: SunoTask, *, task_type: str, base_request_payload: dict[str, Any]) -> bool:
+    async def _refresh_existing_imported_task_details(
+        self,
+        task: SunoTask,
+        *,
+        task_type: str,
+        base_request_payload: dict[str, Any],
+        preserve_existing_provenance: bool = False,
+    ) -> bool:
         if not task.task_id:
             return False
         resolved_task_type, details = await self._fetch_external_task_details_with_type(str(task.task_id), task_type)
         existing_request = task.request_payload if isinstance(task.request_payload, dict) else {}
-        merged_request = {**existing_request, **{key: value for key, value in base_request_payload.items() if value is not None}}
+        import_request = base_request_payload if isinstance(base_request_payload, dict) else {}
+        if preserve_existing_provenance:
+            existing_request = strip_manual_sunoapi_import_source(existing_request)
+            import_request = strip_manual_sunoapi_import_source(import_request)
+        merged_request = {**existing_request, **{key: value for key, value in import_request.items() if value is not None}}
         merged_request["task_type"] = resolved_task_type
         if str(task_type or "").strip() in {"auto", "detect", ""}:
             merged_request["auto_detected_task_type"] = True
         merged_request = _merge_generation_options_into_request(merged_request, details, task.response_payload)
+        if preserve_existing_provenance:
+            merged_request = strip_manual_sunoapi_import_source(merged_request)
 
         changed = False
         if task.task_type != resolved_task_type:
@@ -1601,9 +1647,39 @@ class MusicService:
         existing = self._find_existing_imported_task(task_id)
 
         if existing is not None:
+            existing_request = existing.request_payload if isinstance(existing.request_payload, dict) else {}
+            existing_response = existing.response_payload if isinstance(existing.response_payload, dict) else {}
+            confirmed_manual_import = is_confirmed_manual_sunoapi_import(
+                task_type=existing.task_type,
+                request_payload=existing_request,
+                response_payload=existing_response,
+            )
+            preserve_existing_provenance = not confirmed_manual_import
+
+            # Eine bereits lokal erzeugte Task darf durch einen späteren
+            # Task-ID-Import niemals zur manuellen API-Importtask werden.
+            if preserve_existing_provenance and has_false_manual_sunoapi_import_marker(
+                task_type=existing.task_type,
+                request_payload=existing_request,
+                response_payload=existing_response,
+            ):
+                existing.request_payload = strip_manual_sunoapi_import_source(existing_request)
+                flag_modified(existing, "request_payload")
+                self.db.add(existing)
+
+            refresh_request_payload = (
+                request_payload
+                if confirmed_manual_import
+                else strip_manual_sunoapi_import_source(request_payload)
+            )
             try:
                 refresh_type = existing.task_type if requested_task_type in {"auto", "detect"} and existing.task_type else requested_task_type
-                await self._refresh_existing_imported_task_details(existing, task_type=refresh_type, base_request_payload=request_payload)
+                await self._refresh_existing_imported_task_details(
+                    existing,
+                    task_type=refresh_type,
+                    base_request_payload=refresh_request_payload,
+                    preserve_existing_provenance=preserve_existing_provenance,
+                )
             except Exception:
                 self._repair_imported_task_generation_options(existing)
             existing_video = None

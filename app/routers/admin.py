@@ -3,13 +3,13 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Query
 from sqlalchemy.orm import Session
 
 from app.auth import get_current_active_user
 from app.config import get_settings
 from app.database import get_db
-from app.models import AppSetting, User, VocalTag, AiAssistantProfile, AiInstructionFile, AiAssistantProfileFile, DawPromptHook
+from app.models import AppSetting, User, VocalTag, AiAssistantProfile, AiInstructionFile, AiAssistantProfileFile, DawPromptHook, AudioAsset
 from app.schemas import (
     AiAdminSettingsRead,
     AiAdminSettingsUpdate,
@@ -20,6 +20,7 @@ from app.schemas import (
     AiInstructionFileRead,
     AiInstructionFileUpdate,
     AiProviderTestRequest,
+    LibrarySearchIndexUpdate,
     DawPromptHookCreate,
     DawPromptHookRead,
     DawPromptHookUpdate,
@@ -30,6 +31,11 @@ from app.schemas import (
     VocalTagUpdate,
 )
 from app.services.ai_chat_service import AiChatService, AiProviderError
+from app.services.library_search_index_service import (
+    delete_library_search_index,
+    list_library_search_index,
+    update_library_search_index,
+)
 from app.utils.time_utils import utc_now_naive
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
@@ -255,6 +261,47 @@ def update_ai_settings(payload: AiAdminSettingsUpdate, db: Session = Depends(get
     row.updated_at = utc_now_naive()
     db.commit()
     return get_ai_admin_settings(db)
+
+
+
+
+@router.get("/library-search-index")
+def read_library_search_index(
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=50, ge=10, le=200),
+    search: str = Query(default="", max_length=200),
+    status: str = Query(default="all", pattern="^(all|present|missing|running|failed)$"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+):
+    return list_library_search_index(db, search=search, status=status, page=page, page_size=page_size)
+
+
+@router.patch("/library-search-index/{audio_asset_id}")
+def patch_library_search_index(
+    audio_asset_id: int,
+    payload: LibrarySearchIndexUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+):
+    asset = db.query(AudioAsset).filter(AudioAsset.id == audio_asset_id, AudioAsset.is_deleted.is_(False)).first()
+    if not asset:
+        raise HTTPException(status_code=404, detail="AudioAsset wurde nicht gefunden.")
+    value = update_library_search_index(db, asset, **payload.model_dump())
+    return {"ok": True, "audio_asset_id": audio_asset_id, "ai_tags": value}
+
+
+@router.delete("/library-search-index/{audio_asset_id}")
+def remove_library_search_index(
+    audio_asset_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+):
+    asset = db.query(AudioAsset).filter(AudioAsset.id == audio_asset_id, AudioAsset.is_deleted.is_(False)).first()
+    if not asset:
+        raise HTTPException(status_code=404, detail="AudioAsset wurde nicht gefunden.")
+    removed = delete_library_search_index(db, asset)
+    return {"ok": True, "audio_asset_id": audio_asset_id, "removed": removed}
 
 
 @router.post("/ai-settings/test")

@@ -308,6 +308,7 @@ export const api = {
     styles: () => apiFetch('/api/library/styles'),
     createStyle: (payload) => apiFetch('/api/library/styles', { method: 'POST', body: JSON.stringify(payload) }),
     updateStyle: (id, payload) => apiFetch(`/api/library/styles/${id}`, { method: 'PUT', body: JSON.stringify(payload) }),
+    useStyle: (id) => apiFetch(`/api/library/styles/${id}/use`, { method: 'POST' }),
     vocalTags: () => apiFetch('/api/library/vocal-tags'),
     // Aktive Library-Import/Export-Kette: diese Wrapper spiegeln app/routers/library.py.
     // Nicht über alte Direktrouten oder lokale CSV-Helfer umgehen, sonst laufen aktive Seiten ins Leere.
@@ -387,7 +388,17 @@ export const api = {
     createDawPromptHook: (payload) => apiFetch('/api/admin/daw-prompt-hooks', { method: 'POST', body: JSON.stringify(payload) }),
     updateDawPromptHook: (id, payload) => apiFetch(`/api/admin/daw-prompt-hooks/${id}`, { method: 'PUT', body: JSON.stringify(payload) }),
     duplicateDawPromptHook: (id) => apiFetch(`/api/admin/daw-prompt-hooks/${id}/duplicate`, { method: 'POST' }),
-    deleteDawPromptHook: (id) => apiFetch(`/api/admin/daw-prompt-hooks/${id}`, { method: 'DELETE' })
+    deleteDawPromptHook: (id) => apiFetch(`/api/admin/daw-prompt-hooks/${id}`, { method: 'DELETE' }),
+    librarySearchIndex: ({ page = 1, pageSize = 50, search = '', status = 'all' } = {}) => {
+      const params = new URLSearchParams();
+      params.set('page', String(page));
+      params.set('page_size', String(pageSize));
+      params.set('search', String(search || ''));
+      params.set('status', String(status || 'all'));
+      return apiFetch(`/api/admin/library-search-index?${params.toString()}`, { cache: 'no-store' });
+    },
+    updateLibrarySearchIndex: (id, payload) => apiFetch(`/api/admin/library-search-index/${id}`, { method: 'PATCH', body: JSON.stringify(payload) }),
+    deleteLibrarySearchIndex: (id) => apiFetch(`/api/admin/library-search-index/${id}`, { method: 'DELETE' })
   },
 
   daw: {

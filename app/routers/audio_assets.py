@@ -43,9 +43,11 @@ from app.services.library_ai_tagging_service import (
     create_library_ai_tagging_status_task,
     finish_library_ai_tagging_status_task,
     generate_library_ai_tags_for_asset,
+    has_library_ai_tag_content,
     load_library_ai_tagging_settings,
     read_saved_library_ai_tags,
 )
+from app.services.library_search_index_service import active_library_tagging_tasks_by_asset
 from app.services.background_task_runner import run_detached_process
 from app.services.task_lifecycle_service import (
     append_task_debug_event,
@@ -2557,7 +2559,7 @@ async def _run_library_ai_tagging_background(task_id: int, payload: dict[str, An
                 failed += 1
                 errors.append({"audio_asset_id": asset_id, "error": "AudioAsset wurde nicht gefunden."})
                 continue
-            if read_saved_library_ai_tags(asset) and not force:
+            if has_library_ai_tag_content(read_saved_library_ai_tags(asset)) and not force:
                 skipped += 1
                 tagged_ids.append(asset.id)
                 continue
@@ -2638,9 +2640,24 @@ def bulk_generate_library_ai_tags(payload: BulkLibraryAiTaggingRequest, db: Sess
     settings = load_library_ai_tagging_settings(db)
     if not settings.get("enabled"):
         raise HTTPException(status_code=403, detail="KI-Tagging ist im Admin-Panel deaktiviert.")
-    asset_ids = _dedupe_positive_ids(payload.ids)
-    if not asset_ids:
+    requested_ids = _dedupe_positive_ids(payload.ids)
+    if not requested_ids:
         raise HTTPException(status_code=422, detail="Keine gültigen AudioAsset-IDs übergeben.")
+    active_map = active_library_tagging_tasks_by_asset(db)
+    active_ids = [asset_id for asset_id in requested_ids if asset_id in active_map]
+    asset_ids = [asset_id for asset_id in requested_ids if asset_id not in active_map]
+    if not asset_ids:
+        active_task_ids = sorted({active_map[asset_id].id for asset_id in active_ids})
+        return {
+            "ok": True,
+            "queued": False,
+            "status": "RUNNING",
+            "count": 0,
+            "already_running_count": len(active_ids),
+            "already_running_audio_asset_ids": active_ids,
+            "existing_task_local_ids": active_task_ids,
+            "message": "Für alle ausgewählten Audio-Varianten läuft bereits ein KI-Tagging-Task.",
+        }
     task = create_library_ai_tagging_status_task(db, None, asset_ids=asset_ids, force=bool(payload.force))
     run_detached_process(f"bulk-library-ai-tags-{task.id}", _run_library_ai_tagging_background, task.id, {"ids": asset_ids, "force": bool(payload.force)})
     return {
@@ -2650,6 +2667,8 @@ def bulk_generate_library_ai_tags(payload: BulkLibraryAiTaggingRequest, db: Sess
         "task_type": "bulk_library_ai_tagging",
         "status": "RUNNING",
         "count": len(asset_ids),
+        "already_running_count": len(active_ids),
+        "already_running_audio_asset_ids": active_ids,
         "message": "KI-Tagging-Sammellauf wurde gestartet und läuft im Hintergrund.",
     }
 
@@ -2730,8 +2749,19 @@ def generate_library_ai_tags(audio_asset_id: int, payload: LibraryAiTaggingReque
         raise HTTPException(status_code=404, detail="AudioAsset wurde nicht gefunden.")
     request = payload or LibraryAiTaggingRequest()
     existing = read_saved_library_ai_tags(asset)
-    if existing and not request.force:
+    if has_library_ai_tag_content(existing) and not request.force:
         return {"ok": True, "queued": False, "status": "SUCCESS", "audio_asset_id": audio_asset_id, "ai_tags": existing, "message": "KI-Tags sind bereits vorhanden."}
+    active_task = active_library_tagging_tasks_by_asset(db).get(asset.id)
+    if active_task:
+        return {
+            "ok": True,
+            "queued": False,
+            "status": active_task.status,
+            "audio_asset_id": audio_asset_id,
+            "task_local_id": active_task.id,
+            "task_type": active_task.task_type,
+            "message": "Für diese Audio-Variante läuft bereits ein KI-Tagging-Task.",
+        }
     task = create_library_ai_tagging_status_task(db, asset, asset_ids=[asset.id], force=bool(request.force))
     run_detached_process(f"library-ai-tags-{audio_asset_id}-{task.id}", _run_library_ai_tagging_background, task.id, {"ids": [asset.id], "force": bool(request.force)})
     return {"ok": True, "queued": True, "task_local_id": task.id, "task_type": "library_ai_tagging", "status": "RUNNING", "audio_asset_id": audio_asset_id, "message": "KI-Tagging wurde gestartet und läuft im Hintergrund."}
