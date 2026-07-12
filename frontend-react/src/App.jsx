@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowLeft, ArrowUp, BookOpenText, Brush, ChevronDown, CircleHelp, Command, FileText, Home, ListMusic, Menu, Mic2, Moon, MoreHorizontal, Music, RefreshCw, Scissors, Search, Settings, Shield, Sun, Trash, Trash2, UploadCloud, X } from 'lucide-react';
+import { ArrowLeft, ArrowUp, BookOpenText, Brush, ChevronDown, CircleHelp, ClipboardCheck, Command, FileText, Home, ListMusic, Menu, Mic2, Moon, MoreHorizontal, Music, RefreshCw, Scissors, Search, Settings, Shield, Sun, Trash, Trash2, UploadCloud, X } from 'lucide-react';
 import { api } from './api/client.js';
 import { assetSearchText, friendlyNotification } from './utils.js';
 import { Login } from './components/Login.jsx';
@@ -17,6 +17,7 @@ import { LibraryTextPage } from './pages/LibraryTextPage.jsx';
 import { PlaylistsPage } from './pages/PlaylistsPage.jsx';
 import { StylesPage } from './pages/StylesPage.jsx';
 import { AdminPage } from './pages/AdminPage.jsx';
+import { AuditPage } from './pages/AuditPage.jsx';
 import { SystemPage } from './pages/SystemPage.jsx';
 import { StatusPage } from './pages/StatusPage.jsx';
 import { DawPage } from './pages/DawPage.jsx';
@@ -39,6 +40,7 @@ const tabs = [
   ['styles', 'Styles', Brush],
   ['daw', 'Mini-DAW', Scissors],
   ['admin', 'Admin', Shield],
+  ['audit', 'Audit & Wartung', ClipboardCheck],
   ['status', 'Status', RefreshCw],
   ['system', 'System', Settings],
   ['help', 'Hilfe', BookOpenText]
@@ -1737,7 +1739,7 @@ export default function App() {
   );
   const localizedSidebarSections = useMemo(() => ([
     { label: t('nav.groups.collection', 'Sammlung'), keys: ['playlists', 'styles', 'texts', 'daw'] },
-    { label: t('nav.groups.control', 'System'), keys: ['admin', 'system'] }
+    { label: t('nav.groups.control', 'System'), keys: ['admin', 'audit', 'system'] }
   ]), [t]);
   const toggleLanguage = useCallback(() => {
     setLanguage(language === 'en' ? 'de' : 'en');
@@ -1814,6 +1816,7 @@ export default function App() {
     if (activeTab === 'styles') return <StylesPage styles={styles} notify={notify} onReload={refreshAll} useForMusic={useStyleForMusic} searchQuery={commandQuery} />;
     if (activeTab === 'daw') return <DawPage assets={assets} selectedAssetId={dawOpenAssetId || dawAssetIdFromLocation()} onSelectedHandled={() => {}} onAssetChange={(id) => setDawOpenAssetId(String(id || '').trim())} onBackToLibrary={() => openMainTab('library')} onPlay={play} notify={notify} onReload={refreshAll} />;
     if (activeTab === 'admin') return <AdminPage notify={notify} onReload={refreshAll} />;
+    if (activeTab === 'audit') return <AuditPage notify={notify} onReload={refreshAll} />;
     if (activeTab === 'status') return <StatusPage notifications={notifications} tasks={tasks} onReload={refreshAll} onCheckStatus={() => refreshPendingAndReload({ manual: true })} taskRefreshState={taskRefreshState} onOpenNotification={openNotification} onOpenTaskDetails={openTaskDetails} notify={notify} />;
     if (activeTab === 'help') return <HelpPage onNavigate={openMainTab} notify={notify} />;
     return <SystemPage notify={notify} uploadedFiles={uploadedFiles} onRefresh={refreshAll} />;

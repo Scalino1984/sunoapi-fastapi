@@ -1954,3 +1954,13 @@ class ProductionWorkflowUpdate(BaseModel):
 class DuplicateAssetVersionRequest(BaseModel):
     label: str | None = Field(default="Neue Version", max_length=120)
     notes: str | None = None
+
+
+class AuditRunRequest(BaseModel):
+    check_ids: list[str] = Field(default_factory=list, max_length=50)
+    parameters: dict[str, Any] = Field(default_factory=dict)
+
+
+class AuditApplyRequest(BaseModel):
+    confirm: str = Field(min_length=1, max_length=80)
+    repair_actions: list[str] = Field(default_factory=list, max_length=50)

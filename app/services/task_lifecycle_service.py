@@ -76,6 +76,8 @@ LOCAL_APP_TASK_TYPES = {
     "opencli_generate_music",
     "generate_music_opencli",
     "daw_arrangement_render",
+    "maintenance_audit",
+    "maintenance_repair",
 }
 
 
@@ -415,6 +417,8 @@ LOCAL_APP_TASK_STALE_LIMITS_MINUTES: dict[str, int] = {
     "import_suno_song_batch": 30,
     "import_sunoapi_task_batch": 30,
     "opencli_generate_music": 30,
+    "maintenance_audit": 60,
+    "maintenance_repair": 60,
 }
 DEFAULT_LOCAL_TASK_STALE_MINUTES = 30
 NO_HEARTBEAT_STALE_MINUTES = 5

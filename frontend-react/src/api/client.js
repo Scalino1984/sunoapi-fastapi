@@ -423,6 +423,16 @@ export const api = {
     arrangementAiCommand: (id, payload) => apiFetch(`/api/daw/assets/${id}/arrangement/ai-command`, { method: 'POST', body: JSON.stringify(payload), timeoutMs: 180000 }),
     promptHooks: () => apiFetch('/api/daw/prompt-hooks')
   },
+
+  audit: {
+    checks: () => apiFetch('/api/audit/checks', { cache: 'no-store' }),
+    runs: (limit = 30) => apiFetch(`/api/audit/runs?limit=${encodeURIComponent(limit)}&v=${Date.now()}`, { cache: 'no-store' }),
+    start: (payload = {}) => apiFetch('/api/audit/runs', { method: 'POST', body: JSON.stringify(payload || {}) }),
+    run: (id) => apiFetch(`/api/audit/runs/${encodeURIComponent(id)}?v=${Date.now()}`, { cache: 'no-store' }),
+    report: (id) => apiFetch(`/api/audit/runs/${encodeURIComponent(id)}/report`, { cache: 'no-store' }),
+    apply: (id, confirmText, repairActions = []) => apiFetch(`/api/audit/runs/${encodeURIComponent(id)}/apply`, { method: 'POST', body: JSON.stringify({ confirm: confirmText, repair_actions: repairActions }) }),
+    cancel: (id) => apiFetch(`/api/audit/runs/${encodeURIComponent(id)}/cancel`, { method: 'POST' })
+  },
   notifications: {
     list: (includeDone = true) => apiFetch(`/api/notifications?include_done=${includeDone ? 'true' : 'false'}&v=${Date.now()}`, { cache: 'no-store', timeoutMs: 8000 }),
     markDone: (id) => apiFetch(`/api/notifications/${id}/done`, { method: 'POST' }),

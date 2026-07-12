@@ -403,3 +403,32 @@ def test_css_contains_modal_and_player_safety_hooks():
     assert "asset-menu" in css
     assert "mini-player" in css
     assert "z-index" in css
+
+
+def test_audit_repair_confirmation_is_visible_and_never_fails_silently():
+    audit_page = _read("frontend-react/src/pages/AuditPage.jsx")
+
+    assert "window.prompt" not in audit_page
+    assert "REPAIR_CONFIRMATION_TEXT" in audit_page
+    assert "repairConfirmOpen" in audit_page
+    assert "repairConfirmError" in audit_page
+    assert "repairConfirmText.trim().toUpperCase()" in audit_page
+    assert "setRepairConfirmError(message)" in audit_page
+    assert "audit-repair-confirm-modal" in audit_page
+
+
+def test_audit_repairs_have_dedicated_summary_verification_and_compact_details():
+    audit_page = _read("frontend-react/src/pages/AuditPage.jsx")
+    audit_css = _read("frontend-react/src/styles/app.css")
+
+    assert "audit-repair-result" in audit_page
+    assert "currentRepairSummary.changed" in audit_page
+    assert "startVerification" in audit_page
+    assert "verification_of_repair_task_id" in audit_page
+    assert "runHistorySummary(run, t)" in audit_page
+    assert "compactFindingsModal" in audit_page
+    assert "showGroupSearch" in audit_page
+    assert "showGroupPagination" in audit_page
+    assert "TRUSTED_HOSTS_WILDCARD" in audit_page
+    assert ".audit-findings-modal.compact" in audit_css
+    assert ".audit-repair-stat-grid" in audit_css
