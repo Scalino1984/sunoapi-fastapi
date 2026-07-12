@@ -432,3 +432,73 @@ def test_audit_repairs_have_dedicated_summary_verification_and_compact_details()
     assert "TRUSTED_HOSTS_WILDCARD" in audit_page
     assert ".audit-findings-modal.compact" in audit_css
     assert ".audit-repair-stat-grid" in audit_css
+
+
+def test_admin_ai_assistant_explains_effective_runtime_and_usage_boundaries():
+    admin = _read("frontend-react/src/pages/AdminPage.jsx")
+
+    assert "assistant-section-tabs" in admin
+    assert "loadRuntimePreview" in admin
+    assert "api.assistant.runtime" in admin
+    assert "Wo greift welche Konfiguration?" in admin
+    assert "Globaler KI-Assistent" in admin
+    assert "Style-Engine auf /music" in admin
+    assert "Songtext-Studio" in admin
+    assert "Library-Suchindex" in admin
+    assert "DAW-KI" in admin
+    assert "KI-Profile und Wissensdateien greifen hier derzeit nicht" in admin
+    assert "Transkription, Alignment und lokale Modellanalyse werden nicht durch KI-Profile gesteuert" in admin
+
+
+def test_admin_ai_profiles_and_instruction_files_are_transparently_manageable():
+    admin = _read("frontend-react/src/pages/AdminPage.jsx")
+    client = _read("frontend-react/src/api/client.js")
+
+    assert "instructionFiles(true)" in admin
+    assert "openProfileEditor" in admin
+    assert "saveProfileEditor" in admin
+    assert "duplicateProfile" in admin
+    assert "openInstructionEditor" in admin
+    assert "saveInstructionEditor" in admin
+    assert "toggleInstructionFile" in admin
+    assert "profileUsageLabels" in admin
+    assert "linkedProfilesForFile" in admin
+    assert "updateInstructionFile" in client
+    assert "include_content=${includeContent ? 'true' : 'false'}" in client
+
+
+def test_admin_ai_assistant_transparency_has_complete_bilingual_labels():
+    de = _read("frontend-react/src/i18n/de.js")
+    en = _read("frontend-react/src/i18n/en.js")
+
+    for source in (de, en):
+        assert "sections: {" in source
+        assert "standards: {" in source
+        assert "usage: {" in source
+        assert "runtime: {" in source
+        assert "warnings: {" in source
+        assert "knowledgeTitle:" in source
+        assert "profileDuplicated:" in source
+        assert "instructionUpdated:" in source
+
+
+def test_admin_ai_runtime_sources_are_explicit_and_library_profile_is_directly_reachable():
+    admin = _read("frontend-react/src/pages/AdminPage.jsx")
+    css = _read("frontend-react/src/styles/app.css")
+    de = _read("frontend-react/src/i18n/de.js")
+    en = _read("frontend-react/src/i18n/en.js")
+
+    assert "runtimeCompositionRows" in admin
+    assert "runtimeStatusLabel" in admin
+    assert "profileOverridesFallback ? 'overridden' : 'active'" in admin
+    assert "assistant-runtime-source-list" in admin
+    assert "assistant-runtime-state" in admin
+    assert "openLibraryTaggingSettings" in admin
+    assert "assistant-library-tagging-settings" in admin
+    assert "Profil auswählen" in admin
+    assert "assistant-warning-action" in css
+    assert "assistant-runtime-source-row" in css
+    assert "statusNotUsed" in de
+    assert "statusNotUsed" in en
+    assert "compositionHint" in de
+    assert "compositionHint" in en

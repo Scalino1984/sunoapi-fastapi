@@ -45,7 +45,7 @@ SUNO_STYLE_DOCUMENTATION_REFERENCE = {
     ],
     "lyric_vocal_tag_formula": [
         "Nutze Doppelpunkt-Syntax: [SECTION: voice identity, vocal texture, delivery style, emotion/attitude, energy, language/accent, vocal production].",
-        "Pro Abschnitt nur eine Tag-Zeile; Originaltext wird nicht neu geschrieben.",
+        "Pro Abschnitt genau ein primärer Section-Header; lokale Vocal-/Rollen-Tags innerhalb des Abschnitts bleiben bei Sprecher- oder Delivery-Wechseln erhalten.",
         "Verse, Chorus und Bridge unterschiedlich taggen, damit Dynamik entsteht.",
         "Chorus/Hook darf kräftiger sein als Verse; Bridge darf kontrastieren; Outro darf Fade/Dub/Echo enthalten.",
         "Tags in englischer Steuer-Syntax formulieren; Sprache/Dialekt explizit setzen, wenn Aussprache wichtig ist.",
@@ -954,6 +954,8 @@ class GlobalAssistantService:
         number = number_match.group(1) if number_match else ""
         if re.search(r"\b(intro|einleitung)\b", text):
             return {"base": "intro", "key": "intro", "label": "Intro"}
+        if re.search(r"\b(build up|buildup)\b", text):
+            return {"base": "build-up", "key": f"build-up-{number}" if number else "build-up", "label": f"Build-Up {number}" if number else "Build-Up"}
         if re.search(r"\b(verse|strophe|part)\b", text):
             return {"base": "verse", "key": f"verse-{number}" if number else "verse", "label": f"Verse {number}" if number else "Verse"}
         if re.search(r"\b(pre chorus|prechorus|pre refrain)\b", text):
@@ -986,6 +988,8 @@ class GlobalAssistantService:
 
         if re.search(r"\b(intro|einleitung)\b", text):
             return {"base": "intro", "key": "intro", "label": "Intro"}
+        if re.search(r"\b(build up|buildup)\b", text):
+            return {"base": "build-up", "key": f"build-up-{number}" if number else "build-up", "label": f"Build-Up {number}" if number else "Build-Up"}
         if re.search(r"\b(verse|strophe|part)\b", text):
             return {"base": "verse", "key": f"verse-{number}" if number else "verse", "label": f"Verse {number}" if number else "Verse"}
         if re.search(r"\b(pre chorus|prechorus|pre refrain)\b", text):
@@ -1076,7 +1080,10 @@ class GlobalAssistantService:
                 break
             key = self._lyric_section_key(section)
             base_key = self._lyric_section_base_key(section)
-            tag = recipe.get(base_key) or recipe.get("verse")
+            tag = recipe.get(base_key)
+            if not tag and base_key == "build-up":
+                tag = recipe.get("bridge")
+            tag = tag or recipe.get("verse")
             if not tag:
                 continue
             normalized_tag = self._blend_recipe_tag(recipe_key, base_key, tag, style_context)
@@ -1597,7 +1604,372 @@ class GlobalAssistantService:
             return lines
         return [*lines[:start_index], *lines[next_index:]]
 
-    def _merge_lyric_vocal_tags_into_lyrics(self, lyrics: str, tags: list[dict[str, str]]) -> str:
+    def _is_local_role_directive(self, line: str) -> bool:
+        text = str(line or "").strip()
+        if not re.match(r"^\[[^\]]+\]$", text):
+            return False
+        if self._lyric_section_meta(text) or self._is_protected_lyric_directive(text):
+            return False
+        lowered = text.lower()
+        return any(
+            token in lowered
+            for token in (
+                "singer",
+                "singing",
+                "sung",
+                "rapper",
+                " rap ",
+                "rap break",
+                "spoken word",
+                "spoken rap",
+                "vocal",
+                "voice",
+                "belting",
+                "falsetto",
+                "choir",
+                "duet",
+                "toaster",
+                "singjay",
+                "no rap",
+                "no singing",
+                "no melody",
+            )
+        )
+
+    def _is_rich_section_header(self, line: str) -> bool:
+        text = str(line or "").strip()
+        if not self._lyric_section_meta(text):
+            return False
+        inner = text.strip("[]() ")
+        return bool(
+            ":" in inner
+            or "|" in inner
+            or re.search(r"\bfinal\b|\bx\s*\d+\b|\brepeat\b|role switching|alternation|call[- ]and[- ]response|\bduet\b", inner, re.I)
+        )
+
+    def _normalize_existing_section_header(self, line: str) -> str:
+        text = str(line or "").strip()
+        if re.match(r"^\([^)]+\)$", text):
+            return f"[{text[1:-1].strip()}]"
+        return text
+
+    def _lyric_content_lines(self, value: str) -> list[str]:
+        result: list[str] = []
+        for raw_line in str(value or "").replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+            line = raw_line.strip()
+            if not line:
+                continue
+            if self._is_standalone_bracket_directive(line) or self._is_round_section_header(line):
+                continue
+            result.append(line)
+        return result
+
+    def _section_semantics(self, value: str) -> list[dict[str, Any]]:
+        sections: list[dict[str, Any]] = []
+        for raw_line in str(value or "").replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+            line = raw_line.strip()
+            meta = self._lyric_section_meta(line)
+            if not meta:
+                continue
+            lowered = line.lower()
+            repeat_count: int | None = None
+            match = re.search(r"\bx\s*(\d+)\b", lowered)
+            if match:
+                repeat_count = int(match.group(1))
+            elif "repeat" in lowered and "twice" in lowered:
+                repeat_count = 2
+            elif "repeat" in lowered and ("three times" in lowered or "thrice" in lowered):
+                repeat_count = 3
+            sections.append(
+                {
+                    "base": meta["base"],
+                    "key": meta["key"],
+                    "final": bool(re.search(r"\bfinal\b|\bfinale\b", lowered)),
+                    "repeat": repeat_count,
+                }
+            )
+        return sections
+
+    def _role_directive_signature(self, line: str) -> frozenset[str]:
+        if not self._is_local_role_directive(line):
+            return frozenset()
+        lowered = str(line or "").lower()
+        signature: set[str] = set()
+        if "male" in lowered:
+            signature.add("male")
+        if "female" in lowered:
+            signature.add("female")
+        if any(token in lowered for token in ("singer", "singing", "sung", "belting", "falsetto", "vocalist")):
+            signature.add("singer")
+        without_no_rap = lowered.replace("no rap", "")
+        if any(token in without_no_rap for token in ("rapper", " rap ", "rap break", "spoken rap", "toaster")):
+            signature.add("rapper")
+        if "spoken word" in lowered or "spoken-word" in lowered:
+            signature.add("spoken-word")
+        if "duet" in lowered:
+            signature.add("duet")
+        if "choir" in lowered:
+            signature.add("choir")
+        if "no rap" in lowered:
+            signature.add("no-rap")
+        if "no singing" in lowered:
+            signature.add("no-singing")
+        if "no melody" in lowered:
+            signature.add("no-melody")
+        return frozenset(signature)
+
+    def _role_directive_signatures(self, value: str) -> list[frozenset[str]]:
+        return [
+            signature
+            for line in str(value or "").replace("\r\n", "\n").replace("\r", "\n").split("\n")
+            if (signature := self._role_directive_signature(line.strip()))
+        ]
+
+    def _section_role_conflicts(self, value: str) -> list[str]:
+        conflicts: list[str] = []
+        current_header = ""
+        current_roles: list[frozenset[str]] = []
+
+        def flush() -> None:
+            if not current_header:
+                return
+            lowered = current_header.lower()
+            if "no rap" in lowered and any("rapper" in role for role in current_roles):
+                conflicts.append("section_no_rap_contains_rapper")
+            if "no singing" in lowered and any("singer" in role for role in current_roles):
+                conflicts.append("section_no_singing_contains_singer")
+
+        for raw_line in str(value or "").replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+            line = raw_line.strip()
+            if self._lyric_section_meta(line):
+                flush()
+                current_header = line
+                current_roles = []
+                continue
+            signature = self._role_directive_signature(line)
+            if signature:
+                current_roles.append(signature)
+        flush()
+        return conflicts
+
+    def _validate_style_tagged_lyrics(self, original: str, candidate: str) -> list[str]:
+        errors: list[str] = []
+        if self._lyric_content_lines(original) != self._lyric_content_lines(candidate):
+            errors.append("lyrics_changed")
+
+        original_sections = self._section_semantics(original)
+        candidate_sections = self._section_semantics(candidate)
+        if len(original_sections) != len(candidate_sections):
+            errors.append("section_count_changed")
+        else:
+            for original_section, candidate_section in zip(original_sections, candidate_sections):
+                if original_section["base"] != candidate_section["base"]:
+                    errors.append("section_order_changed")
+                    break
+                if original_section["final"] and not candidate_section["final"]:
+                    errors.append("final_section_marker_lost")
+                if original_section["repeat"] and original_section["repeat"] != candidate_section["repeat"]:
+                    errors.append("repeat_marker_lost")
+
+        required_roles = self._role_directive_signatures(original)
+        candidate_roles = self._role_directive_signatures(candidate)
+        candidate_index = 0
+        for required in required_roles:
+            while candidate_index < len(candidate_roles) and not required.issubset(candidate_roles[candidate_index]):
+                candidate_index += 1
+            if candidate_index >= len(candidate_roles):
+                errors.append("local_role_directive_lost")
+                break
+            candidate_index += 1
+
+        errors.extend(self._section_role_conflicts(candidate))
+        return list(dict.fromkeys(errors))
+
+    def _section_descriptor_parts(self, line: str) -> list[str]:
+        text = self._normalize_existing_section_header(line)
+        inner = text.strip().strip("[]").strip()
+        if not inner:
+            return []
+        if ":" in inner:
+            descriptor_text = inner.split(":", 1)[1]
+            parts = re.split(r"\s*[,|]\s*", descriptor_text)
+        elif "|" in inner:
+            parts = [part.strip() for part in inner.split("|")[1:]]
+        else:
+            return []
+        return [re.sub(r"\s+", " ", part).strip(" ,;|-/") for part in parts if part.strip(" ,;|-/")]
+
+    def _compact_section_header(self, line: str, *, level: str = "balanced") -> str:
+        text = self._normalize_existing_section_header(line)
+        meta = self._lyric_section_meta(text)
+        if not meta:
+            return text
+        lowered = text.lower()
+        label = meta["label"]
+        if re.search(r"\bfinal\b|\bfinale\b", lowered) and meta["base"] == "chorus":
+            label = "Final Chorus"
+        repeat_match = re.search(r"\bx\s*(\d+)\b", lowered)
+        if repeat_match:
+            label = f"{label} x{repeat_match.group(1)}"
+        elif "repeat" in lowered and "twice" in lowered:
+            label = f"{label} x2"
+
+        descriptors = self._section_descriptor_parts(text)
+        if not descriptors:
+            return f"[{label}]"
+
+        critical_pattern = re.compile(
+            r"no rap|no singing|no melody|role switch|alternation|call[- ]and[- ]response|duet|singer[- ]rapper|rapper[- ]singer",
+            re.I,
+        )
+        role_pattern = re.compile(
+            r"\b(?:male|female|baritone|tenor|alto|soprano|singer|singing|sung|rapper|rap|spoken|vocal|voice|belting|falsetto|choir|toaster|singjay)\b",
+            re.I,
+        )
+        delivery_pattern = re.compile(
+            r"\b(?:flow|cadence|pocket|phrasing|delivery|melody|melodic|straight|doubletime|double-time|rhythmic|chant|belt|sustained|notes|close-mic|dry)\b",
+            re.I,
+        )
+        character_pattern = re.compile(
+            r"\b(?:gritty|rough|deep|airy|soft|aggressive|emotional|raspy|defiant|confident|powerful|intimate|commanding|vulnerable)\b",
+            re.I,
+        )
+
+        critical = [part for part in descriptors if critical_pattern.search(part)]
+        roles = [part for part in descriptors if role_pattern.search(part) and part not in critical]
+        delivery = [part for part in descriptors if delivery_pattern.search(part) and part not in critical and part not in roles]
+        character = [part for part in descriptors if character_pattern.search(part) and part not in critical and part not in roles and part not in delivery]
+
+        selected: list[str] = []
+        limits = {
+            "balanced": (1, 2, 1, 5),
+            "tight": (1, 1, 1, 4),
+            "minimal": (1, 0, 0, 3),
+        }
+        role_limit, delivery_limit, character_limit, total_limit = limits.get(level, limits["balanced"])
+        for bucket, bucket_limit in (
+            (roles, role_limit),
+            (delivery, delivery_limit),
+            (character, character_limit),
+            (critical, len(critical)),
+        ):
+            for part in bucket[:bucket_limit]:
+                if part not in selected:
+                    selected.append(part)
+
+        # Kritische Ausschlüsse und Rollenwechsel haben immer Vorrang. Falls die
+        # normale Auswahl zu lang wird, verdrängen sie niedrig priorisierte Details.
+        for part in critical:
+            if part in selected:
+                continue
+            if len(selected) >= total_limit:
+                removable = next(
+                    (item for item in reversed(selected) if item not in critical),
+                    None,
+                )
+                if removable:
+                    selected.remove(removable)
+            if len(selected) < total_limit:
+                selected.append(part)
+
+        selected = selected[:total_limit]
+        if not selected:
+            return f"[{label}]"
+        return f"[{label}: {', '.join(selected)}]"
+
+    def _compact_local_role_directive(self, line: str, *, minimal: bool = False) -> str:
+        signature = self._role_directive_signature(line)
+        if not signature:
+            return ""
+        identity_parts: list[str] = []
+        if "female" in signature:
+            identity_parts.append("Female")
+        elif "male" in signature:
+            identity_parts.append("Male")
+        if "spoken-word" in signature:
+            identity_parts.append("Spoken Word")
+        elif "rapper" in signature:
+            identity_parts.append("Rapper")
+        elif "singer" in signature:
+            identity_parts.append("Singer")
+        elif "duet" in signature:
+            identity_parts.append("Duet")
+        elif "choir" in signature:
+            identity_parts.append("Choir")
+
+        lowered = str(line or "").lower()
+        descriptor = ""
+        if not minimal:
+            for source, label in (
+                ("rough", "Rough"),
+                ("gritty", "Gritty"),
+                ("deep", "Deep"),
+                ("airy", "Airy"),
+                ("soft", "Soft"),
+                ("aggressive", "Aggressive"),
+                ("emotional", "Emotional"),
+                ("raspy", "Raspy"),
+            ):
+                if source in lowered:
+                    descriptor = label
+                    break
+        identity = " ".join(([descriptor] if descriptor else []) + identity_parts).strip()
+        parts: list[str] = [identity] if identity else []
+        if "no-rap" in signature:
+            parts.append("No Rap")
+        if "no-singing" in signature:
+            parts.append("No Singing")
+        if "no-melody" in signature and not minimal:
+            parts.append("No Melody")
+        return f"[{' | '.join(parts)}]" if parts else ""
+
+    def _compact_tagged_lyrics_to_limit(self, value: str, limit: int) -> str:
+        normalized = str(value or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+        if len(normalized) <= limit:
+            return normalized
+
+        def compact(*, section_level: str, local_role_minimal: bool) -> str:
+            output: list[str] = []
+            for raw_line in normalized.split("\n"):
+                line = raw_line.strip()
+                if not line:
+                    output.append("")
+                    continue
+                if self._is_protected_lyric_directive(line):
+                    output.append(line)
+                    continue
+                if self._lyric_section_meta(line):
+                    output.append(self._compact_section_header(line, level=section_level))
+                    continue
+                if self._is_local_role_directive(line):
+                    compacted = self._compact_local_role_directive(line, minimal=local_role_minimal)
+                    if compacted:
+                        output.append(compacted)
+                    continue
+                if self._is_standalone_bracket_directive(line):
+                    # Nicht kritische Arrangement-/Effekt-Tags werden bei Platzmangel entfernt.
+                    continue
+                output.append(raw_line.rstrip())
+            text = "\n".join(output).strip()
+            return re.sub(r"\n{3,}", "\n\n", text)
+
+        for section_level, local_role_minimal in (
+            ("balanced", False),
+            ("tight", False),
+            ("minimal", True),
+        ):
+            compacted = compact(section_level=section_level, local_role_minimal=local_role_minimal)
+            if len(compacted) <= limit:
+                return compacted
+        return compact(section_level="minimal", local_role_minimal=True)
+
+    def _merge_lyric_vocal_tags_into_lyrics(
+        self,
+        lyrics: str,
+        tags: list[dict[str, str]],
+        *,
+        preserve_local_directives: bool = False,
+    ) -> str:
         normalized_tags = [tag for tag in tags if isinstance(tag, dict) and tag.get("tag")]
         if not normalized_tags:
             return str(lyrics or "").strip()
@@ -1628,6 +2000,12 @@ class GlobalAssistantService:
                 replacement = exact_tags.get(meta["key"]) or base_tags.get(meta["base"])
 
             if replacement and replacement.get("tag"):
+                if preserve_local_directives and self._is_rich_section_header(line):
+                    output.append(self._normalize_existing_section_header(line))
+                    inserted_keys.add(meta["key"])
+                    inserted_bases.add(meta["base"])
+                    index += 1
+                    continue
                 tag_text = str(replacement.get("tag") or "").strip()
                 output.append(tag_text)
                 inserted_keys.add(self._lyric_section_key(f"{replacement.get('section') or ''} {tag_text}"))
@@ -1645,6 +2023,11 @@ class GlobalAssistantService:
                         if next_non_empty and (self._is_standalone_bracket_directive(next_non_empty) or self._is_round_section_header(next_non_empty)):
                             cursor += 1
                             continue
+                        break
+                    if preserve_local_directives and (
+                        self._is_local_role_directive(candidate)
+                        or self._is_protected_lyric_directive(candidate)
+                    ):
                         break
                     if self._is_standalone_bracket_directive(candidate) or self._is_round_section_header(candidate):
                         cursor += 1
@@ -1669,6 +2052,8 @@ class GlobalAssistantService:
             tag_text = str(item.get("tag") or "").strip()
             key = self._lyric_section_key(f"{item.get('section') or ''} {tag_text}")
             base = self._lyric_section_base_key(f"{item.get('section') or ''} {tag_text}")
+            if key == "section" or base == "section":
+                continue
             if key not in inserted_keys and base not in inserted_bases and tag_text and tag_text not in merged:
                 missing.append(tag_text)
         if missing:
@@ -1706,14 +2091,20 @@ class GlobalAssistantService:
             "source": "style_tagged_lyrics_preview",
         }
         fallback_tags = self._enhance_lyric_vocal_tags(clean_lyrics, normalized_suggestion, vocal_tags)
-        fallback_text = self._merge_lyric_vocal_tags_into_lyrics(clean_lyrics, fallback_tags)
+        fallback_text = self._merge_lyric_vocal_tags_into_lyrics(
+            clean_lyrics,
+            fallback_tags,
+            preserve_local_directives=True,
+        )
 
         tag_system = (
             f"{system_instruction}\n\n"
             "Spezialaufgabe: Erzeuge für genau einen Suno-Style einen vollständigen getaggten Songtext. "
-            "Der Originaltext muss erhalten bleiben. Du musst runde Klammern semantisch unterscheiden: reine Abschnittsmarker wie (Intro), (Verse 1), (Hook) oder (Outro) sind keine Vocal-/Adlib-Tags und müssen durch eckige Suno-Section-Tags ersetzt werden; echte Adlibs oder Performance-Hinweise wie (yeah), (uh-huh), (shouted) bleiben erhalten. Du darfst Abschnittsmarker verbessern und pro Abschnitt maximal eine kombinierte Tag-Zeile setzen. "
-            "Alte Vocal-, Tempo-, Delivery- und Arrangement-Tags direkt nach Abschnittsmarkern müssen ersetzt werden; niemals alte Tags zusätzlich stehen lassen oder oben vor den Songtext kopieren. Erzeuge niemals Vocal-Tags in runden Klammern wie (Verse: ...); Suno-Steuer-Tags stehen immer in eckigen Klammern. "
-            "Nutze Vocal-Tags und sparsame Instrumental-/Arrangement-Metatags nur in dieser einen kombinierten Abschnittszeile, wo sie dem Abschnitt helfen. "
+            "Der Originaltext muss vollständig und wortgleich erhalten bleiben. Du musst runde Klammern semantisch unterscheiden: reine Abschnittsmarker wie (Intro), (Verse 1), (Hook) oder (Outro) sind keine Vocal-/Adlib-Tags und müssen durch eckige Suno-Section-Tags ersetzt werden; echte Adlibs oder Performance-Hinweise wie (yeah), (uh-huh), (shouted) bleiben erhalten. "
+            "Verwende pro Abschnitt genau einen primären Section-Header. Zusätzliche lokale Vocal-, Sprecher- und Performance-Tags innerhalb desselben Abschnitts sind ausdrücklich erforderlich, sobald Sänger, Rapper, Sprecher, Geschlecht, Stimme oder Delivery wechselt. Fasse unterschiedlich markierte Rollen niemals zu einer einzigen Vocal-Rolle zusammen. "
+            "Bereits vorhandene lokale Rollen-Tags wie [Male Singer ... No Rap] oder [Deep Male Rapper ... No Singing] haben Vorrang und müssen erhalten bleiben. Alte rein redundante Tempo-, Arrangement- oder allgemeine Delivery-Tags dürfen ersetzt werden. Erzeuge niemals Vocal-Tags in runden Klammern wie (Verse: ...); Suno-Steuer-Tags stehen immer in eckigen Klammern. "
+            "Erhalte Abschnittsmerkmale wie Final Chorus, x2, Repeat Entire Hook Twice, Call-and-Response, Duett und klare Rollenwechsel. "
+            "Nutze sparsame Instrumental-/Arrangement-Metatags im primären Section-Header; lokale Rollen-Tags bleiben unmittelbar vor dem zugehörigen Textblock stehen. "
             "Keine neuen Lyrics, keine Erklärung im Songtext, keine Music-Style-Liste. "
             "Antwortformat exakt als JSON: {\"tagged_lyrics\":\"vollständiger Songtext mit Tags\",\"lyric_vocal_tags\":[{\"section\":\"Verse 1\",\"tag\":\"[Verse 1: gritty male vocals, aggressive rap flow, defiant, high energy]\",\"reason\":\"...\"}],\"notes\":\"kurzer Hinweis\"}"
         )
@@ -1742,7 +2133,10 @@ class GlobalAssistantService:
                 "Originaltext vollständig erhalten; keine Zeilen neu dichten oder entfernen.",
                 "Vorhandene Abschnitte wie [Verse], [Chorus], [Bridge], [Intro], [Outro] sowie runde Header wie (Intro), (Verse 1), (Hook), (Outro) erkennen und in saubere eckige Section-Tags überführen.",
                 "Runde Klammern nur für echte Adlibs/Performance-Hinweise im Text behalten, z.B. (yeah), (uh-huh), (whispered); nie für Section- oder Vocal-Tags verwenden.",
-                "Pro Abschnitt maximal eine kombinierte Tag-Zeile setzen; alte unmittelbar folgende Tags wie [Tempo], [Delivery], [Heavy brass hits], [Spoken word] oder alte [Chorus: ...]-Zeilen ersetzen, nicht behalten.",
+                "Pro Abschnitt genau einen primären Section-Header setzen; bei Sänger-/Rapper-/Sprecher- oder Delivery-Wechseln zusätzliche lokale Rollen-Tags unmittelbar vor dem jeweiligen Textblock erhalten oder ergänzen.",
+                "Explizite Nutzertags und Rollenwechsel haben Vorrang. Fasse Sänger und Rapper innerhalb eines Chorus, Intro oder Outro niemals zu einer einzigen Rolle zusammen.",
+                "Abschnittsmerkmale wie Final Chorus, x2, Repeat Entire Hook Twice, Call-and-Response und Duett vollständig erhalten.",
+                "Alte rein redundante Tempo-, Arrangement- oder allgemeine Delivery-Tags dürfen ersetzt werden; lokale Vocal-Tags mit Singer, Rapper, Spoken Word, No Rap oder No Singing nicht entfernen.",
                 "Vocal-Tags nach Formel: [SECTION: voice identity, vocal texture, delivery style, emotion/attitude, energy, language/accent, vocal production].",
                 "Instrumental-/Arrangement-Tags nur sparsam in derselben kombinierten Section-Zeile setzen, z.B. [Bridge: smoky male voice, stripped back, piano only, reflective].",
                 "Keine Sound-Pack-Listen, keine Negative Tags, keine separaten Style-Prompts im Songtext.",
@@ -1769,23 +2163,48 @@ class GlobalAssistantService:
             lyric_vocal_tags = response_tags
         else:
             lyric_vocal_tags = fallback_tags
+        validation_errors: list[str] = []
+        used_structural_fallback = False
         if tagged_lyrics:
-            tagged_lyrics = self._merge_lyric_vocal_tags_into_lyrics(tagged_lyrics, lyric_vocal_tags)
+            tagged_lyrics = self._merge_lyric_vocal_tags_into_lyrics(
+                tagged_lyrics,
+                lyric_vocal_tags,
+                preserve_local_directives=True,
+            )
+            validation_errors = self._validate_style_tagged_lyrics(clean_lyrics, tagged_lyrics)
+            if validation_errors:
+                tagged_lyrics = fallback_text
+                lyric_vocal_tags = fallback_tags
+                used_structural_fallback = True
         else:
             tagged_lyrics = fallback_text
+            used_structural_fallback = True
+
+        tagged_lyrics = self._compact_tagged_lyrics_to_limit(tagged_lyrics, SUNO_STYLE_LYRICS_MAX_LENGTH)
+        final_validation_errors = self._validate_style_tagged_lyrics(clean_lyrics, tagged_lyrics)
+        if final_validation_errors:
+            raise ValueError(
+                "Die KI-Antwort konnte nicht sicher in eine vollständige Songtext-Vorschau überführt werden, "
+                "ohne Lyrics, Abschnittsstruktur oder lokale Sänger-/Rapper-Wechsel zu verändern."
+            )
         if len(tagged_lyrics) > SUNO_STYLE_LYRICS_MAX_LENGTH:
-            fallback_text = self._merge_lyric_vocal_tags_into_lyrics(clean_lyrics, lyric_vocal_tags)
-            if len(fallback_text) <= SUNO_STYLE_LYRICS_MAX_LENGTH:
-                tagged_lyrics = fallback_text
-            else:
-                raise ValueError(
-                    f"Der getaggte Songtext würde {len(fallback_text)} Zeichen enthalten und damit das Limit von {SUNO_STYLE_LYRICS_MAX_LENGTH} Zeichen überschreiten. Bitte Songtext kürzen oder weniger Tags verwenden."
-                )
+            lyric_only_length = len("\n".join(self._lyric_content_lines(clean_lyrics)))
+            raise ValueError(
+                f"Der unveränderte Songtext benötigt bereits {lyric_only_length} Zeichen. "
+                f"Eine vollständige getaggte Vorschau unter {SUNO_STYLE_LYRICS_MAX_LENGTH} Zeichen ist ohne Kürzung des Songtexts oder notwendiger Rollen-Tags nicht möglich."
+            )
+
+        notes = data.get("notes") or data.get("hinweis") or "Songtext-Tags wurden passend zum ausgewählten Style erzeugt."
+        if used_structural_fallback:
+            notes = (
+                "Die KI-Ausgabe hat vorhandene Rollen- oder Strukturinformationen nicht vollständig erhalten. "
+                "Daher wurde eine sichere strukturtreue Vorschau verwendet."
+            )
         return {
             "ok": True,
             "tagged_lyrics": tagged_lyrics,
             "lyric_vocal_tags": lyric_vocal_tags,
-            "notes": self._limit_text(data.get("notes") or data.get("hinweis") or "Songtext-Tags wurden passend zum ausgewählten Style erzeugt.", 500),
+            "notes": self._limit_text(notes, 500),
             "runtime_info": runtime_info,
         }
 
