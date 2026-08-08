@@ -42,7 +42,7 @@ def normalize_srt_segment(segment: dict[str, Any], index: int = 1, *, keep_id: b
     text = str(segment.get("text") or "").replace("\r\n", "\n").replace("\r", "\n").strip()
     raw_id = str(segment.get("id") or "").strip()
     segment_id = raw_id if keep_id and raw_id else f"seg_{uuid.uuid4().hex[:12]}"
-    return {
+    normalized = {
         "id": segment_id,
         "index": int(index),
         "start": round(start, 3),
@@ -51,6 +51,13 @@ def normalize_srt_segment(segment: dict[str, Any], index: int = 1, *, keep_id: b
         "locked": bool(segment.get("locked", False)),
         "warning": list(segment.get("warning") or []),
     }
+    # Alignment-Metadaten muessen den gemeinsamen SRT-Normalizer ueberleben.
+    # Sonst gehen `matched` und die Alignment-Methode vor dem Quality-Gate
+    # verloren, obwohl der eigentliche SRT-Text unveraendert bleibt.
+    for key in ("source_line", "alignment_confidence", "matched", "alignment_method"):
+        if key in segment:
+            normalized[key] = segment[key]
+    return normalized
 
 
 def renumber_segments(segments: list[dict[str, Any]], *, sort: bool = True) -> list[dict[str, Any]]:

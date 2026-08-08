@@ -579,3 +579,58 @@ kein Flehen mehr – nur die Sprache der Wut
     assert all(right["start"] >= left["start"] for left, right in zip(chorus, chorus[1:]))
     assert chorus[0]["start"] <= 171.0
     assert chorus[4]["start"] >= 189.0
+
+
+def test_srt_structure_mapping_ignores_local_vocal_and_rap_break_descriptors() -> None:
+    source_lyrics = """
+[Intro | Build-Up | Clear Singer-Rapper Alternation]
+[Male Singer | Airy Emotional Singing | No Rap]
+Intro singer
+[Deep Male Rapper | Confident Spoken Rap | No Singing]
+Intro rapper
+[Verse 1 | Deep Baritone Male Rap | No Singing]
+Verse one
+[Build-Up | Male Spoken Word | Tension Rising | No Singing]
+Build line
+[Chorus x2 | Repeat Entire Hook Twice]
+Singer hook
+[Deep Male Rapper | Hard Straight Rap Break | No Singing]
+Rapper hook
+[Verse 2 | Deep Male Rap | No Singing]
+Verse two
+[Final Chorus x2 | Maximum Anthemic Climax]
+Final singer
+[Deep Male Rapper | Aggressive Straight Rap Break | No Singing]
+Final rapper
+[Outro | Stripped Chorus Reprise | Fade-Out]
+Outro singer
+""".strip()
+    visible_lines = [
+        "Intro singer",
+        "Intro rapper",
+        "Verse one",
+        "Build line",
+        "Singer hook",
+        "Rapper hook",
+        "Verse two",
+        "Final singer",
+        "Final rapper",
+        "Outro singer",
+    ]
+    srt_segments = [
+        {"index": index + 1, "source_line": index + 1, "start": float(index * 20 + 2), "end": float(index * 20 + 5), "text": text}
+        for index, text in enumerate(visible_lines)
+    ]
+
+    result = build_structure_segments_from_srt_alignment(source_lyrics, srt_segments, 245, waveform_only=True)
+
+    assert [segment["label"] for segment in result] == [
+        "Intro",
+        "Verse 1",
+        "Build-Up",
+        "Chorus x2",
+        "Verse 2",
+        "Final Chorus x2",
+        "Outro",
+    ]
+    assert all(segment["type"] != "break" for segment in result)

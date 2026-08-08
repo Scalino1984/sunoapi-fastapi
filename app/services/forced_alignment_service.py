@@ -150,13 +150,56 @@ def _align_window(torch, model, tokenizer, aligner, waveform, tokens: list[str],
     return spans
 
 
+_ENERGY_FRAME_SECONDS = 0.05  # 50ms-Frames fuer die grobe Energie-Einhuellende (Aktivitaets-VAD)
+
+
+def _active_sample_prefix_sums(torch_module, waveform, target_sample_rate: int):
+    """Baut ein grobes Aktivitaets-Profil (Energie-Schwellwert) als Praefixsummen-Array.
+
+    Liefert fuer jede Frame-Grenze die kumulierte Anzahl "aktiver" (nicht-stiller)
+    Samples bis dahin, sodass sich fuer beliebige Fenstergrenzen in O(1) die
+    tatsaechlich gesungenen/gespielten Samples zaehlen lassen -- statt Tokens naiv
+    proportional zur reinen Fensterdauer zu verteilen (`len(tokens) / total_samples`).
+    Intro-Stille, Breaks oder rein instrumentale Passagen bekamen dabei denselben
+    Tokenanteil zugewiesen wie dichte Rap-Passagen; bei Songs > 240s verschob das
+    pro Chunk-Grenze die Wortgrenzen und erzeugte den beobachteten
+    "driftet -> faengt sich am naechsten Fenster wieder"-Effekt. Fix 2026-07-26.
+    """
+    samples = waveform[0] if waveform.dim() == 2 else waveform
+    frame_len = max(1, int(_ENERGY_FRAME_SECONDS * target_sample_rate))
+    total = samples.size(-1)
+    num_frames = max(1, math.ceil(total / frame_len))
+    padded_len = num_frames * frame_len
+    if padded_len > total:
+        samples = torch_module.nn.functional.pad(samples, (0, padded_len - total))
+    frames = samples.reshape(num_frames, frame_len)
+    frame_rms = torch_module.sqrt(torch_module.mean(frames * frames, dim=1) + 1e-12)
+    threshold = float(torch_module.quantile(frame_rms, 0.9)) * 0.08 if frame_rms.numel() else 0.0
+    active_frames = (frame_rms > threshold).to(torch_module.int64)
+    prefix = torch_module.cumsum(active_frames * frame_len, dim=0)
+    prefix = torch_module.cat([torch_module.zeros(1, dtype=torch_module.int64), prefix])
+    return prefix, frame_len, total
+
+
+def _active_samples_in_range(prefix, frame_len: int, total_samples: int, start_sample: int, end_sample: int) -> int:
+    """Zaehlt aktive Samples in [start_sample, end_sample) anhand der Praefixsummen."""
+    start_sample = max(0, min(start_sample, total_samples))
+    end_sample = max(start_sample, min(end_sample, total_samples))
+    max_frame = prefix.numel() - 1
+    start_frame = min(start_sample // frame_len, max_frame)
+    end_frame = min(math.ceil(end_sample / frame_len), max_frame)
+    active = int(prefix[end_frame] - prefix[start_frame])
+    return max(0, min(active, end_sample - start_sample))
+
+
 def _align_long_audio(torch, model, tokenizer, aligner, waveform, tokens: list[str]) -> list[TokenSpanSeconds | None]:
     """Sequentielles Fenster-Alignment fuer sehr lange Audios (> Chunk-Limit).
 
-    Die Tokens werden proportional zur Fensterlaenge aufgeteilt; jedes Fenster
-    ueberlappt das naechste um 5 Sekunden, damit Fenstergrenzen keine Tokens
-    zerschneiden. Da Songtext-Tokens streng sequentiell gesungen werden, bleibt
-    das Gesamtergebnis monoton.
+    Die Tokens werden proportional zur *aktiven* (nicht-stillen) Audiodauer je
+    Fenster aufgeteilt statt proportional zur reinen Fensterlaenge -- siehe
+    `_active_sample_prefix_sums`. Jedes Fenster ueberlappt das naechste um 5
+    Sekunden, damit Fenstergrenzen keine Tokens zerschneiden. Da Songtext-Tokens
+    streng sequentiell gesungen werden, bleibt das Gesamtergebnis monoton.
     """
     chunk_samples = int(_CHUNK_SECONDS * _TARGET_SAMPLE_RATE)
     overlap_samples = int(5.0 * _TARGET_SAMPLE_RATE)
@@ -170,7 +213,19 @@ def _align_long_audio(torch, model, tokenizer, aligner, waveform, tokens: list[s
             break
         cursor = end - overlap_samples
 
+    try:
+        activity_prefix, activity_frame_len, activity_total = _active_sample_prefix_sums(torch, waveform, _TARGET_SAMPLE_RATE)
+        total_active_samples = int(activity_prefix[-1])
+    except Exception:  # noqa: BLE001 -- Aktivitaets-VAD ist ein Optimierungspfad, kein Hard-Requirement.
+        logger.exception("Aktivitaets-Praefixsummen fuer Chunk-Verteilung konnten nicht berechnet werden, falle auf zeitproportionale Verteilung zurueck.")
+        activity_prefix = None
+        total_active_samples = 0
+
     spans: list[TokenSpanSeconds | None] = []
+    if activity_prefix is not None and total_active_samples > 0:
+        tokens_per_active_sample = len(tokens) / total_active_samples
+    else:
+        tokens_per_active_sample = None
     tokens_per_sample = len(tokens) / max(1, total_samples)
     token_cursor = 0
     for window_index, (window_start, window_end) in enumerate(windows):
@@ -178,7 +233,12 @@ def _align_long_audio(torch, model, tokenizer, aligner, waveform, tokens: list[s
         if is_last:
             window_tokens = tokens[token_cursor:]
         else:
-            expected = int(round((window_end - overlap_samples - window_start) * tokens_per_sample))
+            window_span_end = window_end - overlap_samples
+            if tokens_per_active_sample is not None:
+                active_in_window = _active_samples_in_range(activity_prefix, activity_frame_len, activity_total, window_start, window_span_end)
+                expected = int(round(active_in_window * tokens_per_active_sample))
+            else:
+                expected = int(round((window_span_end - window_start) * tokens_per_sample))
             expected = max(1, min(expected, len(tokens) - token_cursor))
             window_tokens = tokens[token_cursor:token_cursor + expected]
         if not window_tokens:

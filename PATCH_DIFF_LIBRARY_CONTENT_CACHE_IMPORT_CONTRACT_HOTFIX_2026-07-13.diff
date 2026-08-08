@@ -1,0 +1,235 @@
+--- /mnt/data/provider_fix_bad/app/services/library_content_cache_service.py	2026-07-13 19:16:04.000000000 +0000
++++ /mnt/data/provider_import_hotfix_work/app/services/library_content_cache_service.py	2026-07-13 21:43:06.249966528 +0000
+@@ -15,6 +15,7 @@
+ from __future__ import annotations
+ 
+ import hashlib
++import logging
+ from datetime import datetime
+ from pathlib import Path
+ from typing import Any
+@@ -31,7 +32,17 @@
+ from app.services.audio_asset_materialization_service import AudioAssetMaterializationService
+ from app.services.audio_cache_service import AudioCacheService, AudioCandidate, CoverCacheService
+ from app.services.music_service import MusicService
+-from app.services.task_lifecycle_service import LOCAL_APP_TASK_TYPES, append_task_debug_event, append_task_step_log, is_local_app_task, is_local_task_identifier
++from app.services.task_lifecycle_service import (
++    LOCAL_APP_TASK_TYPES,
++    append_task_debug_event,
++    append_task_step_log,
++    finish_open_task_notifications,
++    is_local_app_task,
++    is_local_task_identifier,
++    mark_task_finished,
++    mark_task_started,
++    task_heartbeat_ticker,
++)
+ from app.utils.time_utils import utc_now_naive
+ 
+ GENERATION_OPTIONS_PROVIDER_MARKER_KEYS = (
+@@ -836,6 +847,7 @@
+     limit: int = 500,
+     notify_always: bool = True,
+     background: bool = False,
++    status_task: SunoTask | None = None,
+ ) -> dict[str, Any]:
+     audio_service = AudioCacheService(db)
+     cover_service = CoverCacheService(db)
+@@ -1020,18 +1032,41 @@
+         "background": background,
+         "limit": limit,
+     }
+-    local_task = SunoTask(
+-        task_id=f"local-library-content-cache-{utc_now_naive().strftime('%Y%m%d%H%M%S%f')}",
+-        task_type="library_content_cache",
+-        status="SUCCESS" if failed == 0 else "PARTIAL_SUCCESS",
+-        request_payload={"limit": limit, "background": background},
+-        response_payload={},
+-        result_payload=result_payload,
+-        started_at=utc_now_naive(),
+-        completed_at=utc_now_naive(),
+-    )
+-    db.add(local_task)
+-    db.flush()
++    final_status = "SUCCESS" if failed == 0 else "PARTIAL_SUCCESS"
++    now = utc_now_naive()
++    if status_task is None:
++        local_task = SunoTask(
++            task_id=f"local-library-content-cache-{now.strftime('%Y%m%d%H%M%S%f')}",
++            task_type="library_content_cache",
++            status=final_status,
++            request_payload={"limit": limit, "background": background, "local_task": True},
++            response_payload={},
++            result_payload=result_payload,
++            started_at=now,
++            heartbeat_at=now,
++            completed_at=now,
++        )
++        db.add(local_task)
++        db.flush()
++    else:
++        local_task = status_task
++        local_task.task_id = local_task.task_id or f"local-library-content-cache-{now.strftime('%Y%m%d%H%M%S%f')}"
++        local_task.task_type = "library_content_cache"
++        local_task.status = final_status
++        local_task.error_message = None
++        local_task.started_at = local_task.started_at or now
++        local_task.heartbeat_at = now
++        local_task.completed_at = now
++        local_task.result_payload = result_payload
++        request_payload = dict(local_task.request_payload) if isinstance(local_task.request_payload, dict) else {}
++        request_payload.update({"limit": limit, "background": background, "local_task": True})
++        local_task.request_payload = request_payload
++        response_payload = dict(local_task.response_payload) if isinstance(local_task.response_payload, dict) else {}
++        response_payload.update({"background": background, "status": final_status, "completed_at": now.isoformat()})
++        local_task.response_payload = response_payload
++        db.add(local_task)
++        db.flush()
++        finish_open_task_notifications(db, local_task, message=message)
+     append_task_debug_event(
+         db,
+         local_task,
+@@ -1116,3 +1151,143 @@
+         "background": background,
+         "message": message,
+     }
++
++
++LOGGER = logging.getLogger("songstudio.library_content_cache")
++
++
++def create_library_content_cache_task(
++    db: Session,
++    limit: int = 500,
++    *,
++    background: bool = True,
++    notify_always: bool = True,
++    **_: Any,
++) -> SunoTask:
++    """Erzeugt den sichtbaren lokalen Statustask für „Inhalte prüfen".
++
++    Diese öffentliche Funktion ist Teil des Router-Vertrags. Sie bleibt bewusst
++    getrennt vom eigentlichen Prüflauf, damit der Request sofort eine lokale
++    Task-ID zurückgeben und der schwere Lauf im Background-Worker starten kann.
++    """
++
++    safe_limit = max(1, min(5000, int(limit or 500)))
++    now = utc_now_naive()
++    task = SunoTask(
++        task_id=f"local-library-content-cache-{now.strftime('%Y%m%d%H%M%S%f')}",
++        task_type="library_content_cache",
++        status="RUNNING",
++        request_payload={
++            "limit": safe_limit,
++            "background": bool(background),
++            "notify_always": bool(notify_always),
++            "local_task": True,
++        },
++        response_payload={
++            "background": bool(background),
++            "local_task": True,
++            "status": "RUNNING",
++        },
++        result_payload=None,
++        error_message=None,
++        started_at=now,
++        heartbeat_at=now,
++    )
++    db.add(task)
++    db.commit()
++    db.refresh(task)
++    mark_task_started(
++        db,
++        task,
++        payload={
++            "limit": safe_limit,
++            "background": bool(background),
++            "local_task": True,
++        },
++    )
++    db.add(StatusNotification(
++        event_type="library_content_cache_started",
++        title="Library-Inhalte werden geprüft",
++        message="Lokale Dateien, Metadaten und zulässige externe SunoAPI-Importdaten werden geprüft.",
++        severity="info",
++        status="unread",
++        task_local_id=task.id,
++        suno_task_id=task.task_id,
++        content_type="system",
++        content_id=task.id,
++        target_tab="status",
++        target_payload={
++            "task_local_id": task.id,
++            "task_type": task.task_type,
++            "status": "RUNNING",
++        },
++    ))
++    db.commit()
++    db.refresh(task)
++    return task
++
++
++async def run_library_content_cache_task(
++    task_id: int,
++    limit: int | None = None,
++    *,
++    background: bool = True,
++    notify_always: bool = True,
++    **_: Any,
++) -> dict[str, Any] | None:
++    """Führt einen zuvor erzeugten Library-Prüftask mit eigener DB-Session aus.
++
++    Die Signatur akzeptiert zusätzliche benannte Argumente, damit ältere und
++    neuere Router-Aufrufer kompatibel bleiben. Der vorhandene RUNNING-Task wird
++    finalisiert; es wird kein zweiter lokaler Wartungstask erzeugt.
++    """
++
++    from app.database import SessionLocal
++
++    db = SessionLocal()
++    try:
++        task = db.query(SunoTask).filter(SunoTask.id == int(task_id), SunoTask.is_deleted.is_(False)).first()
++        if not task:
++            LOGGER.error("Library-Content-Cache-Task %s wurde nicht gefunden.", task_id)
++            return None
++
++        request_payload = task.request_payload if isinstance(task.request_payload, dict) else {}
++        safe_limit = max(1, min(5000, int(limit or request_payload.get("limit") or 500)))
++        effective_background = bool(request_payload.get("background", background))
++        effective_notify = bool(request_payload.get("notify_always", notify_always))
++
++        if task.cancel_requested:
++            mark_task_finished(
++                db,
++                task,
++                status="CANCELLED",
++                message="Library-Inhaltsprüfung wurde vor dem Start abgebrochen.",
++                result_payload={"cancelled": True, "limit": safe_limit},
++                notify=True,
++            )
++            return {"ok": False, "cancelled": True, "limit": safe_limit}
++
++        with task_heartbeat_ticker(task.id, interval_seconds=20):
++            return await cache_missing_library_content_once(
++                db,
++                limit=safe_limit,
++                notify_always=effective_notify,
++                background=effective_background,
++                status_task=task,
++            )
++    except Exception as exc:
++        db.rollback()
++        task = db.query(SunoTask).filter(SunoTask.id == int(task_id)).first()
++        if task:
++            mark_task_finished(
++                db,
++                task,
++                status="FAILED",
++                message=f"Library-Inhaltsprüfung fehlgeschlagen: {exc}",
++                result_payload={"ok": False, "error": str(exc)},
++                notify=True,
++            )
++        LOGGER.exception("Library-Inhaltsprüfung für Task %s fehlgeschlagen.", task_id)
++        return {"ok": False, "error": str(exc)}
++    finally:
++        db.close()

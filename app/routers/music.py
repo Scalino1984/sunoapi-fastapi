@@ -53,6 +53,13 @@ from app.services.suno_song_import_service import SunoSongImportService
 from app.services.song_library_sync_service import SongLibrarySyncService
 from app.services.system_status_notification_service import create_system_status_notification
 from app.services.background_task_runner import run_detached_process
+from app.services.stem_generation_service import (
+    REPLICATE_DEMUCS_BACKEND,
+    load_stem_generation_settings,
+    normalize_replicate_model,
+    normalize_stem_backend,
+    stem_backend_label,
+)
 from app.services.task_lifecycle_service import (
     append_task_debug_event,
     append_task_step_log,
@@ -274,16 +281,24 @@ async def _run_post_import_audio_actions_inline(db: Session, *, asset_ids: list[
     if not asset_ids:
         return actions
     if generate_stems:
+        stem_settings = load_stem_generation_settings(db)
+        backend = normalize_stem_backend(stem_settings.get("backend"))
+        replicate_model = normalize_replicate_model(stem_settings.get("replicate_model"))
         task = _create_bulk_status_task(
             db,
             task_type="bulk_generate_stems",
             title="Stem-Erzeugung nach Import gestartet",
-            message=f"Stem-Erzeugung für {len(asset_ids)} importierte Variante(n) läuft im Hintergrund.",
+            message=f"Stem-Erzeugung für {len(asset_ids)} importierte Variante(n) läuft mit {stem_backend_label(backend)} im Hintergrund.",
             asset_ids=asset_ids,
-            request_payload={"source": "post_import", "generate_stems": True},
+            request_payload={
+                "source": "post_import",
+                "generate_stems": True,
+                "backend": backend,
+                "replicate_model": replicate_model if backend == REPLICATE_DEMUCS_BACKEND else None,
+            },
         )
-        actions.append({"type": "stems", "task_local_id": task.id, "count": len(asset_ids), "status": "RUNNING"})
-        await _run_bulk_stems_generation_background(task.id, {"ids": asset_ids})
+        actions.append({"type": "stems", "task_local_id": task.id, "count": len(asset_ids), "status": "RUNNING", "backend": backend})
+        await _run_bulk_stems_generation_background(task.id, {"ids": asset_ids, "backend": backend, "replicate_model": replicate_model})
     if generate_srt:
         task = _create_bulk_status_task(
             db,
@@ -495,16 +510,29 @@ def _start_post_import_audio_actions(db: Session, background_tasks: BackgroundTa
     if not asset_ids:
         return actions
     if generate_stems:
+        stem_settings = load_stem_generation_settings(db)
+        backend = normalize_stem_backend(stem_settings.get("backend"))
+        replicate_model = normalize_replicate_model(stem_settings.get("replicate_model"))
         task = _create_bulk_status_task(
             db,
             task_type="bulk_generate_stems",
             title="Stem-Erzeugung nach Import gestartet",
-            message=f"Stem-Erzeugung für {len(asset_ids)} importierte Variante(n) läuft im Hintergrund.",
+            message=f"Stem-Erzeugung für {len(asset_ids)} importierte Variante(n) läuft mit {stem_backend_label(backend)} im Hintergrund.",
             asset_ids=asset_ids,
-            request_payload={"source": "post_import", "generate_stems": True},
+            request_payload={
+                "source": "post_import",
+                "generate_stems": True,
+                "backend": backend,
+                "replicate_model": replicate_model if backend == REPLICATE_DEMUCS_BACKEND else None,
+            },
         )
-        run_detached_process(f"post-import-stems-{task.id}", _run_bulk_stems_generation_background, task.id, {"ids": asset_ids})
-        actions.append({"type": "stems", "task_local_id": task.id, "count": len(asset_ids), "status": "RUNNING"})
+        run_detached_process(
+            f"post-import-stems-{task.id}",
+            _run_bulk_stems_generation_background,
+            task.id,
+            {"ids": asset_ids, "backend": backend, "replicate_model": replicate_model},
+        )
+        actions.append({"type": "stems", "task_local_id": task.id, "count": len(asset_ids), "status": "RUNNING", "backend": backend})
     if generate_srt:
         task = _create_bulk_status_task(
             db,

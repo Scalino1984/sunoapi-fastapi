@@ -79,6 +79,39 @@ SECTION_PATTERNS: tuple[tuple[str, str, str], ...] = (
 
 NUMBERED_SECTION_TYPES = {"verse", "chorus", "hook", "refrain", "rap_verse", "spoken_verse"}
 
+# Die SRT-Struktur darf die erweiterte Suno-Tag-Taxonomie behalten. Für die
+# kompakte Waveform in Library, Songdetails und Player zählen dagegen nur
+# echte Arrangement-Abschnitte. Vocal-/FX-Tags würden sonst kurze,
+# überlappende Mini-Segmente erzeugen.
+WAVEFORM_SECTION_TYPES = {
+    "instrumental_outro",
+    "instrumental_intro",
+    "intro",
+    "instrumental_break",
+    "pre_verse",
+    "rap_verse",
+    "spoken_verse",
+    "verse",
+    "pre_hook",
+    "post_hook",
+    "pre_chorus",
+    "post_chorus",
+    "chorus",
+    "hook",
+    "refrain",
+    "bridge",
+    "breakdown",
+    "break",
+    "interlude",
+    "instrumental",
+    "drop",
+    "build_up",
+    "build",
+    "climax",
+    "solo",
+    "outro",
+}
+
 NUMBER_WORDS = {
     "one": "1",
     "two": "2",
@@ -106,34 +139,66 @@ def _coerce_json(value: Any) -> Any:
     return None
 
 
-def extract_structure_marker(label: Any) -> dict[str, str] | None:
-    """Return a canonical arrangement marker from any tag text.
+def _primary_tag_clause(label: Any) -> str:
+    """Return the semantic section clause of a rich Suno tag.
 
-    The function intentionally accepts tags that include more text after the
-    section word, so all of these become clean structure labels:
-      [Verse: gritty male vocals, aggressive rap flow] -> Verse
-      [Verse 2 | high energy] -> Verse 2
-      [Final Chorus: doubled vocals] -> Final Chorus
-
-    Tags without a true arrangement section word never become waveform segments:
-      [bass-heavy], [filter sweep], [Vocal FX]
+    Rich lyric tags use the first pipe/colon-separated clause as their section
+    identity and all following clauses as performance/arrangement descriptors.
+    Searching the complete tag caused false sections such as ``Rap Break`` in a
+    rapper descriptor or ``Chorus Reprise`` inside an ``Outro`` descriptor.
     """
 
     raw = str(label or "").strip().strip("[]")
-    raw = raw.replace("_", " ").replace("|", " ").replace("/", " ")
+    raw = raw.replace("_", " ").replace("/", " ")
     raw = re.sub(r"\s+", " ", raw).strip()
     if not raw:
+        return ""
+    return re.split(r"\s*(?:\||:)\s*", raw, maxsplit=1)[0].strip()
+
+
+def extract_structure_marker(label: Any) -> dict[str, str] | None:
+    """Return a canonical marker from the leading section clause of a tag.
+
+    Examples:
+      [Verse: gritty male vocals, aggressive rap flow] -> Verse
+      [Verse 2 | high energy] -> Verse 2
+      [Final Chorus x2 | doubled vocals] -> Final Chorus x2
+      [Outro | stripped chorus reprise] -> Outro
+
+    Descriptor-only tags such as ``[Deep Male Rapper | Hard Rap Break]`` never
+    become arrangement sections.
+    """
+
+    primary = _primary_tag_clause(label)
+    if not primary:
         return None
     for pattern, display, kind in SECTION_PATTERNS:
-        match = re.search(pattern, raw, re.IGNORECASE)
+        match = re.search(pattern, primary, re.IGNORECASE)
         if not match:
             continue
         text = display
         number = match.groupdict().get("number") if match.groupdict() else None
         if kind in NUMBERED_SECTION_TYPES and number:
             text = f"{display} {NUMBER_WORDS.get(str(number).lower(), str(number))}"
+        repeat = re.search(r"\bx\s*(\d{1,2})\b", primary, re.IGNORECASE)
+        if repeat and kind in {"chorus", "hook", "refrain"}:
+            text = f"{text} x{repeat.group(1)}"
         return {"label": text, "type": kind}
     return None
+
+
+def extract_waveform_structure_marker(label: Any) -> dict[str, str] | None:
+    """Return only real arrangement sections for compact waveform displays.
+
+    The general marker parser remains intentionally broader because SRT
+    alignment also supports performance tags such as Spoken Word or Fade Out.
+    Those tags are not separate visual song sections in Library/Player.
+    """
+
+    marker = extract_structure_marker(label)
+    if not marker or marker.get("type") not in WAVEFORM_SECTION_TYPES:
+        return None
+    return marker
 
 
 def _same_section_family(left: dict[str, str], right: dict[str, str]) -> bool:
@@ -241,7 +306,7 @@ def build_waveform_from_file(path: Path, points: int = 180) -> list[float]:
 
 
 def build_structure_segments(asset: AudioAsset, duration_seconds: float | int | None) -> list[dict[str, Any]]:
-    source = asset.prompt or asset.lyrics or ""
+    source = asset.lyrics or asset.prompt or ""
     duration = float(duration_seconds or asset.duration_seconds or 0)
     if not source or duration <= 0:
         return []
@@ -256,7 +321,7 @@ def build_structure_segments(asset: AudioAsset, duration_seconds: float | int | 
             continue
 
         if BRACKET_ONLY_LINE_RE.match(line):
-            markers = [extract_structure_marker(match.group(1)) for match in BRACKET_TAG_RE.finditer(line)]
+            markers = [extract_waveform_structure_marker(match.group(1)) for match in BRACKET_TAG_RE.finditer(line)]
             markers = [marker for marker in markers if marker]
             if not markers:
                 continue
@@ -325,7 +390,7 @@ def _clean_existing_segments(segments: Any, duration_seconds: float | int | None
     for raw in parsed:
         if not isinstance(raw, dict):
             continue
-        marker = extract_structure_marker(_segment_label(raw)) or extract_structure_marker(_segment_type(raw))
+        marker = extract_waveform_structure_marker(_segment_label(raw)) or extract_waveform_structure_marker(_segment_type(raw))
         if not marker:
             continue
         try:
@@ -350,7 +415,7 @@ def _segments_have_descriptor_noise(segments: Any) -> bool:
         if not isinstance(segment, dict):
             return True
         label = _segment_label(segment)
-        marker = extract_structure_marker(label) or extract_structure_marker(_segment_type(segment))
+        marker = extract_waveform_structure_marker(label) or extract_waveform_structure_marker(_segment_type(segment))
         if not marker:
             return True
         if label.lower() != marker["label"].lower():
@@ -389,16 +454,112 @@ def scale_segments_to_duration(segments: Any, duration_seconds: float | int | No
     return cleaned
 
 
+def _segment_identity(segment: dict[str, Any]) -> tuple[str, bool]:
+    label = str(segment.get("label") or "").strip().lower()
+    return str(segment.get("type") or "").strip().lower(), bool(re.search(r"\b(?:final|last)\b", label))
+
+
+def _segment_signature(segment: dict[str, Any]) -> tuple[str, str]:
+    return (
+        str(segment.get("type") or "").strip().lower(),
+        re.sub(r"\s+", " ", str(segment.get("label") or "").strip().lower()),
+    )
+
+
+def _same_expected_identity(existing: dict[str, Any], expected: dict[str, Any]) -> bool:
+    existing_type, existing_final = _segment_identity(existing)
+    expected_type, expected_final = _segment_identity(expected)
+    if existing_type != expected_type:
+        return False
+    if expected_type == "chorus":
+        if expected_final:
+            return existing_final
+        return not existing_final
+    return True
+
+
+def _reconcile_aligned_segments_with_lyrics(
+    existing: list[dict[str, Any]],
+    expected: list[dict[str, Any]],
+    duration_seconds: float | int | None,
+) -> list[dict[str, Any]]:
+    """Repair stale labels while retaining SRT-derived section boundaries.
+
+    Older parsing searched the complete rich tag and therefore inserted false
+    Break sections from rapper descriptors and misread an Outro containing
+    ``Chorus Reprise`` as another chorus.  The current lyrics provide the
+    authoritative section order; matching existing starts keep the accurate SRT
+    timing wherever possible.
+    """
+
+    if not existing or not expected:
+        return expected or existing
+    expected_signature = [_segment_signature(item) for item in expected]
+    existing_signature = [_segment_signature(item) for item in existing]
+    if expected_signature == existing_signature:
+        return existing
+
+    matched: list[tuple[dict[str, Any], float]] = []
+    cursor = 0
+    for index, expected_segment in enumerate(expected):
+        match_index: int | None = None
+        for candidate_index in range(cursor, len(existing)):
+            if _same_expected_identity(existing[candidate_index], expected_segment):
+                match_index = candidate_index
+                break
+
+        # Historical Outro tags with descriptor text such as "Chorus Reprise"
+        # were stored as a final generic chorus.  For the final expected Outro,
+        # retain the start of the last unmatched stored segment as its boundary.
+        if match_index is None and index == len(expected) - 1 and expected_segment.get("type") == "outro" and cursor < len(existing):
+            match_index = len(existing) - 1
+
+        if match_index is None:
+            return expected
+        try:
+            start = float(existing[match_index].get("start") or 0.0)
+        except (TypeError, ValueError):
+            return expected
+        matched.append((expected_segment, start))
+        cursor = match_index + 1
+
+    duration = float(duration_seconds or 0.0)
+    if duration <= 0:
+        duration = max(float(item.get("end") or 0.0) for item in existing)
+    repaired: list[dict[str, Any]] = []
+    for index, (expected_segment, start) in enumerate(matched):
+        end = matched[index + 1][1] if index + 1 < len(matched) else duration
+        if end <= start:
+            return expected
+        repaired.append({
+            "label": expected_segment["label"],
+            "type": expected_segment["type"],
+            "start": round(max(0.0, start), 3),
+            "end": round(max(start + 0.05, end), 3),
+            **({"source": "lyrics_reconciled"} if any("source" in item for item in existing) else {}),
+        })
+    return repaired
+
+
+def _preferred_structure_segments(
+    asset: AudioAsset,
+    duration_seconds: float | int | None,
+    waveform_segments: Any = None,
+) -> list[dict[str, Any]]:
+    duration = float(duration_seconds or asset.duration_seconds or 0.0)
+    rebuilt = build_structure_segments(asset, duration)
+    existing_structure = _clean_existing_segments(asset.structure_segments_json, duration)
+    existing_waveform = _clean_existing_segments(waveform_segments, duration)
+    existing = existing_structure or existing_waveform
+    if rebuilt and existing:
+        return _reconcile_aligned_segments_with_lyrics(existing, rebuilt, duration)
+    return rebuilt or existing
+
+
 def _normalize_waveform_segments(asset: AudioAsset, waveform: dict[str, Any]) -> tuple[dict[str, Any], bool]:
     changed = False
     duration = waveform.get("duration_seconds") or asset.duration_seconds
-    rebuilt = build_structure_segments(asset, duration)
-    existing_structure = _clean_existing_segments(asset.structure_segments_json, duration)
-    existing_waveform = _clean_existing_segments(waveform.get("segments"), duration)
-
-    # Prefer explicitly stored structure over noisy waveform tags, but allow a
-    # fresh prompt-derived rebuild to replace raw descriptor segments.
-    preferred = existing_structure or rebuilt or existing_waveform
+    preferred = _preferred_structure_segments(asset, duration, waveform.get("segments"))
     if not preferred:
         return waveform, changed
 
@@ -426,10 +587,7 @@ def sanitize_waveform_payload_for_asset(asset: AudioAsset, waveform: Any | None 
         return None
     payload = deepcopy(payload)
     duration = duration_seconds or payload.get("duration_seconds") or asset.duration_seconds
-    existing_structure = _clean_existing_segments(asset.structure_segments_json, duration)
-    rebuilt = build_structure_segments(asset, duration)
-    existing_waveform = _clean_existing_segments(payload.get("segments"), duration)
-    segments = existing_structure or rebuilt or existing_waveform
+    segments = _preferred_structure_segments(asset, duration, payload.get("segments"))
     if segments:
         payload["segments"] = segments
     payload["duration_seconds"] = duration or payload.get("duration_seconds") or asset.duration_seconds

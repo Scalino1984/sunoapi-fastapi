@@ -9,8 +9,9 @@ import io
 import json
 import mimetypes
 import re
+import unicodedata
 
-from fastapi import APIRouter, Depends, HTTPException, Response, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, Response, UploadFile, File, Query
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
@@ -94,6 +95,86 @@ def _normalize_export_mode(value: str | None) -> str:
     if normalized not in _EXPORT_MODES:
         raise HTTPException(status_code=400, detail="Exportmodus ist nicht unterstützt. Erlaubt: simple, extended.")
     return normalized
+
+
+def _search_tokens(value: Any) -> list[str]:
+    text = unicodedata.normalize("NFKD", str(value or "").lower().replace("ß", "ss"))
+    text = "".join(char for char in text if not unicodedata.combining(char))
+    return [token for token in re.sub(r"[^a-z0-9]+", " ", text).split() if token]
+
+
+def _search_matches(value: Any, tokens: list[str]) -> bool:
+    if not tokens:
+        return True
+    candidates = _search_tokens(value)
+
+    def umlaut_equivalent(token: str) -> str:
+        return token.replace("ae", "a").replace("oe", "o").replace("ue", "u")
+
+    return all(any(
+        umlaut_equivalent(candidate) == umlaut_equivalent(token)
+        or umlaut_equivalent(token) in umlaut_equivalent(candidate)
+        for candidate in candidates
+    ) for token in tokens)
+
+
+def _search_page(items: list[dict[str, Any]], page: int, page_size: int) -> dict[str, Any]:
+    total = len(items)
+    start = (page - 1) * page_size
+    return {"items": items[start:start + page_size], "total": total, "page": page, "page_size": page_size}
+
+
+@router.get("/search", response_model=dict)
+def search_library_content(
+    q: str = Query(min_length=1, max_length=240),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=25, ge=1, le=100),
+    db: Session = Depends(get_db),
+):
+    """Paginated global search, independent of the client-side 500-item library list."""
+    tokens = _search_tokens(q)
+    assets = db.query(AudioAsset).filter(AudioAsset.is_deleted.is_(False)).order_by(AudioAsset.updated_at.desc(), AudioAsset.id.desc()).all()
+    project_ids = {asset.project_id for asset in assets if asset.project_id}
+    song_ids = {asset.song_id for asset in assets if asset.song_id}
+    projects = {item.id: item for item in db.query(AudioProject).filter(AudioProject.id.in_(project_ids)).all()} if project_ids else {}
+    songs = {item.id: item for item in db.query(Song).filter(Song.id.in_(song_ids)).all()} if song_ids else {}
+    asset_items: list[dict[str, Any]] = []
+    for asset in assets:
+        metadata = asset.metadata_json if isinstance(asset.metadata_json, dict) else {}
+        ai_tags = metadata.get("ai_tags") if isinstance(metadata.get("ai_tags"), dict) else {}
+        project = projects.get(asset.project_id)
+        song = songs.get(asset.song_id)
+        value = " ".join(str(item or "") for item in [
+            asset.title, asset.display_title, asset.filename, asset.audio_id, asset.suno_task_id,
+            asset.prompt, asset.lyrics, asset.style, asset.operation_type,
+            project.title if project else "", song.title if song else "", ai_tags.get("language"),
+            *(ai_tags.get("tags") or []), *(ai_tags.get("moods") or []), *(ai_tags.get("genres") or []),
+        ])
+        if _search_matches(value, tokens):
+            asset_items.append({
+                "id": asset.id,
+                "title": asset.display_title or asset.title or (song.title if song else "") or asset.filename or f"Audio {asset.id}",
+                "style": asset.style,
+                "operation_label": asset.operation_label,
+            })
+
+    lyrics = db.query(LyricDraft).filter(LyricDraft.is_deleted.is_(False)).order_by(LyricDraft.updated_at.desc(), LyricDraft.id.desc()).all()
+    lyric_items = [{"id": item.id, "title": item.title, "content": item.content, "tags": item.tags}
+                   for item in lyrics if _search_matches(" ".join(str(value or "") for value in [item.title, item.content, item.tags, item.structure_template]), tokens)]
+    styles = db.query(MusicStyle).filter(MusicStyle.is_deleted.is_(False)).order_by(MusicStyle.updated_at.desc(), MusicStyle.id.desc()).all()
+    style_items = [{"id": item.id, "name": item.name, "genre": item.genre, "tags": item.tags, "description": item.description}
+                   for item in styles if _search_matches(" ".join(str(value or "") for value in [item.name, item.style_text, item.description, item.genre, item.tags]), tokens)]
+    playlists = db.query(Playlist).filter(Playlist.is_deleted.is_(False)).order_by(Playlist.updated_at.desc(), Playlist.id.desc()).all()
+    playlist_items = [{"id": item.id, "name": item.name, "description": item.description}
+                      for item in playlists if _search_matches(" ".join(str(value or "") for value in [item.name, item.description]), tokens)]
+
+    return {
+        "query": q,
+        "assets": _search_page(asset_items, page, page_size),
+        "lyrics": _search_page(lyric_items, page, page_size),
+        "styles": _search_page(style_items, page, page_size),
+        "playlists": _search_page(playlist_items, page, page_size),
+    }
 
 
 def _rows_to_csv(rows: list[dict[str, Any]], columns: list[str]) -> str:

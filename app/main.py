@@ -16,6 +16,7 @@ from app.services.startup_task_recovery import run_startup_task_recovery, run_st
 from app.services.library_content_polling_service import run_library_content_polling
 from app.services.portable_backup_service import run_portable_backup_scheduler
 from app.services.task_lifecycle_service import run_periodic_task_watchdog
+from app.services.forced_alignment_service import forced_alignment_available
 from app.routers import admin, ai_chat, archive, audio, audio_assets, assistant, audit, auth, credits, daw, files, library, lyrics, music, notifications, production, system, webhooks
 from app.suno_client import SunoAPIError
 from app.middleware import ActionStatusFallbackMiddleware, RequestContextMiddleware
@@ -36,6 +37,19 @@ async def lifespan(app: FastAPI):
     initial_admin = prepare_initial_database_credentials(settings)
     init_db()
     create_initial_admin_if_needed(initial_admin)
+
+    # Diagnose 2026-07-26: sichtbar machen, ob die CTC-Forced-Alignment-Engine
+    # (torch/torchaudio MMS_FA) aktiv ist. Ohne sie laeuft jede SRT-Generierung
+    # ausnahmslos ueber die ASR-Heuristik-Kette, die bei Englisch/Patois-Anteilen
+    # anfaelliger fuer Zeit-Drift ist. Siehe requirements-forced-alignment.txt.
+    if forced_alignment_available():
+        logger.info("Forced-Alignment (MMS_FA) verfuegbar: SRT-Alignment kann den CTC-Pfad nutzen.")
+    else:
+        logger.warning(
+            "Forced-Alignment (MMS_FA) NICHT verfuegbar (torch/torchaudio fehlen). "
+            "SRT-Alignment laeuft ausschliesslich ueber die ASR-Heuristik-Kette. "
+            "Installation: pip install -r requirements-forced-alignment.txt --break-system-packages"
+        )
 
     background_tasks: list[asyncio.Task] = []
 

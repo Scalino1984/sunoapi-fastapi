@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowLeft, ArrowUp, BookOpenText, Brush, ChevronDown, CircleHelp, ClipboardCheck, Command, FileText, Home, ListMusic, Menu, Mic2, Moon, MoreHorizontal, Music, RefreshCw, Scissors, Search, Settings, Shield, Sun, Trash, Trash2, UploadCloud, X } from 'lucide-react';
+import { ArrowLeft, ArrowUp, BookOpenText, Brush, ChevronDown, CircleHelp, Command, FileText, Home, ListMusic, Menu, Mic2, Moon, MoreHorizontal, Music, RefreshCw, Scissors, Search, Settings, Shield, Sun, Trash, Trash2, UploadCloud, X } from 'lucide-react';
 import { api } from './api/client.js';
-import { assetSearchText, friendlyNotification } from './utils.js';
+import { friendlyNotification } from './utils.js';
 import { Login } from './components/Login.jsx';
 import { MiniPlayer } from './components/MiniPlayer.jsx';
 import { Toast } from './components/Toast.jsx';
@@ -17,12 +17,12 @@ import { LibraryTextPage } from './pages/LibraryTextPage.jsx';
 import { PlaylistsPage } from './pages/PlaylistsPage.jsx';
 import { StylesPage } from './pages/StylesPage.jsx';
 import { AdminPage } from './pages/AdminPage.jsx';
-import { AuditPage } from './pages/AuditPage.jsx';
 import { SystemPage } from './pages/SystemPage.jsx';
 import { StatusPage } from './pages/StatusPage.jsx';
 import { DawPage } from './pages/DawPage.jsx';
 import { TrashPage } from './pages/TrashPage.jsx';
 import { ImportPage } from './pages/ImportPage.jsx';
+import { SearchResultsPage } from './pages/SearchResultsPage.jsx';
 import { GlobalAIAssistant } from './components/GlobalAIAssistant.jsx';
 import { AppAssistantProvider } from './context/AppAssistantContext.jsx';
 import { buildAvailableAssistantActions, createAssistantActions } from './assistant/assistantActions.js';
@@ -30,6 +30,7 @@ import { useI18n } from './i18n/I18nContext.jsx';
 
 const tabs = [
   ['home', 'Home', Home],
+  ['search', 'Suche', Search],
   ['library', 'Library', ListMusic],
   ['imports', 'Import', UploadCloud],
   ['music', 'Musik', Music],
@@ -40,7 +41,6 @@ const tabs = [
   ['styles', 'Styles', Brush],
   ['daw', 'Mini-DAW', Scissors],
   ['admin', 'Admin', Shield],
-  ['audit', 'Audit & Wartung', ClipboardCheck],
   ['status', 'Status', RefreshCw],
   ['system', 'System', Settings],
   ['help', 'Hilfe', BookOpenText]
@@ -140,6 +140,7 @@ const POLLING_AFTER_CREATE_MS = 20 * 60 * 1000;
 const ACTIVE_POLL_INTERVAL_MS = 10 * 1000;
 const IDLE_POLL_INTERVAL_MS = 60 * 1000;
 const MIN_STATUS_POLL_INTERVAL_MS = 8 * 1000;
+const MIN_NOTIFICATION_POLL_INTERVAL_MS = 5 * 1000;
 const STATUS_DETAIL_POLL_MS = 2500;
 const AUTH_KEEPALIVE_INTERVAL_MS = 10 * 60 * 1000;
 const DEFAULT_BADGE_AUTO_CLOSE_MS = 8000;
@@ -323,6 +324,7 @@ export default function App() {
   const tasksRef = useRef([]);
   const pollingUntilRef = useRef(0);
   const lastStatusPollAtRef = useRef(0);
+  const lastNotificationPollAtRef = useRef(Date.now());
 
   useEffect(() => {
     tasksRef.current = tasks;
@@ -649,6 +651,20 @@ export default function App() {
     }
   }, []);
 
+  const refreshNotificationsOnly = useCallback(async () => {
+    if (!user) return null;
+    const now = Date.now();
+    if (now - lastNotificationPollAtRef.current < MIN_NOTIFICATION_POLL_INTERVAL_MS) return null;
+    lastNotificationPollAtRef.current = now;
+    return refreshAll({
+      silent: true,
+      content: false,
+      tasks: false,
+      credits: false,
+      notifications: true
+    });
+  }, [user, refreshAll]);
+
 
   useEffect(() => {
     if (!user || playerState.isPlaying || !pendingContentRefreshRef.current) return;
@@ -715,40 +731,11 @@ export default function App() {
         return next;
       });
       setQueue((current) => updateRows(current));
-
-      const status = String(transcript.status || detail.status || '').toLowerCase();
-      const hasTaskHandle = Boolean(transcript.task_local_id || transcript.task_id || detail.task_local_id || detail.task_id);
-      const shouldRefreshTasks = hasTaskHandle || ['running', 'queued', 'pending', 'processing'].includes(status);
-
-      if (shouldRefreshTasks) {
-        // SRT-Erzeugungen koennen auch ausserhalb der Library-Detailseite
-        // gestartet werden, z. B. im MiniPlayer. Dort gibt es kein onReload(),
-        // deshalb muss die globale Task-/Notification-Leiste explizit nachziehen.
-        setPollingUntil(Date.now() + POLLING_AFTER_CREATE_MS);
-        const refreshTaskSnapshot = () => {
-          refreshAll({
-            silent: true,
-            content: false,
-            tasks: true,
-            credits: false,
-            notifications: true,
-          })
-            .then((snapshot) => {
-              const count = activeTaskCount(snapshot?.tasks || []);
-              setTaskRefreshState((current) => ({ ...current, activeCount: count }));
-              if (count > 0) setPollingUntil(Date.now() + POLLING_AFTER_CREATE_MS);
-            })
-            .catch(() => null);
-        };
-
-        refreshTaskSnapshot();
-        window.setTimeout(refreshTaskSnapshot, 800);
-      }
     }
 
     window.addEventListener('srt:updated', handleSrtUpdated);
     return () => window.removeEventListener('srt:updated', handleSrtUpdated);
-  }, [refreshAll]);
+  }, []);
 
   // Wichtig: Keine assets/tasks/notifications in diese Dependencies aufnehmen.
   // Die Funktion pollt Live-Statuswerte. Wenn sie bei jeder Task-/Notification-
@@ -815,6 +802,18 @@ export default function App() {
   useEffect(() => {
     if (!user) return undefined;
 
+    const onVisible = () => {
+      if (document.visibilityState !== 'visible') return;
+      refreshNotificationsOnly().catch(() => null);
+    };
+
+    document.addEventListener('visibilitychange', onVisible);
+    return () => document.removeEventListener('visibilitychange', onVisible);
+  }, [user, refreshNotificationsOnly]);
+
+  useEffect(() => {
+    if (!user) return undefined;
+
     let stopped = false;
     let busy = false;
     let timerId = null;
@@ -831,7 +830,15 @@ export default function App() {
       const forceWindowActive = now < pollingUntilRef.current;
       const shouldPoll = openCount > 0 || forceWindowActive;
 
-      if (!shouldPoll) return;
+      if (!shouldPoll) {
+        busy = true;
+        try {
+          await refreshNotificationsOnly();
+        } finally {
+          busy = false;
+        }
+        return;
+      }
       if (now - lastStatusPollAtRef.current < MIN_STATUS_POLL_INTERVAL_MS) return;
 
       busy = true;
@@ -860,7 +867,7 @@ export default function App() {
       stopped = true;
       if (timerId) window.clearTimeout(timerId);
     };
-  }, [user, refreshPendingAndReload]);
+  }, [user, refreshPendingAndReload, refreshNotificationsOnly]);
 
   useEffect(() => {
     if (playbackRefreshLockRef.current) return;
@@ -1072,6 +1079,25 @@ export default function App() {
     setLibraryOpenRequestKey((value) => value + 1);
     setActiveTab('library');
   }, []);
+
+  const openSearchAsset = useCallback(async (assetId) => {
+    const normalized = String(assetId || '').trim();
+    if (!normalized) return;
+    try {
+      const asset = await api.archive.getAudio(normalized);
+      if (asset?.id) {
+        setAssets((current) => {
+          const next = [...(current || []).filter((item) => String(item?.id || '') !== String(asset.id)), asset];
+          cachedRefreshStateRef.current = { ...cachedRefreshStateRef.current, assets: next };
+          return next;
+        });
+      }
+    } catch (error) {
+      notify(error?.message || 'Song konnte nicht geladen werden.', 'error');
+      return;
+    }
+    requestLibraryAssetOpen(normalized);
+  }, [notify, requestLibraryAssetOpen]);
 
   function openCurrentPlayerDetails() {
     const currentAsset = queue?.[currentIndex];
@@ -1335,8 +1361,8 @@ export default function App() {
     const directTab = tabs.find(([key, label]) => {
       const localizedLabel = localizedTabLabels[key] || label;
       return lower === key
-        || lower.includes(String(label).toLowerCase())
-        || lower.includes(String(localizedLabel).toLowerCase());
+        || lower === String(label).toLowerCase()
+        || lower === String(localizedLabel).toLowerCase();
     });
     if (directTab) {
       openMainTab(directTab[0], directTab[0] === 'music' && lower.includes('wizard') ? { wizard: true } : {});
@@ -1345,33 +1371,26 @@ export default function App() {
       return;
     }
 
-    if (lower.includes('song') && (lower.includes('neu') || lower.includes('erstellen') || lower.includes('generieren'))) {
+    const songWizardCommand = [
+      'neuer song', 'neuen song', 'song neu', 'song erstellen', 'song generieren',
+      'neuen song erstellen', 'neuen song generieren'
+    ].includes(lower);
+    if (songWizardCommand) {
       openMainTab('music', { wizard: true });
       setCommandQuery('');
       notify(t('messages.songWizardOpened', 'Song-Wizard geöffnet.'), 'info');
       return;
     }
 
-    if (lower.includes('status') || lower.includes('task') || lower.includes('fehler')) {
+    if (['task', 'tasks', 'fehler'].includes(lower)) {
       openMainTab('status');
       setCommandQuery('');
       return;
     }
 
-    const assetMatch = assets.find((asset) => assetSearchText(asset).includes(lower));
-    if (assetMatch) {
-      if (lower.includes('daw') || lower.includes('bearbeiten') || lower.includes('schneiden')) {
-        openAssetInDaw(assetMatch.id);
-        notify(`${assetMatch.title || 'Song'} in Mini-DAW geöffnet.`, 'info');
-      } else {
-        openMainTab('library');
-      }
-      return;
-    }
-
-    if (activeTab === 'library') return;
-
-    notify('Kein direkter Treffer. Tipp: Songtitel, Mini-DAW, Musik, Library oder Status eingeben.', 'info');
+    // Inhaltssuchen werden nie als Navigation/Befehl verworfen. Die Ergebnis-Seite
+    // durchsucht Songs, Songtexte, Styles und Playlists gemeinsam.
+    openMainTab('search');
   }
 
   function useLyricForMusic(item) {
@@ -1387,26 +1406,6 @@ export default function App() {
     });
     setActiveTab('music');
     notify(isInstrumentalBlueprint ? 'Instrumental-Bauplan wurde für Musik übernommen.' : 'Songtext wurde für Musik übernommen.', 'success');
-  }
-
-  async function useStyleForMusic(item) {
-    if (!item) return;
-    try {
-      if (item.id) await api.library.useStyle(item.id);
-      setMusicDraft({
-        title: '',
-        prompt: '',
-        style: item.style_text || item.content || item.description || '',
-        instrumental: false,
-        customMode: true,
-        work_mode: 'lyrics'
-      });
-      setActiveTab('music');
-      notify('Style wurde für Musik übernommen.', 'success');
-      refreshAll();
-    } catch (error) {
-      notify(error?.message || 'Style konnte nicht für Musik übernommen werden.', 'error');
-    }
   }
 
   function reusePromptForMusic(payload) {
@@ -1448,6 +1447,17 @@ export default function App() {
       notify(`Song gestartet. Statusprüfung läuft automatisch. Task: ${String(taskId).slice(0, 16)}…`, 'success');
     }
   }, [refreshPendingAndReload, refreshAll, notify]);
+
+  const handleBackgroundTaskStarted = useCallback(async () => {
+    setPollingUntil(Date.now() + POLLING_AFTER_CREATE_MS);
+    await refreshAll({
+      silent: true,
+      content: false,
+      tasks: true,
+      credits: false,
+      notifications: true
+    });
+  }, [refreshAll]);
 
   function findTaskForNotification(notification) {
     const payload = notification?.target_payload || {};
@@ -1739,7 +1749,7 @@ export default function App() {
   );
   const localizedSidebarSections = useMemo(() => ([
     { label: t('nav.groups.collection', 'Sammlung'), keys: ['playlists', 'styles', 'texts', 'daw'] },
-    { label: t('nav.groups.control', 'System'), keys: ['admin', 'audit', 'system'] }
+    { label: t('nav.groups.control', 'System'), keys: ['admin', 'system'] }
   ]), [t]);
   const toggleLanguage = useCallback(() => {
     setLanguage(language === 'en' ? 'de' : 'en');
@@ -1806,21 +1816,21 @@ export default function App() {
 
   const currentPage = useMemo(() => {
     if (activeTab === 'home') return <HomePage assets={assets} lyrics={lyrics} playlists={playlists} tasks={tasks} notifications={notifications} onNavigate={openMainTab} onPlay={play} onOpenAsset={requestLibraryAssetOpen} />;
-    if (activeTab === 'library') return <LibraryPage assets={assets} loadError={libraryLoadError} voices={voices} playlists={playlists} onReload={refreshAll} onPlay={play} notify={notify} onUseLyric={useLyricForMusic} onReusePrompt={reusePromptForMusic} openAssetId={libraryOpenAssetId} openAssetRequestKey={libraryOpenRequestKey} onOpenAssetHandled={handleLibraryOpenAssetHandled} resetSignal={libraryResetSignal} onOpenDaw={openAssetInDaw} playbackState={stablePlaybackState} onToggleCurrentPlayback={toggleCurrentPlayer} onDetailTitleChange={handleLibraryDetailRouteChange} routeDetailSlug={libraryRouteDetailSlug} searchQuery={commandQuery} onTrashChanged={markTrashHasItems} />;
+    if (activeTab === 'search') return <SearchResultsPage query={commandQuery} assets={assets} lyrics={lyrics} styles={styles} playlists={playlists} onNavigate={openMainTab} onOpenAsset={openSearchAsset} />;
+    if (activeTab === 'library') return <LibraryPage assets={assets} loadError={libraryLoadError} voices={voices} playlists={playlists} onReload={refreshAll} onTaskStarted={handleBackgroundTaskStarted} onPlay={play} notify={notify} onUseLyric={useLyricForMusic} onReusePrompt={reusePromptForMusic} openAssetId={libraryOpenAssetId} openAssetRequestKey={libraryOpenRequestKey} onOpenAssetHandled={handleLibraryOpenAssetHandled} resetSignal={libraryResetSignal} onOpenDaw={openAssetInDaw} playbackState={stablePlaybackState} onToggleCurrentPlayback={toggleCurrentPlayer} onDetailTitleChange={handleLibraryDetailRouteChange} routeDetailSlug={libraryRouteDetailSlug} searchQuery={commandQuery} onTrashChanged={markTrashHasItems} />;
     if (activeTab === 'imports') return <ImportPage notify={notify} onReload={refreshAll} onOpenAsset={requestLibraryAssetOpen} />;
     if (activeTab === 'music') return <MusicPage styles={styles} voices={voices} uploadedFiles={uploadedFiles} assets={assets} draft={musicDraft} notify={notify} onRefresh={refreshAll} onMusicStarted={handleMusicStarted} initialWizard={musicWizardSignal} taskRefreshState={taskRefreshState} onCheckStatus={() => refreshPendingAndReload({ manual: true })} />;
     if (activeTab === 'lyrics') return <LyricsStudioPage lyrics={lyrics} assets={assets} notify={notify} onRefresh={refreshAll} useForMusic={useLyricForMusic} />;
     if (activeTab === 'texts') return <LibraryTextPage lyrics={lyrics} notify={notify} onReload={refreshAll} useForMusic={useLyricForMusic} searchQuery={commandQuery} />;
     if (activeTab === 'playlists') return <PlaylistsPage playlists={playlists} assets={assets} notify={notify} onReload={refreshAll} onPlay={play} searchQuery={commandQuery} />;
     if (activeTab === 'trash') return <TrashPage notify={notify} onReload={refreshAll} onTrashChanged={setTrashHasItems} />;
-    if (activeTab === 'styles') return <StylesPage styles={styles} notify={notify} onReload={refreshAll} useForMusic={useStyleForMusic} searchQuery={commandQuery} />;
+    if (activeTab === 'styles') return <StylesPage styles={styles} notify={notify} onReload={refreshAll} searchQuery={commandQuery} />;
     if (activeTab === 'daw') return <DawPage assets={assets} selectedAssetId={dawOpenAssetId || dawAssetIdFromLocation()} onSelectedHandled={() => {}} onAssetChange={(id) => setDawOpenAssetId(String(id || '').trim())} onBackToLibrary={() => openMainTab('library')} onPlay={play} notify={notify} onReload={refreshAll} />;
-    if (activeTab === 'admin') return <AdminPage notify={notify} onReload={refreshAll} />;
-    if (activeTab === 'audit') return <AuditPage notify={notify} onReload={refreshAll} />;
+    if (activeTab === 'admin') return <AdminPage notify={notify} />;
     if (activeTab === 'status') return <StatusPage notifications={notifications} tasks={tasks} onReload={refreshAll} onCheckStatus={() => refreshPendingAndReload({ manual: true })} taskRefreshState={taskRefreshState} onOpenNotification={openNotification} onOpenTaskDetails={openTaskDetails} notify={notify} />;
     if (activeTab === 'help') return <HelpPage onNavigate={openMainTab} notify={notify} />;
     return <SystemPage notify={notify} uploadedFiles={uploadedFiles} onRefresh={refreshAll} />;
-  }, [activeTab, assets, libraryLoadError, lyrics, styles, voices, uploadedFiles, playlists, musicDraft, currentPageNotifications, currentPageTasks, libraryOpenAssetId, dawOpenAssetId, libraryResetSignal, libraryRouteDetailSlug, commandQuery, musicWizardSignal, currentPageTaskRefreshState, stablePlaybackState, toggleCurrentPlayer, handleLibraryOpenAssetHandled, refreshAll, refreshPendingAndReload, handleMusicStarted, notify, requestLibraryAssetOpen, handleLibraryDetailRouteChange, libraryOpenRequestKey, markTrashHasItems]);
+  }, [activeTab, assets, libraryLoadError, lyrics, styles, voices, uploadedFiles, playlists, musicDraft, currentPageNotifications, currentPageTasks, libraryOpenAssetId, dawOpenAssetId, libraryResetSignal, libraryRouteDetailSlug, commandQuery, musicWizardSignal, currentPageTaskRefreshState, stablePlaybackState, toggleCurrentPlayer, handleLibraryOpenAssetHandled, refreshAll, refreshPendingAndReload, handleMusicStarted, handleBackgroundTaskStarted, notify, requestLibraryAssetOpen, openSearchAsset, handleLibraryDetailRouteChange, libraryOpenRequestKey, markTrashHasItems]);
 
   if (!authChecked) return <main className="loading">{t('app.loading', 'Lade Anwendung…')}</main>;
   if (!user) return <Login onLogin={setUser} />;

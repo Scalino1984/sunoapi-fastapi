@@ -71,7 +71,7 @@ code { color: #c7f9ff; background: rgba(255,255,255,0.06); border: 1px solid var
 .cover-button, .variant-cover-button, .hero-cover-button { padding: 0; border: 0; background: transparent; overflow: hidden; position: relative; }
 .cover-button { border-radius: 17px; width: 78px; height: 78px; }
 .cover-button img, .detail-hero img, .variant-card img, .mini-player img, .variant-cover-button img, .hero-cover-button img { width: 100%; height: 100%; object-fit: cover; border-radius: 16px; }
-.cover-play, .variant-cover-button span, .hero-cover-button span { position: absolute; inset: auto 8px 8px auto; width: 32px; height: 32px; display: grid; place-items: center; border-radius: 999px; background: rgba(0,0,0,0.76); border: 1px solid var(--line); }
+.cover-play, .variant-cover-button span, .hero-cover-button span { position: absolute; inset: auto 8px 8px auto; z-index: 2; width: 32px; height: 32px; display: grid; place-items: center; border-radius: 999px; background: rgba(0,0,0,0.76); border: 1px solid var(--line); }
 .title-button { text-align: left; background: transparent; border: 0; padding: 0; display: grid; justify-content: start; gap: 4px; }
 .title-button strong { font-size: 19px; }
 .title-button span, .title-button small { color: var(--muted); }
@@ -448,6 +448,8 @@ button.danger,
 }
 .react-waveform.compact { min-height: 42px; padding-top: 12px; }
 .react-waveform-bars {
+  position: relative;
+  z-index: 1;
   width: 100%;
   height: 34px;
   display: flex;
@@ -3627,16 +3629,15 @@ body[data-theme="light"] .global-ai-top-toggle:hover {
   opacity: 1;
   box-shadow: 0 0 12px rgba(34, 211, 238, 0.22);
 }
-.react-waveform-progress-line {
+.react-waveform-progress-fill {
   position: absolute;
-  top: 7px;
-  bottom: 7px;
-  width: 2px;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.84);
-  box-shadow: 0 0 0 4px rgba(34, 211, 238, 0.10), 0 0 18px rgba(34, 211, 238, 0.36);
+  left: 0;
+  top: 0;
+  bottom: 0;
+  z-index: 0;
+  border-radius: inherit;
+  background: linear-gradient(90deg, rgba(34, 211, 238, .16), rgba(99, 102, 241, .24), rgba(236, 72, 153, .16));
   pointer-events: none;
-  transform: translateX(-50%);
 }
 .react-waveform-bars:disabled {
   cursor: default;
@@ -15778,4 +15779,112 @@ body[data-theme="light"] .library-search-index-tags > span:not(.empty-tag) {
   .assistant-runtime-composition-heading { flex-direction: column; }
   .assistant-runtime-source-row { grid-template-columns: 1fr; gap: 8px; }
   .assistant-runtime-source-value { justify-content: flex-start; text-align: left; }
+}
+
+/* Accessible checkbox states: high contrast, explicit check mark and keyboard focus. */
+input[type="checkbox"] {
+  -webkit-appearance: none;
+  appearance: none;
+  flex: 0 0 auto;
+  width: 22px !important;
+  height: 22px !important;
+  min-width: 22px;
+  min-height: 22px;
+  margin: 0;
+  padding: 0;
+  border: 2px solid #aeb8ca;
+  border-radius: 6px;
+  background-color: rgba(2, 6, 23, 0.72);
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: 16px 16px;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08), 0 1px 4px rgba(0, 0, 0, 0.34);
+  cursor: pointer;
+  vertical-align: middle;
+  transition: border-color 0.14s ease, background-color 0.14s ease, box-shadow 0.14s ease, transform 0.14s ease;
+}
+
+input[type="checkbox"]:hover:not(:disabled) {
+  border-color: #f8fafc;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.12), 0 0 0 3px rgba(55, 213, 255, 0.12);
+}
+
+input[type="checkbox"]:checked {
+  border-color: #f8fafc;
+  background-color: var(--accent);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M5 12.5 9.5 17 19 7.5' fill='none' stroke='%23ffffff' stroke-width='3.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  box-shadow: 0 0 0 3px rgba(55, 213, 255, 0.22), 0 4px 12px rgba(0, 0, 0, 0.34);
+}
+
+input[type="checkbox"]:indeterminate {
+  border-color: #f8fafc;
+  background-color: var(--accent);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M6 12h12' fill='none' stroke='%23ffffff' stroke-width='3.2' stroke-linecap='round'/%3E%3C/svg%3E");
+  box-shadow: 0 0 0 3px rgba(55, 213, 255, 0.22), 0 4px 12px rgba(0, 0, 0, 0.34);
+}
+
+input[type="checkbox"]:focus-visible {
+  outline: 3px solid #f8fafc;
+  outline-offset: 3px;
+  box-shadow: 0 0 0 6px rgba(55, 213, 255, 0.34);
+}
+
+input[type="checkbox"]:active:not(:disabled) {
+  transform: scale(0.94);
+}
+
+input[type="checkbox"]:disabled {
+  opacity: 0.58;
+  cursor: not-allowed;
+  filter: grayscale(0.32);
+}
+
+input[type="checkbox"]:checked:disabled {
+  opacity: 0.7;
+}
+
+.form-grid label.check-row:has(input[type="checkbox"]:checked),
+.batch-import-box .form-grid label.check-row:has(input[type="checkbox"]:checked),
+.status-song-import-grid label.check-row:has(input[type="checkbox"]:checked) {
+  border-color: color-mix(in srgb, var(--accent-2) 72%, white 28%);
+  background: color-mix(in srgb, var(--accent) 22%, var(--panel-2) 78%);
+  box-shadow: inset 4px 0 0 var(--accent-2), 0 0 0 1px rgba(55, 213, 255, 0.14);
+}
+
+.ai-style-feature-toggles .checkbox-inline:has(input[type="checkbox"]:checked),
+.audit-repair-group-toggle:has(input[type="checkbox"]:checked) {
+  border-color: color-mix(in srgb, var(--accent-2) 68%, white 32%);
+  background: color-mix(in srgb, var(--accent) 24%, rgba(15, 23, 42, 0.76));
+  color: var(--text);
+  box-shadow: 0 0 0 2px rgba(55, 213, 255, 0.14);
+}
+
+.asset-flat-select input[type="checkbox"],
+.gallery-select-checkbox input[type="checkbox"],
+.project-audio-select-mini input[type="checkbox"],
+.library-variant-row-select input[type="checkbox"],
+.audit-repair-group-toggle input[type="checkbox"],
+.notification-check input[type="checkbox"] {
+  width: 20px !important;
+  height: 20px !important;
+  min-width: 20px;
+  min-height: 20px;
+  border-radius: 5px;
+  background-size: 15px 15px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  input[type="checkbox"] {
+    transition: none;
+  }
+}
+
+@media (forced-colors: active) {
+  input[type="checkbox"] {
+    -webkit-appearance: auto;
+    appearance: auto;
+    width: 22px !important;
+    height: 22px !important;
+    accent-color: Highlight;
+  }
 }

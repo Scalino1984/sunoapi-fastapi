@@ -156,7 +156,8 @@ export function AdminPage({ notify, onReload }) {
         audio_ai_model_analysis_top_k: Math.max(5, Math.min(25, Number(next.audio_ai_model_analysis_top_k || 8))),
         library_ai_tagging_enabled: Boolean(next.library_ai_tagging_enabled),
         library_ai_tagging_profile_id: next.library_ai_tagging_profile_id ? Number(next.library_ai_tagging_profile_id) : null,
-        library_ai_tagging_max_tags_per_asset: Math.max(2, Math.min(8, Number(next.library_ai_tagging_max_tags_per_asset || 5)))
+        library_ai_tagging_max_tags_per_asset: Math.max(2, Math.min(8, Number(next.library_ai_tagging_max_tags_per_asset || 5))),
+        stem_separation_backend: next.stem_separation_backend || 'local_demucs'
       });
       notify(t('admin.messages.assistantSaved', 'KI-Assistent gespeichert.'), 'success');
       await load();
@@ -1103,6 +1104,27 @@ export function AdminPage({ notify, onReload }) {
                   <label>{t('admin.srt.vocalThreshold', 'Vocal-Schwelle')}<input type="number" min="0.005" max="0.25" step="0.005" value={settings.extend_auto_continue_at_vocal_threshold_ratio || 0.03} onChange={(event) => setSettings({ ...settings, extend_auto_continue_at_vocal_threshold_ratio: event.target.value })} /></label>
                   <label>{t('admin.srt.fallbackBeforeEnd', 'Fallback vor Ende Sekunden')}<input type="number" min="1" max="30" step="0.5" value={settings.extend_auto_continue_at_fallback_offset_seconds || 4} onChange={(event) => setSettings({ ...settings, extend_auto_continue_at_fallback_offset_seconds: event.target.value })} /></label>
                   <label>{t('admin.srt.analysisTimeout', 'Analyse-Timeout Sekunden')}<input type="number" min="30" max="1200" value={settings.extend_auto_continue_at_timeout_seconds || 180} onChange={(event) => setSettings({ ...settings, extend_auto_continue_at_timeout_seconds: event.target.value })} /></label>
+                </div>
+              </details>
+
+              <details className="assistant-related-details" id="assistant-stem-separation-settings">
+                <summary><Music2 size={17} /> <strong>{t('admin.stems.title', 'Stem-Separation')}</strong><span className="muted">{t('admin.assistant.related.stemScope', 'Lokales Demucs oder optional Replicate Demucs')}</span></summary>
+                <div className="form-grid compact-grid">
+                  <label>{t('admin.stems.backend', 'Standard-Backend')}
+                    <select value={settings.stem_separation_backend || 'local_demucs'} onChange={(event) => setSettings({ ...settings, stem_separation_backend: event.target.value })}>
+                      {(settings.stem_separation_backends || ['local_demucs', 'replicate_demucs']).map((backend) => {
+                        const configured = settings.stem_separation_runtime?.[backend]?.configured;
+                        const label = backend === 'replicate_demucs' ? t('admin.stems.replicate', 'Replicate Demucs') : t('admin.stems.local', 'Lokales Demucs');
+                        return <option key={backend} value={backend} disabled={backend === 'replicate_demucs' && !configured}>{label} · {configured ? t('admin.provider.ready', 'bereit') : t('admin.provider.notConfigured', 'nicht konfiguriert')}</option>;
+                      })}
+                    </select>
+                    <small>{t('admin.stems.backendHint', 'Die Auswahl gilt für Einzel-, Sammel- und optionale SRT-Vorab-Stem-Erzeugung. Lokales Demucs bleibt der Standard.')}</small>
+                  </label>
+                  <label>{t('admin.stems.replicateModel', 'Replicate-Modell')}<input value={settings.replicate_demucs_model || '—'} readOnly /></label>
+                  <label className="check"><input type="checkbox" checked={Boolean(settings.stem_separation_runtime?.local_demucs?.configured)} readOnly /> {t('admin.stems.localRuntime', 'Lokales Demucs installiert')}</label>
+                  <label className="check"><input type="checkbox" checked={Boolean(settings.stem_separation_runtime?.replicate_demucs?.token_configured)} readOnly /> {t('admin.stems.replicateToken', 'Replicate API-Token konfiguriert')}</label>
+                  <label className="check"><input type="checkbox" checked={Boolean(settings.stem_separation_runtime?.replicate_demucs?.configured)} readOnly /> {t('admin.stems.replicateRuntime', 'Replicate-Laufzeit bereit')}</label>
+                  <p className="muted wide">{t('admin.stems.hint', 'Replicate wird nur bei expliziter Auswahl verwendet. Eingabe- und Ausgabedateien werden nach der Erzeugung lokal gespeichert; die temporären Replicate-Dateien sind nicht die dauerhafte Quelle.')}</p>
                 </div>
               </details>
 

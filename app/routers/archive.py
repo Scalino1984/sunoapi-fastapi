@@ -33,10 +33,11 @@ from app.services.music_service import MusicService
 from app.services.audio_cache_service import AudioCacheService, AudioCandidate, CoverCacheService
 from app.services.audio_asset_materialization_service import AudioAssetMaterializationService
 from app.services.replicate_cover_service import MODELS as REPLICATE_COVER_MODELS, ReplicateCoverService
-from app.services.library_content_cache_service import cache_missing_library_content_once
+from app.services.library_content_cache_service import create_library_content_cache_task, run_library_content_cache_task
 from app.services.video_asset_service import attach_video_summaries_to_assets
 from app.services.extend_continue_at_analysis_service import analyze_continue_at_for_asset, load_extend_continue_at_settings
 from app.services.system_status_notification_service import create_system_status_notification
+from app.services.background_task_runner import run_detached_process
 from app.suno_client import SunoAPIClient, SunoAPIError
 from app.utils.time_utils import utc_now_naive
 
@@ -490,8 +491,26 @@ async def cache_missing_covers(limit: int = 500, db: Session = Depends(get_db)):
 
 
 @router.post("/content/cache-missing", response_model=dict)
-async def cache_missing_library_content(limit: int = 5000, db: Session = Depends(get_db)):
-    return await cache_missing_library_content_once(db, limit=limit, notify_always=True, background=False)
+def cache_missing_library_content(limit: int = 5000, db: Session = Depends(get_db)):
+    safe_limit = min(5000, max(1, int(limit or 5000)))
+    task = create_library_content_cache_task(db, limit=safe_limit)
+    run_detached_process(
+        f"library-content-cache-{task.id}",
+        run_library_content_cache_task,
+        task.id,
+        safe_limit,
+        finalize_task_id=task.id,
+    )
+    return {
+        "ok": True,
+        "queued": True,
+        "task_local_id": task.id,
+        "task_id": task.task_id,
+        "task_type": task.task_type,
+        "status": task.status,
+        "limit": safe_limit,
+        "message": "Library-Inhalte werden im Hintergrund geprüft.",
+    }
 
 
 @router.get("/audio", response_model=list[AudioAssetRead])

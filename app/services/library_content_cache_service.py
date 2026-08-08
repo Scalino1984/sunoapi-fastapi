@@ -15,6 +15,7 @@ zaehlt jeder erneute Lauf dieselben Cover-Metadaten wieder als repariert.
 from __future__ import annotations
 
 import hashlib
+import logging
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -31,8 +32,25 @@ from app.services.audio_asset_repair_service import AUDIO_URL_PREFERENCE, is_aud
 from app.services.audio_asset_materialization_service import AudioAssetMaterializationService
 from app.services.audio_cache_service import AudioCacheService, AudioCandidate, CoverCacheService
 from app.services.music_service import MusicService
-from app.services.task_lifecycle_service import append_task_debug_event, append_task_step_log
+from app.services.task_lifecycle_service import (
+    LOCAL_APP_TASK_TYPES,
+    append_task_debug_event,
+    append_task_step_log,
+    finish_open_task_notifications,
+    is_local_app_task,
+    is_local_task_identifier,
+    mark_task_finished,
+    mark_task_started,
+    task_heartbeat_ticker,
+)
 from app.utils.time_utils import utc_now_naive
+
+GENERATION_OPTIONS_PROVIDER_MARKER_KEYS = (
+    "generation_options_provider_checked",
+    "generation_options_provider_checked_at",
+    "generation_options_provider_check_version",
+    "generation_options_provider_last_error",
+)
 
 IMAGE_URL_KEYS = (
     "source_image_url",
@@ -713,6 +731,89 @@ def _apply_local_generated_cover_reference(target: Any, url_attr: str, cover_ref
     return changed
 
 
+def _is_provider_placeholder_payload(payload: Any) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    message = str(payload.get("message") or payload.get("msg") or "").strip().lower()
+    if "missing authentication token" in message:
+        return True
+    return "data" in payload and payload.get("data") is None and set(payload).issubset({"code", "msg", "message", "data"})
+
+
+def _recover_local_task_result_payload(db: Session, task: SunoTask) -> dict[str, Any] | None:
+    notification = (
+        db.query(StatusNotification)
+        .filter(
+            StatusNotification.task_local_id == task.id,
+            StatusNotification.is_deleted.is_(False),
+        )
+        .order_by(StatusNotification.updated_at.desc(), StatusNotification.id.desc())
+        .first()
+    )
+    if notification and isinstance(notification.target_payload, dict) and notification.target_payload:
+        return dict(notification.target_payload)
+
+    response_payload = task.response_payload if isinstance(task.response_payload, dict) else {}
+    last_event = response_payload.get("last_debug_event")
+    if isinstance(last_event, dict) and isinstance(last_event.get("data"), dict) and last_event.get("data"):
+        return dict(last_event["data"])
+    debug_log = response_payload.get("debug_log")
+    if isinstance(debug_log, list):
+        for entry in reversed(debug_log):
+            if isinstance(entry, dict) and isinstance(entry.get("data"), dict) and entry.get("data"):
+                return dict(entry["data"])
+    return None
+
+
+def _repair_misclassified_local_provider_checks(db: Session) -> int:
+    """Undo provider-backfill pollution on local maintenance/background tasks.
+
+    Earlier versions selected every row with a task_id and could therefore
+    send synthetic ``local-*`` IDs to SunoAPI.org. This repair removes only
+    the foreign provider-check markers and restores an overwritten local
+    result from the task notification/debug payload when possible.
+    """
+    rows = (
+        db.query(SunoTask)
+        .filter(SunoTask.is_deleted.is_(False))
+        .order_by(SunoTask.id.asc())
+        .all()
+    )
+    repaired = 0
+    for task in rows:
+        if not (is_local_app_task(task) or is_local_task_identifier(task.task_id) or str(task.task_type or "") in LOCAL_APP_TASK_TYPES):
+            continue
+
+        changed = False
+        request_payload = dict(task.request_payload) if isinstance(task.request_payload, dict) else {}
+        cleaned_request = dict(request_payload)
+        for key in GENERATION_OPTIONS_PROVIDER_MARKER_KEYS:
+            cleaned_request.pop(key, None)
+        if cleaned_request != request_payload:
+            task.request_payload = cleaned_request
+            flag_modified(task, "request_payload")
+            changed = True
+
+        if _is_provider_placeholder_payload(task.result_payload):
+            recovered = _recover_local_task_result_payload(db, task)
+            if recovered:
+                task.result_payload = recovered
+                flag_modified(task, "result_payload")
+                if str(task.status or "").strip().lower() == "success":
+                    task.status = "SUCCESS"
+                if task.error_message and "missing authentication token" in str(task.error_message).lower():
+                    task.error_message = None
+                changed = True
+
+        if changed:
+            db.add(task)
+            repaired += 1
+
+    if repaired:
+        db.flush()
+    return repaired
+
+
 def _repair_generation_options_from_tasks(db: Session, *, limit: int = 500) -> int:
     """Repair imported SunoAPI generation options for Library "Inhalte pruefen".
 
@@ -746,6 +847,7 @@ async def cache_missing_library_content_once(
     limit: int = 500,
     notify_always: bool = True,
     background: bool = False,
+    status_task: SunoTask | None = None,
 ) -> dict[str, Any]:
     audio_service = AudioCacheService(db)
     cover_service = CoverCacheService(db)
@@ -772,12 +874,14 @@ async def cache_missing_library_content_once(
             return
         unavailable_examples.append({"scope": scope, "id": item_id, "reason": str(message_text)[:500]})
 
+    provider_boundary_repairs = _repair_misclassified_local_provider_checks(db)
     materialized_from_tasks = AudioAssetMaterializationService(db).materialize_recent_tasks(limit=max(80, int(limit or 500)), force=True)
     materialization_changed = int(materialized_from_tasks.created or 0) + int(materialized_from_tasks.updated or 0)
     cover_metadata_fixed = _hydrate_generated_cover_sources_from_tasks(db, limit=limit)
     generation_options_repair_limit = min(1000, max(80, int(limit or 500)))
     generation_options_fixed = _repair_generation_options_from_tasks(db, limit=generation_options_repair_limit)
     generation_options_fixed += await MusicService(db).repair_imported_task_generation_options_from_provider(limit=generation_options_repair_limit)
+    stale_metadata_fixed += provider_boundary_repairs
     stale_metadata_fixed += cover_metadata_fixed
     stale_metadata_fixed += generation_options_fixed
 
@@ -904,7 +1008,8 @@ async def cache_missing_library_content_once(
 
     changed_total = audio_cached + cover_cached + stale_metadata_fixed + materialization_changed
     materialization_note = f" Materialisierung geändert: {materialization_changed}." if materialization_changed else ""
-    message = f"Inhalte geprüft: {audio_cached} Audios, {cover_cached} Cover nachgeladen. Metadaten repariert: {stale_metadata_fixed}.{materialization_note} Übersprungen: {skipped}, nicht cachebar: {unavailable}, Fehler: {failed}."
+    provider_boundary_note = f" Provider-Fehlzuordnungen repariert: {provider_boundary_repairs}." if provider_boundary_repairs else ""
+    message = f"Inhalte geprüft: {audio_cached} Audios, {cover_cached} Cover nachgeladen. Metadaten repariert: {stale_metadata_fixed}.{materialization_note}{provider_boundary_note} Übersprungen: {skipped}, nicht cachebar: {unavailable}, Fehler: {failed}."
     result_payload = {
         "audio_cached": audio_cached,
         "cover_cached": cover_cached,
@@ -914,6 +1019,7 @@ async def cache_missing_library_content_once(
         "materialization_changed": materialization_changed,
         "cover_metadata_fixed": cover_metadata_fixed,
         "generation_options_fixed": generation_options_fixed,
+        "provider_boundary_repairs": provider_boundary_repairs,
         "assets_checked": assets_checked,
         "songs_checked": songs_checked,
         "audio_attempted": audio_attempted,
@@ -926,18 +1032,41 @@ async def cache_missing_library_content_once(
         "background": background,
         "limit": limit,
     }
-    local_task = SunoTask(
-        task_id=f"local-library-content-cache-{utc_now_naive().strftime('%Y%m%d%H%M%S%f')}",
-        task_type="library_content_cache",
-        status="SUCCESS" if failed == 0 else "PARTIAL_SUCCESS",
-        request_payload={"limit": limit, "background": background},
-        response_payload={},
-        result_payload=result_payload,
-        started_at=utc_now_naive(),
-        completed_at=utc_now_naive(),
-    )
-    db.add(local_task)
-    db.flush()
+    final_status = "SUCCESS" if failed == 0 else "PARTIAL_SUCCESS"
+    now = utc_now_naive()
+    if status_task is None:
+        local_task = SunoTask(
+            task_id=f"local-library-content-cache-{now.strftime('%Y%m%d%H%M%S%f')}",
+            task_type="library_content_cache",
+            status=final_status,
+            request_payload={"limit": limit, "background": background, "local_task": True},
+            response_payload={},
+            result_payload=result_payload,
+            started_at=now,
+            heartbeat_at=now,
+            completed_at=now,
+        )
+        db.add(local_task)
+        db.flush()
+    else:
+        local_task = status_task
+        local_task.task_id = local_task.task_id or f"local-library-content-cache-{now.strftime('%Y%m%d%H%M%S%f')}"
+        local_task.task_type = "library_content_cache"
+        local_task.status = final_status
+        local_task.error_message = None
+        local_task.started_at = local_task.started_at or now
+        local_task.heartbeat_at = now
+        local_task.completed_at = now
+        local_task.result_payload = result_payload
+        request_payload = dict(local_task.request_payload) if isinstance(local_task.request_payload, dict) else {}
+        request_payload.update({"limit": limit, "background": background, "local_task": True})
+        local_task.request_payload = request_payload
+        response_payload = dict(local_task.response_payload) if isinstance(local_task.response_payload, dict) else {}
+        response_payload.update({"background": background, "status": final_status, "completed_at": now.isoformat()})
+        local_task.response_payload = response_payload
+        db.add(local_task)
+        db.flush()
+        finish_open_task_notifications(db, local_task, message=message)
     append_task_debug_event(
         db,
         local_task,
@@ -958,6 +1087,7 @@ async def cache_missing_library_content_once(
             "cover_cached": cover_cached,
             "stale_metadata_fixed": stale_metadata_fixed,
             "materialization_changed": materialization_changed,
+            "provider_boundary_repairs": provider_boundary_repairs,
             "failed": failed,
             "unavailable": unavailable,
         },
@@ -1008,6 +1138,7 @@ async def cache_missing_library_content_once(
         "materialization_changed": materialization_changed,
         "cover_metadata_fixed": cover_metadata_fixed,
         "generation_options_fixed": generation_options_fixed,
+        "provider_boundary_repairs": provider_boundary_repairs,
         "assets_checked": assets_checked,
         "songs_checked": songs_checked,
         "audio_attempted": audio_attempted,
@@ -1020,3 +1151,143 @@ async def cache_missing_library_content_once(
         "background": background,
         "message": message,
     }
+
+
+LOGGER = logging.getLogger("songstudio.library_content_cache")
+
+
+def create_library_content_cache_task(
+    db: Session,
+    limit: int = 500,
+    *,
+    background: bool = True,
+    notify_always: bool = True,
+    **_: Any,
+) -> SunoTask:
+    """Erzeugt den sichtbaren lokalen Statustask für „Inhalte prüfen".
+
+    Diese öffentliche Funktion ist Teil des Router-Vertrags. Sie bleibt bewusst
+    getrennt vom eigentlichen Prüflauf, damit der Request sofort eine lokale
+    Task-ID zurückgeben und der schwere Lauf im Background-Worker starten kann.
+    """
+
+    safe_limit = max(1, min(5000, int(limit or 500)))
+    now = utc_now_naive()
+    task = SunoTask(
+        task_id=f"local-library-content-cache-{now.strftime('%Y%m%d%H%M%S%f')}",
+        task_type="library_content_cache",
+        status="RUNNING",
+        request_payload={
+            "limit": safe_limit,
+            "background": bool(background),
+            "notify_always": bool(notify_always),
+            "local_task": True,
+        },
+        response_payload={
+            "background": bool(background),
+            "local_task": True,
+            "status": "RUNNING",
+        },
+        result_payload=None,
+        error_message=None,
+        started_at=now,
+        heartbeat_at=now,
+    )
+    db.add(task)
+    db.commit()
+    db.refresh(task)
+    mark_task_started(
+        db,
+        task,
+        payload={
+            "limit": safe_limit,
+            "background": bool(background),
+            "local_task": True,
+        },
+    )
+    db.add(StatusNotification(
+        event_type="library_content_cache_started",
+        title="Library-Inhalte werden geprüft",
+        message="Lokale Dateien, Metadaten und zulässige externe SunoAPI-Importdaten werden geprüft.",
+        severity="info",
+        status="unread",
+        task_local_id=task.id,
+        suno_task_id=task.task_id,
+        content_type="system",
+        content_id=task.id,
+        target_tab="status",
+        target_payload={
+            "task_local_id": task.id,
+            "task_type": task.task_type,
+            "status": "RUNNING",
+        },
+    ))
+    db.commit()
+    db.refresh(task)
+    return task
+
+
+async def run_library_content_cache_task(
+    task_id: int,
+    limit: int | None = None,
+    *,
+    background: bool = True,
+    notify_always: bool = True,
+    **_: Any,
+) -> dict[str, Any] | None:
+    """Führt einen zuvor erzeugten Library-Prüftask mit eigener DB-Session aus.
+
+    Die Signatur akzeptiert zusätzliche benannte Argumente, damit ältere und
+    neuere Router-Aufrufer kompatibel bleiben. Der vorhandene RUNNING-Task wird
+    finalisiert; es wird kein zweiter lokaler Wartungstask erzeugt.
+    """
+
+    from app.database import SessionLocal
+
+    db = SessionLocal()
+    try:
+        task = db.query(SunoTask).filter(SunoTask.id == int(task_id), SunoTask.is_deleted.is_(False)).first()
+        if not task:
+            LOGGER.error("Library-Content-Cache-Task %s wurde nicht gefunden.", task_id)
+            return None
+
+        request_payload = task.request_payload if isinstance(task.request_payload, dict) else {}
+        safe_limit = max(1, min(5000, int(limit or request_payload.get("limit") or 500)))
+        effective_background = bool(request_payload.get("background", background))
+        effective_notify = bool(request_payload.get("notify_always", notify_always))
+
+        if task.cancel_requested:
+            mark_task_finished(
+                db,
+                task,
+                status="CANCELLED",
+                message="Library-Inhaltsprüfung wurde vor dem Start abgebrochen.",
+                result_payload={"cancelled": True, "limit": safe_limit},
+                notify=True,
+            )
+            return {"ok": False, "cancelled": True, "limit": safe_limit}
+
+        with task_heartbeat_ticker(task.id, interval_seconds=20):
+            return await cache_missing_library_content_once(
+                db,
+                limit=safe_limit,
+                notify_always=effective_notify,
+                background=effective_background,
+                status_task=task,
+            )
+    except Exception as exc:
+        db.rollback()
+        task = db.query(SunoTask).filter(SunoTask.id == int(task_id)).first()
+        if task:
+            mark_task_finished(
+                db,
+                task,
+                status="FAILED",
+                message=f"Library-Inhaltsprüfung fehlgeschlagen: {exc}",
+                result_payload={"ok": False, "error": str(exc)},
+                notify=True,
+            )
+        LOGGER.exception("Library-Inhaltsprüfung für Task %s fehlgeschlagen.", task_id)
+        return {"ok": False, "error": str(exc)}
+    finally:
+        db.close()

@@ -1,0 +1,1222 @@
+diff -ruN a/.env.example b/.env.example
+--- a/.env.example	2026-07-13 08:26:37.979771678 +0000
++++ b/.env.example	2026-07-13 08:26:37.969905702 +0000
+@@ -335,7 +335,7 @@
+ 
+ 
+ # -----------------------------------------------------------------------------
+-# Replicate cover generation
++# Replicate cover generation and optional Demucs stem separation
+ # -----------------------------------------------------------------------------
+ 
+ # Backend: API token for Replicate image generation.
+@@ -346,6 +346,20 @@
+ # Frontend/Admin: Affects the quality/content of AI cover prompts generated from song context.
+ REPLICATE_COVER_TEXT_MODEL=ibm-granite/granite-3.3-8b-instruct
+ 
++# Backend: Default stem backend. Keep local_demucs for the existing local workflow.
++# Frontend/Admin: Can be changed between local_demucs and replicate_demucs in Admin.
++STEM_SEPARATION_BACKEND=local_demucs
++
++# Backend: Pinned Replicate Demucs model/version used for optional cloud separation.
++# Frontend/Admin: Displayed read-only in the Stem-Separation settings.
++REPLICATE_DEMUCS_MODEL=cjwbw/demucs:25a173108cff36ef9f80f854c162d01df9e6528be175794b81158fa03836d953
++
++# Backend: Demucs model selected inside the Replicate prediction.
++REPLICATE_DEMUCS_MODEL_NAME=htdemucs
++
++# Backend: Maximum local input size uploaded through the Replicate Python client.
++REPLICATE_DEMUCS_MAX_INPUT_MB=100
++
+ 
+ # -----------------------------------------------------------------------------
+ # Local audio AI analysis
+diff -ruN a/app/config.py b/app/config.py
+--- a/app/config.py	2026-07-13 08:26:38.035381901 +0000
++++ b/app/config.py	2026-07-13 08:26:38.027167146 +0000
+@@ -143,9 +143,15 @@
+     groq_base_url: str = "https://api.groq.com/openai/v1"
+     voxtral_base_url: str = "https://api.mistral.ai/v1"
+ 
+-    # Replicate KI-Cover-Generator
++    # Replicate KI-Cover-Generator und optionale cloudbasierte Demucs-Stem-Separation.
++    # Der Standardpfad bleibt lokales Demucs; Replicate wird nur nach expliziter
++    # Auswahl in den Admin-Einstellungen verwendet.
+     replicate_api_token: str = Field(default="", repr=False)
+     replicate_cover_text_model: str = "ibm-granite/granite-3.3-8b-instruct"
++    stem_separation_backend: str = "local_demucs"
++    replicate_demucs_model: str = "cjwbw/demucs:25a173108cff36ef9f80f854c162d01df9e6528be175794b81158fa03836d953"
++    replicate_demucs_model_name: str = "htdemucs"
++    replicate_demucs_max_input_mb: int = 100
+ 
+     # Lokale Audio-KI-Analyse:
+     # Speichert Reports isoliert unter storage/analysis und im AudioAsset.metadata_json.
+diff -ruN a/app/routers/admin.py b/app/routers/admin.py
+--- a/app/routers/admin.py	2026-07-13 08:26:38.142463648 +0000
++++ b/app/routers/admin.py	2026-07-13 08:26:38.134163594 +0000
+@@ -36,6 +36,11 @@
+     list_library_search_index,
+     update_library_search_index,
+ )
++from app.services.stem_separation_service import (
++    ALLOWED_STEM_BACKENDS,
++    load_stem_separation_settings,
++    parse_stem_backend,
++)
+ from app.utils.time_utils import utc_now_naive
+ 
+ router = APIRouter(prefix="/api/admin", tags=["admin"])
+@@ -96,6 +101,7 @@
+             "library_ai_tagging_enabled": False,
+             "library_ai_tagging_profile_id": None,
+             "library_ai_tagging_max_tags_per_asset": 5,
++            "stem_separation_backend": settings.stem_separation_backend,
+         },
+         description="Admin-Konfiguration für KI-Canvas-Chat und 1-Click-SRT",
+     )
+@@ -121,6 +127,7 @@
+     transcription_language = str(value.get("transcription_language") or settings.transcript_language_default or "de").strip().lower()
+     if transcription_language not in {"auto", "de", "en"}:
+         transcription_language = "auto"
++    stem_settings = load_stem_separation_settings(db)
+ 
+     return {
+         "default_provider": provider,
+@@ -161,6 +168,16 @@
+         "library_ai_tagging_enabled": bool(value.get("library_ai_tagging_enabled", False)),
+         "library_ai_tagging_profile_id": value.get("library_ai_tagging_profile_id"),
+         "library_ai_tagging_max_tags_per_asset": _bounded_int(value.get("library_ai_tagging_max_tags_per_asset"), 5, 2, 8),
++        "stem_separation_backend": stem_settings.backend,
++        "stem_separation_backends": list(ALLOWED_STEM_BACKENDS),
++        "stem_separation_runtime": {
++            "local_demucs": {"configured": stem_settings.local_demucs_available},
++            "replicate_demucs": {
++                "configured": stem_settings.replicate_available,
++                "token_configured": stem_settings.replicate_token_configured,
++            },
++        },
++        "replicate_demucs_model": stem_settings.replicate_model,
+         "transcription_backends": settings.transcript_backends,
+         "transcription_languages": ["auto", "de", "en"],
+         "transcription_runtime": {
+@@ -226,6 +243,13 @@
+     transcription_language = str(payload.transcription_language or settings.transcript_language_default or "de").strip().lower()
+     if transcription_language not in {"auto", "de", "en"}:
+         raise HTTPException(status_code=400, detail="Transkriptionssprache ist nicht freigegeben.")
++    try:
++        stem_separation_backend = parse_stem_backend(payload.stem_separation_backend)
++    except ValueError as exc:
++        raise HTTPException(status_code=400, detail="Stem-Separation-Backend ist nicht freigegeben.") from exc
++    stem_runtime = load_stem_separation_settings(db)
++    if stem_separation_backend == "replicate_demucs" and not stem_runtime.replicate_available:
++        raise HTTPException(status_code=400, detail="Replicate Demucs ist nicht verfügbar. Prüfe REPLICATE_API_TOKEN und das Python-Paket 'replicate'.")
+ 
+     row.value = {
+         "default_provider": provider,
+@@ -257,6 +281,7 @@
+         "library_ai_tagging_enabled": bool(payload.library_ai_tagging_enabled),
+         "library_ai_tagging_profile_id": tagging_profile_id,
+         "library_ai_tagging_max_tags_per_asset": _bounded_int(payload.library_ai_tagging_max_tags_per_asset, 5, 2, 8),
++        "stem_separation_backend": stem_separation_backend,
+     }
+     row.updated_at = utc_now_naive()
+     db.commit()
+diff -ruN a/app/routers/audio_assets.py b/app/routers/audio_assets.py
+--- a/app/routers/audio_assets.py	2026-07-13 08:26:38.209508208 +0000
++++ b/app/routers/audio_assets.py	2026-07-13 08:26:38.199887295 +0000
+@@ -6,7 +6,6 @@
+ from typing import Any
+ from zipfile import ZIP_DEFLATED, ZipFile
+ import hashlib
+-import importlib.util
+ import asyncio
+ import json
+ import mimetypes
+@@ -49,6 +48,16 @@
+ )
+ from app.services.library_search_index_service import active_library_tagging_tasks_by_asset
+ from app.services.background_task_runner import run_detached_process
++from app.services.stem_separation_service import (
++    LOCAL_DEMUCS_BACKEND,
++    REPLICATE_DEMUCS_BACKEND,
++    ReplicateDemucsError,
++    load_stem_separation_settings,
++    normalize_stem_backend,
++    parse_stem_backend,
++    run_replicate_demucs,
++    stem_backend_label,
++)
+ from app.services.task_lifecycle_service import (
+     append_task_debug_event,
+     append_task_step_log,
+@@ -98,8 +107,13 @@
+     alignment_engine: str | None = None
+ 
+ 
++class GenerateStemsRequest(BaseModel):
++    backend: str | None = None
++
++
+ class BulkGenerateStemsRequest(BaseModel):
+     ids: list[int] = Field(default_factory=list, min_length=1, max_length=250)
++    backend: str | None = None
+ 
+ 
+ class AudioAiAnalysisRequest(BaseModel):
+@@ -288,6 +302,10 @@
+         marker = f"/{root.name}/"
+         if marker in raw:
+             candidates.append(root / raw.rsplit(marker, 1)[-1])
++        portable_prefix = f"{root.name}/"
++        normalized_raw = raw.replace("\\", "/").lstrip("./")
++        if normalized_raw.startswith(portable_prefix):
++            candidates.append(root / normalized_raw[len(portable_prefix):])
+     for item in candidates:
+         try:
+             resolved = item.expanduser().resolve()
+@@ -546,6 +564,10 @@
+         "exists": bool(result_files),
+         "status": stems.get("status") or ("completed" if result_files else "missing"),
+         "backend": stems.get("backend"),
++        "stem_separation_backend": stems.get("stem_separation_backend"),
++        "provider": stems.get("provider"),
++        "model": stems.get("model"),
++        "demucs_model": stems.get("demucs_model"),
+         "bpm": stems.get("bpm"),
+         "generated_at": stems.get("generated_at"),
+         "error_message": stems.get("error_message"),
+@@ -587,7 +609,7 @@
+         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+             digest.update(chunk)
+     return {
+-        "local_path": to_portable_path(target, storage_root=get_settings().cover_storage_path),
++        "local_path": to_portable_path(target, storage_root=_stem_storage_path()),
+         "filename": target.name,
+         "content_type": "audio/wav",
+         "file_size_bytes": target.stat().st_size,
+@@ -870,8 +892,11 @@
+         raise HTTPException(status_code=500, detail=f"WAV-Konvertierung fehlgeschlagen: {exc}") from exc
+ 
+ 
+-def _create_stem_status_task(db: Session, asset: AudioAsset) -> SunoTask:
++def _create_stem_status_task(db: Session, asset: AudioAsset, *, backend: str | None = None) -> SunoTask:
+     title = _asset_title(asset, f"AudioAsset {asset.id}")
++    selected_backend = normalize_stem_backend(backend or load_stem_separation_settings(db).backend)
++    backend_payload = "replicate_demucs" if selected_backend == REPLICATE_DEMUCS_BACKEND else "demucs"
++    backend_label = stem_backend_label(selected_backend)
+     task = SunoTask(
+         task_id=None,
+         task_type="generate_stems",
+@@ -879,7 +904,8 @@
+         request_payload={
+             "audio_asset_id": asset.id,
+             "title": title,
+-            "backend": "demucs",
++            "backend": backend_payload,
++            "stem_separation_backend": selected_backend,
+             "local_task": True,
+         },
+         response_payload=None,
+@@ -894,7 +920,7 @@
+         task,
+         event="stem_generation_started",
+         detail="Stem-Erzeugung wurde gestartet.",
+-        data={"audio_asset_id": asset.id, "title": title, "backend": "demucs"},
++        data={"audio_asset_id": asset.id, "title": title, "backend": backend_payload, "stem_separation_backend": selected_backend},
+         commit=False,
+     )
+     append_task_step_log(
+@@ -902,14 +928,14 @@
+         task,
+         phase="started",
+         phase_label="Stem-Erzeugung gestartet",
+-        detail="Vocals und Instrumental werden lokal mit Demucs erzeugt.",
+-        data={"audio_asset_id": asset.id},
++        detail=f"Vocals und Instrumental werden mit {backend_label} erzeugt.",
++        data={"audio_asset_id": asset.id, "stem_separation_backend": selected_backend},
+         commit=False,
+     )
+     db.add(StatusNotification(
+         event_type="stem_generation_started",
+         title=f"Stem-Erzeugung läuft: {title}",
+-        message="Vocals und Instrumental werden lokal mit Demucs erzeugt.",
++        message=f"Vocals und Instrumental werden mit {backend_label} erzeugt.",
+         severity="info",
+         status="unread",
+         task_local_id=task.id,
+@@ -917,7 +943,7 @@
+         content_type="audio",
+         content_id=asset.id,
+         target_tab="status",
+-        target_payload={"audio_asset_id": asset.id, "task_local_id": task.id, "task_type": "generate_stems", "status": "RUNNING"},
++        target_payload={"audio_asset_id": asset.id, "task_local_id": task.id, "task_type": "generate_stems", "status": "RUNNING", "stem_separation_backend": selected_backend},
+     ))
+     db.commit()
+     return task
+@@ -1005,20 +1031,34 @@
+     return buffer.getvalue(), f"{safe_title}_{bpm}bpm_stems_asset_{asset.id}.zip"
+ 
+ 
+-def generate_stems_for_asset(db: Session, audio_asset_id: int, status_task: SunoTask | None = None) -> dict[str, Any]:
++def generate_stems_for_asset(
++    db: Session,
++    audio_asset_id: int,
++    status_task: SunoTask | None = None,
++    *,
++    backend: str | None = None,
++) -> dict[str, Any]:
+     asset = db.query(AudioAsset).filter(AudioAsset.id == audio_asset_id, AudioAsset.is_deleted.is_(False)).first()
+     if not asset:
+         raise HTTPException(status_code=404, detail="AudioAsset wurde nicht gefunden.")
+ 
+     stem_task: SunoTask | None = None
+     try:
++        selected_backend = parse_stem_backend(backend, default=load_stem_separation_settings(db).backend)
++    except ValueError as exc:
++        raise HTTPException(status_code=422, detail=str(exc)) from exc
++    stored_backend = "replicate_demucs" if selected_backend == REPLICATE_DEMUCS_BACKEND else "demucs"
++    stem_settings = load_stem_separation_settings(db)
++    try:
+         audio_path = _resolve_asset_audio_file(asset)
+         if not audio_path:
+             raise HTTPException(status_code=422, detail="Keine lokale Audiodatei für Stem-Erzeugung gefunden.")
+-        if importlib.util.find_spec("demucs") is None:
++        if selected_backend == LOCAL_DEMUCS_BACKEND and not stem_settings.local_demucs_available:
+             raise HTTPException(status_code=422, detail="Demucs ist nicht im FastAPI-Python-Environment installiert. Installiere es z. B. mit: pip install demucs")
++        if selected_backend == REPLICATE_DEMUCS_BACKEND and not stem_settings.replicate_available:
++            raise HTTPException(status_code=422, detail="Replicate Demucs ist nicht verfügbar. Prüfe REPLICATE_API_TOKEN und das Python-Paket 'replicate'.")
+ 
+-        stem_task = status_task or _create_stem_status_task(db, asset)
++        stem_task = status_task or _create_stem_status_task(db, asset, backend=selected_backend)
+         bpm = _extract_bpm_from_asset(asset)
+         bpm_part = f"{bpm}bpm" if bpm else "unknownbpm"
+         safe_title = _safe_zip_part(asset.display_title or asset.title or audio_path.stem or f"audio_{asset.id}", f"audio_{asset.id}")
+@@ -1029,43 +1069,67 @@
+         stems_meta = metadata.get("stems") if isinstance(metadata.get("stems"), dict) else {}
+         stems_meta.update({
+             "status": "running",
+-            "backend": "demucs",
++            "backend": stored_backend,
++            "stem_separation_backend": selected_backend,
+             "started_at": utc_now_naive().isoformat(),
+             "bpm": bpm,
+             "task_local_id": stem_task.id,
+         })
++        if selected_backend == REPLICATE_DEMUCS_BACKEND:
++            stems_meta.update({
++                "provider": "replicate",
++                "model": stem_settings.replicate_model,
++                "demucs_model": stem_settings.replicate_model_name,
++            })
+         metadata["stems"] = stems_meta
+         asset.metadata_json = metadata
+         db.commit()
+ 
++        replicate_details: dict[str, Any] = {}
+         with tempfile.TemporaryDirectory(prefix=f"songstudio_stems_{asset.id}_") as tmp:
+             out_root = Path(tmp).resolve()
+-            cmd = [
+-                sys.executable,
+-                "-m",
+-                "demucs",
+-                "--two-stems",
+-                "vocals",
+-                "-n",
+-                "htdemucs",
+-                "--out",
+-                str(out_root),
+-                str(audio_path),
+-            ]
+-            completed = subprocess.run(cmd, capture_output=True, text=True, timeout=60 * 60)
+-            if completed.returncode != 0:
+-                detail = (completed.stderr or completed.stdout or "Demucs fehlgeschlagen.").strip()[-1200:]
+-                raise RuntimeError(detail)
+-            vocals_src, instrumental_src = _find_demucs_output(out_root, audio_path.stem, audio_path.name)
+-            if not vocals_src or not instrumental_src:
+-                raise RuntimeError("Demucs hat keine vocals.wav und no_vocals.wav erzeugt.")
++            if selected_backend == REPLICATE_DEMUCS_BACKEND:
++                try:
++                    replicate_details = run_replicate_demucs(
++                        audio_path,
++                        out_root,
++                        token=str(get_settings().replicate_api_token or ""),
++                        model_id=stem_settings.replicate_model,
++                        model_name=stem_settings.replicate_model_name,
++                        max_input_mb=stem_settings.replicate_max_input_mb,
++                    )
++                except ReplicateDemucsError as exc:
++                    raise HTTPException(status_code=502, detail=str(exc)) from exc
++                vocals_src = Path(replicate_details["vocals_path"])
++                instrumental_src = Path(replicate_details["instrumental_path"])
++            else:
++                cmd = [
++                    sys.executable,
++                    "-m",
++                    "demucs",
++                    "--two-stems",
++                    "vocals",
++                    "-n",
++                    "htdemucs",
++                    "--out",
++                    str(out_root),
++                    str(audio_path),
++                ]
++                completed = subprocess.run(cmd, capture_output=True, text=True, timeout=60 * 60)
++                if completed.returncode != 0:
++                    detail = (completed.stderr or completed.stdout or "Demucs fehlgeschlagen.").strip()[-1200:]
++                    raise RuntimeError(detail)
++                vocals_src, instrumental_src = _find_demucs_output(out_root, audio_path.stem, audio_path.name)
++                if not vocals_src or not instrumental_src:
++                    raise RuntimeError("Demucs hat keine vocals.wav und no_vocals.wav erzeugt.")
++
+             vocals_info = _copy_stem_file(vocals_src, target_dir / f"{safe_title}_{bpm_part}_vocals.wav")
+             instrumental_info = _copy_stem_file(instrumental_src, target_dir / f"{safe_title}_{bpm_part}_instrumental.wav")
+ 
+-        metadata = _safe_metadata(asset.metadata_json)
+-        metadata["stems"] = {
++        completed_meta: dict[str, Any] = {
+             "status": "completed",
+-            "backend": "demucs",
++            "backend": stored_backend,
++            "stem_separation_backend": selected_backend,
+             "mode": "two_stems_vocals",
+             "bpm": bpm,
+             "generated_at": utc_now_naive().isoformat(),
+@@ -1076,6 +1140,15 @@
+                 "instrumental": instrumental_info,
+             },
+         }
++        if selected_backend == REPLICATE_DEMUCS_BACKEND:
++            completed_meta.update({
++                "provider": "replicate",
++                "model": replicate_details.get("model") or stem_settings.replicate_model,
++                "demucs_model": replicate_details.get("demucs_model") or stem_settings.replicate_model_name,
++            })
++
++        metadata = _safe_metadata(asset.metadata_json)
++        metadata["stems"] = completed_meta
+         asset.metadata_json = metadata
+         db.commit()
+         db.refresh(asset)
+@@ -1086,7 +1159,14 @@
+         metadata = _safe_metadata(asset.metadata_json) if asset else {}
+         if asset:
+             stems_meta = metadata.get("stems") if isinstance(metadata.get("stems"), dict) else {}
+-            stems_meta.update({"status": "failed", "error_message": str(exc.detail), "updated_at": utc_now_naive().isoformat(), "task_local_id": stem_task.id if stem_task else None})
++            stems_meta.update({
++                "status": "failed",
++                "backend": stored_backend,
++                "stem_separation_backend": selected_backend,
++                "error_message": str(exc.detail),
++                "updated_at": utc_now_naive().isoformat(),
++                "task_local_id": stem_task.id if stem_task else None,
++            })
+             metadata["stems"] = stems_meta
+             asset.metadata_json = metadata
+             db.commit()
+@@ -1096,13 +1176,21 @@
+         if asset:
+             metadata = _safe_metadata(asset.metadata_json)
+             stems_meta = metadata.get("stems") if isinstance(metadata.get("stems"), dict) else {}
+-            stems_meta.update({"status": "failed", "error_message": str(exc), "updated_at": utc_now_naive().isoformat(), "task_local_id": stem_task.id if stem_task else None})
++            stems_meta.update({
++                "status": "failed",
++                "backend": stored_backend,
++                "stem_separation_backend": selected_backend,
++                "error_message": str(exc),
++                "updated_at": utc_now_naive().isoformat(),
++                "task_local_id": stem_task.id if stem_task else None,
++            })
+             metadata["stems"] = stems_meta
+             asset.metadata_json = metadata
+             db.commit()
+             _finish_stem_status_task(db, stem_task, asset, "FAILED", str(exc))
+         raise HTTPException(status_code=500, detail=f"Stem-Erzeugung fehlgeschlagen: {exc}") from exc
+ 
++
+ def _latest_completed_transcript(db: Session, asset_id: int) -> AudioTranscript | None:
+     return (
+         db.query(AudioTranscript)
+@@ -1699,7 +1787,7 @@
+                 if not local_path or not local_path.exists() or not local_path.is_file():
+                     skipped += 1
+                     continue
+-                generate_stems_for_asset(db, asset_id)
++                generate_stems_for_asset(db, asset_id, backend=payload.get("backend"))
+                 success += 1
+             except Exception as exc:
+                 failed += 1
+@@ -2490,7 +2578,7 @@
+                 "total": 1,
+                 "audio_asset_id": audio_asset_id,
+                 "phase": "vocal_stems_before_srt",
+-                "detail": "Vocal-Stems werden vor der SRT-Transkription erzeugt (Demucs).",
++                "detail": "Vocal-Stems werden vor der SRT-Transkription mit dem konfigurierten Demucs-Backend erzeugt.",
+             },
+         )
+     generate_stems_for_asset(db, audio_asset_id)
+@@ -2498,14 +2586,14 @@
+     return result
+ 
+ 
+-def _run_single_stems_generation_background(task_id: int, audio_asset_id: int) -> None:
++def _run_single_stems_generation_background(task_id: int, audio_asset_id: int, backend: str | None = None) -> None:
+     db = SessionLocal()
+     try:
+         task = db.query(SunoTask).filter(SunoTask.id == task_id).first()
+         heartbeat_task(db, task_id, progress={"current": 1, "total": 1, "audio_asset_id": audio_asset_id})
+         if is_cancel_requested(db, task_id):
+             raise RuntimeError("Stem-Erzeugung wurde vor dem Start abgebrochen.")
+-        generate_stems_for_asset(db, audio_asset_id, status_task=task)
++        generate_stems_for_asset(db, audio_asset_id, status_task=task, backend=backend)
+     except Exception:
+         db.rollback()
+         raise
+@@ -2618,19 +2706,34 @@
+ @router.post("/bulk/stems/generate")
+ def bulk_generate_stems(payload: BulkGenerateStemsRequest, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+     asset_ids = _dedupe_positive_ids(payload.ids)
++    stem_settings = load_stem_separation_settings(db)
++    try:
++        selected_backend = parse_stem_backend(payload.backend, default=stem_settings.backend)
++    except ValueError as exc:
++        raise HTTPException(status_code=422, detail=str(exc)) from exc
++    if selected_backend == REPLICATE_DEMUCS_BACKEND and not stem_settings.replicate_available:
++        raise HTTPException(status_code=422, detail="Replicate Demucs ist nicht verfügbar. Prüfe REPLICATE_API_TOKEN und das Python-Paket 'replicate'.")
++    backend_label = stem_backend_label(selected_backend)
+     task = _create_bulk_status_task(
+         db,
+         task_type="bulk_generate_stems",
+         title="Stem-Sammellauf gestartet",
+-        message=f"Stem-Erzeugung für {len(asset_ids)} Varianten läuft im Hintergrund.",
++        message=f"Stem-Erzeugung für {len(asset_ids)} Varianten mit {backend_label} läuft im Hintergrund.",
+         asset_ids=asset_ids,
++        request_payload={"stem_separation_backend": selected_backend},
++    )
++    run_detached_process(
++        f"bulk-stems-{task.id}",
++        _run_bulk_stems_generation_background,
++        task.id,
++        {"ids": asset_ids, "backend": selected_backend},
+     )
+-    run_detached_process(f"bulk-stems-{task.id}", _run_bulk_stems_generation_background, task.id, {"ids": asset_ids})
+     return {
+         "task_local_id": task.id,
+         "task_type": "bulk_generate_stems",
+         "status": "RUNNING",
+         "count": len(asset_ids),
++        "stem_separation_backend": selected_backend,
+         "message": "Stem-Sammellauf wurde gestartet und läuft im Hintergrund.",
+     }
+ 
+@@ -2711,14 +2814,36 @@
+ 
+ 
+ @router.post("/{audio_asset_id}/stems/generate")
+-def generate_stems(audio_asset_id: int, db: Session = Depends(get_db)):
++def generate_stems(audio_asset_id: int, payload: GenerateStemsRequest | None = None, db: Session = Depends(get_db)):
+     asset = db.query(AudioAsset).filter(AudioAsset.id == audio_asset_id, AudioAsset.is_deleted.is_(False)).first()
+     if not asset:
+         raise HTTPException(status_code=404, detail="AudioAsset wurde nicht gefunden.")
+-    task = _create_stem_status_task(db, asset)
+-    mark_task_started(db, task, payload={"audio_asset_id": audio_asset_id})
+-    run_detached_process(f"stems-asset-{audio_asset_id}-{task.id}", _run_single_stems_generation_background, task.id, audio_asset_id)
+-    return {"ok": True, "queued": True, "task_local_id": task.id, "task_type": "generate_stems", "status": "RUNNING", "audio_asset_id": audio_asset_id, "message": "Stem-Erzeugung wurde gestartet und läuft im Hintergrund."}
++    stem_settings = load_stem_separation_settings(db)
++    try:
++        selected_backend = parse_stem_backend(payload.backend if payload else None, default=stem_settings.backend)
++    except ValueError as exc:
++        raise HTTPException(status_code=422, detail=str(exc)) from exc
++    if selected_backend == REPLICATE_DEMUCS_BACKEND and not stem_settings.replicate_available:
++        raise HTTPException(status_code=422, detail="Replicate Demucs ist nicht verfügbar. Prüfe REPLICATE_API_TOKEN und das Python-Paket 'replicate'.")
++    task = _create_stem_status_task(db, asset, backend=selected_backend)
++    mark_task_started(db, task, payload={"audio_asset_id": audio_asset_id, "stem_separation_backend": selected_backend})
++    run_detached_process(
++        f"stems-asset-{audio_asset_id}-{task.id}",
++        _run_single_stems_generation_background,
++        task.id,
++        audio_asset_id,
++        selected_backend,
++    )
++    return {
++        "ok": True,
++        "queued": True,
++        "task_local_id": task.id,
++        "task_type": "generate_stems",
++        "status": "RUNNING",
++        "audio_asset_id": audio_asset_id,
++        "stem_separation_backend": selected_backend,
++        "message": "Stem-Erzeugung wurde gestartet und läuft im Hintergrund.",
++    }
+ 
+ 
+ @router.get("/{audio_asset_id}/analysis")
+diff -ruN a/app/schemas.py b/app/schemas.py
+--- a/app/schemas.py	2026-07-13 08:26:38.087710775 +0000
++++ b/app/schemas.py	2026-07-13 08:26:38.079241056 +0000
+@@ -1843,6 +1843,10 @@
+     library_ai_tagging_enabled: bool = False
+     library_ai_tagging_profile_id: int | None = None
+     library_ai_tagging_max_tags_per_asset: int = Field(default=5, ge=2, le=8)
++    stem_separation_backend: str = "local_demucs"
++    stem_separation_backends: list[str] = Field(default_factory=lambda: ["local_demucs", "replicate_demucs"])
++    stem_separation_runtime: dict[str, Any] = Field(default_factory=dict)
++    replicate_demucs_model: str = ""
+     transcription_backends: list[str] = Field(default_factory=lambda: ["groq", "whisperx", "openai_whisper_api", "voxtral"])
+     transcription_languages: list[str] = Field(default_factory=lambda: ["auto", "de", "en"])
+     transcription_runtime: dict[str, Any] = Field(default_factory=dict)
+@@ -1881,6 +1885,7 @@
+     library_ai_tagging_enabled: bool = False
+     library_ai_tagging_profile_id: int | None = None
+     library_ai_tagging_max_tags_per_asset: int = Field(default=5, ge=2, le=8)
++    stem_separation_backend: str = "local_demucs"
+ 
+ 
+ class LibrarySearchIndexUpdate(BaseModel):
+diff -ruN a/app/services/stem_separation_service.py b/app/services/stem_separation_service.py
+--- a/app/services/stem_separation_service.py	1970-01-01 00:00:00.000000000 +0000
++++ b/app/services/stem_separation_service.py	2026-07-13 08:26:38.266371451 +0000
+@@ -0,0 +1,209 @@
++from __future__ import annotations
++
++from dataclasses import dataclass
++from pathlib import Path
++from typing import Any
++import importlib.util
++import urllib.request
++
++from sqlalchemy.orm import Session
++
++from app.config import get_settings
++from app.models import AppSetting
++
++AI_SETTINGS_KEY = "ai_chat_settings"
++LOCAL_DEMUCS_BACKEND = "local_demucs"
++REPLICATE_DEMUCS_BACKEND = "replicate_demucs"
++ALLOWED_STEM_BACKENDS = (LOCAL_DEMUCS_BACKEND, REPLICATE_DEMUCS_BACKEND)
++
++
++class ReplicateDemucsError(RuntimeError):
++    """Klarer Laufzeitfehler für die optionale Replicate-Demucs-Ausführung."""
++
++
++@dataclass(frozen=True)
++class StemSeparationSettings:
++    backend: str
++    replicate_model: str
++    replicate_model_name: str
++    replicate_max_input_mb: int
++    local_demucs_available: bool
++    replicate_available: bool
++    replicate_token_configured: bool
++
++
++_STEM_BACKEND_ALIASES = {
++    "demucs": LOCAL_DEMUCS_BACKEND,
++    "local": LOCAL_DEMUCS_BACKEND,
++    "local_demucs": LOCAL_DEMUCS_BACKEND,
++    "replicate": REPLICATE_DEMUCS_BACKEND,
++    "replicate_demucs": REPLICATE_DEMUCS_BACKEND,
++}
++
++
++def normalize_stem_backend(value: Any) -> str:
++    normalized = str(value or "").strip().lower().replace("-", "_")
++    return _STEM_BACKEND_ALIASES.get(normalized, LOCAL_DEMUCS_BACKEND)
++
++
++def parse_stem_backend(value: Any, *, default: Any = LOCAL_DEMUCS_BACKEND) -> str:
++    normalized = str(value or "").strip().lower().replace("-", "_")
++    if not normalized:
++        return normalize_stem_backend(default)
++    if normalized not in _STEM_BACKEND_ALIASES:
++        raise ValueError(f"Unbekanntes Stem-Separation-Backend: {value}")
++    return _STEM_BACKEND_ALIASES[normalized]
++
++
++def load_stem_separation_settings(db: Session | None = None) -> StemSeparationSettings:
++    settings = get_settings()
++    configured_backend = getattr(settings, "stem_separation_backend", LOCAL_DEMUCS_BACKEND)
++    if db is not None:
++        row = db.query(AppSetting).filter(AppSetting.key == AI_SETTINGS_KEY).first()
++        value = row.value if row and isinstance(row.value, dict) else {}
++        configured_backend = value.get("stem_separation_backend") or configured_backend
++
++    token = str(getattr(settings, "replicate_api_token", "") or "").strip()
++    replicate_package_available = importlib.util.find_spec("replicate") is not None
++    return StemSeparationSettings(
++        backend=normalize_stem_backend(configured_backend),
++        replicate_model=str(
++            getattr(
++                settings,
++                "replicate_demucs_model",
++                "cjwbw/demucs:25a173108cff36ef9f80f854c162d01df9e6528be175794b81158fa03836d953",
++            )
++            or ""
++        ).strip(),
++        replicate_model_name=str(getattr(settings, "replicate_demucs_model_name", "htdemucs") or "htdemucs").strip(),
++        replicate_max_input_mb=max(1, int(getattr(settings, "replicate_demucs_max_input_mb", 100) or 100)),
++        local_demucs_available=importlib.util.find_spec("demucs") is not None,
++        replicate_available=bool(token and replicate_package_available),
++        replicate_token_configured=bool(token),
++    )
++
++
++def stem_backend_label(backend: str) -> str:
++    return "Replicate Demucs" if normalize_stem_backend(backend) == REPLICATE_DEMUCS_BACKEND else "lokales Demucs"
++
++
++def _first_output_value(output: Any, keys: tuple[str, ...]) -> Any:
++    if isinstance(output, dict):
++        for key in keys:
++            value = output.get(key)
++            if value is not None:
++                return value
++    return None
++
++
++def _source_url(item: Any) -> str | None:
++    if isinstance(item, str) and item.startswith("https://"):
++        return item
++    for attribute in ("url", "uri", "source_url"):
++        value = getattr(item, attribute, None)
++        if value and str(value).startswith("https://"):
++            return str(value)
++    return None
++
++
++def _save_output_file(item: Any, target: Path) -> str | None:
++    if item is None:
++        raise ReplicateDemucsError("Replicate hat keine verwertbare Stem-Datei geliefert.")
++
++    target.parent.mkdir(parents=True, exist_ok=True)
++    temporary = target.with_suffix(f"{target.suffix}.part")
++    temporary.unlink(missing_ok=True)
++    source_url = _source_url(item)
++
++    try:
++        if hasattr(item, "read"):
++            data = item.read()
++            if not isinstance(data, (bytes, bytearray)):
++                raise ReplicateDemucsError("Replicate FileOutput enthält keine Binärdaten.")
++            temporary.write_bytes(bytes(data))
++        elif source_url:
++            with urllib.request.urlopen(source_url, timeout=120) as response, temporary.open("wb") as output_handle:
++                while True:
++                    chunk = response.read(1024 * 1024)
++                    if not chunk:
++                        break
++                    output_handle.write(chunk)
++        else:
++            raise ReplicateDemucsError("Replicate-Ausgabe enthält weder FileOutput noch eine HTTPS-URL.")
++
++        if not temporary.is_file() or temporary.stat().st_size <= 0:
++            raise ReplicateDemucsError("Replicate hat eine leere Stem-Datei geliefert.")
++        temporary.replace(target)
++        return source_url
++    except Exception:
++        temporary.unlink(missing_ok=True)
++        raise
++
++
++def run_replicate_demucs(
++    audio_path: Path,
++    output_dir: Path,
++    *,
++    token: str,
++    model_id: str,
++    model_name: str = "htdemucs",
++    max_input_mb: int = 100,
++) -> dict[str, Any]:
++    audio_path = Path(audio_path).expanduser().resolve()
++    if not audio_path.is_file():
++        raise ReplicateDemucsError("Die lokale Audiodatei für Replicate wurde nicht gefunden.")
++    if not token.strip():
++        raise ReplicateDemucsError("REPLICATE_API_TOKEN ist nicht konfiguriert.")
++    if not model_id.strip():
++        raise ReplicateDemucsError("REPLICATE_DEMUCS_MODEL ist nicht konfiguriert.")
++
++    input_size = audio_path.stat().st_size
++    max_bytes = max(1, int(max_input_mb)) * 1024 * 1024
++    if input_size > max_bytes:
++        raise ReplicateDemucsError(
++            f"Die Audiodatei ist mit {input_size / 1024 / 1024:.1f} MB größer als das konfigurierte Replicate-Limit von {max_input_mb} MB."
++        )
++
++    try:
++        import replicate
++    except ImportError as exc:  # pragma: no cover - durch Runtime-Check abgesichert
++        raise ReplicateDemucsError("Das Python-Paket 'replicate' ist nicht installiert.") from exc
++
++    output_dir = Path(output_dir).resolve()
++    output_dir.mkdir(parents=True, exist_ok=True)
++    vocals_path = output_dir / "vocals.wav"
++    instrumental_path = output_dir / "instrumental.wav"
++
++    try:
++        client = replicate.Client(api_token=token.strip())
++        with audio_path.open("rb") as audio_handle:
++            output = client.run(
++                model_id.strip(),
++                input={
++                    "audio": audio_handle,
++                    "model": model_name.strip() or "htdemucs",
++                    "stem": "vocals",
++                    "output_format": "wav",
++                },
++            )
++    except Exception as exc:
++        raise ReplicateDemucsError(f"Replicate-Demucs-Aufruf fehlgeschlagen: {exc}") from exc
++
++    vocals_output = _first_output_value(output, ("vocals", "vocal"))
++    instrumental_output = _first_output_value(output, ("other", "no_vocals", "instrumental", "accompaniment"))
++    if vocals_output is None or instrumental_output is None:
++        keys = ", ".join(sorted(str(key) for key in output.keys())) if isinstance(output, dict) else type(output).__name__
++        raise ReplicateDemucsError(f"Replicate-Ausgabe enthält nicht beide benötigten Stems (Ausgabe: {keys}).")
++
++    vocals_url = _save_output_file(vocals_output, vocals_path)
++    instrumental_url = _save_output_file(instrumental_output, instrumental_path)
++    return {
++        "vocals_path": vocals_path,
++        "instrumental_path": instrumental_path,
++        "model": model_id.strip(),
++        "demucs_model": model_name.strip() or "htdemucs",
++        "source_urls": {
++            "vocals": vocals_url,
++            "instrumental": instrumental_url,
++        },
++    }
+diff -ruN a/frontend-react/src/i18n/de.js b/frontend-react/src/i18n/de.js
+--- a/frontend-react/src/i18n/de.js	2026-07-13 08:26:38.422195056 +0000
++++ b/frontend-react/src/i18n/de.js	2026-07-13 08:26:38.413092526 +0000
+@@ -796,7 +796,7 @@
+     },
+     stems: {
+       title: 'Stem-Dateien',
+-      text: 'Vocals und Instrumental lokal erzeugen und einzeln oder als ZIP herunterladen.',
++      text: 'Vocals und Instrumental mit dem in Admin gewählten Demucs-Backend erzeugen und einzeln oder als ZIP herunterladen.',
+       playerTitle: 'Stem-Player: {{title}}',
+       playback: 'Stem-Wiedergabe',
+       previewText: 'Die normale Wiedergabe wurde pausiert. Spiele Vocals oder Instrumental direkt hier im Modal ab.',
+@@ -808,7 +808,7 @@
+       downloadStem: '{{label}} herunterladen',
+       downloadAllZip: 'Alle Stems als ZIP herunterladen',
+       generating: 'Erzeuge Stems…',
+-      needsDemucs: 'Benötigt lokal installiertes Demucs im FastAPI-Python-Environment.'
++      needsDemucs: 'Verwendet das in Admin konfigurierte Stem-Backend: lokales Demucs oder optional Replicate Demucs.'
+     },
+     srt: {
+       title: 'SRT-Untertitel',
+@@ -2625,6 +2625,7 @@
+         text: 'Diese Einstellungen liegen technisch im selben Einstellungsobjekt, werden aber nicht vollständig durch KI-Profile gesteuert.',
+         hint: 'Die vorhandene Prozesslogik bleibt unverändert; die Gruppierung dient nur der besseren Zuordnung.',
+         srtScope: 'Eigenständige Transkriptions-, Alignment- und SRT-Einstellungen.',
++        stemScope: 'Lokales Demucs oder optional Replicate Demucs.',
+         audioScope: 'Lokale Audioanalyse mit eigener Modell- und Laufzeitkonfiguration.',
+         libraryScope: 'Manuell gestartete KI-Suchbegriffe pro Audio-Variante.',
+         libraryProfileHint: 'Nur diese Funktion verwendet das hier ausgewählte Tagging-Profil.'
+@@ -2648,6 +2649,18 @@
+       fallbackBeforeEnd: 'Fallback vor Ende Sekunden',
+       analysisTimeout: 'Analyse-Timeout Sekunden'
+     },
++    stems: {
++      title: 'Stem-Separation',
++      backend: 'Standard-Backend',
++      local: 'Lokales Demucs',
++      replicate: 'Replicate Demucs',
++      backendHint: 'Die Auswahl gilt für Einzel-, Sammel- und optionale SRT-Vorab-Stem-Erzeugung. Lokales Demucs bleibt der Standard.',
++      replicateModel: 'Replicate-Modell',
++      localRuntime: 'Lokales Demucs installiert',
++      replicateToken: 'Replicate API-Token konfiguriert',
++      replicateRuntime: 'Replicate-Laufzeit bereit',
++      hint: 'Replicate wird nur bei expliziter Auswahl verwendet. Die erzeugten Stems werden sofort im lokalen App-Storage gespeichert.'
++    },
+     audioAi: {
+       title: 'Lokale Audioanalyse',
+       text: 'Steuert die Analyse-Reports in den Library-Songdetails. Alle Artefakte bleiben im App-Storage; Modellcache:',
+diff -ruN a/frontend-react/src/i18n/en.js b/frontend-react/src/i18n/en.js
+--- a/frontend-react/src/i18n/en.js	2026-07-13 08:26:38.470010635 +0000
++++ b/frontend-react/src/i18n/en.js	2026-07-13 08:26:38.461280832 +0000
+@@ -796,7 +796,7 @@
+     },
+     stems: {
+       title: 'Stem files',
+-      text: 'Generate vocals and instrumental locally and download them individually or as ZIP.',
++      text: 'Generate vocals and instrumental with the Demucs backend selected in Admin and download them individually or as ZIP.',
+       playerTitle: 'Stem player: {{title}}',
+       playback: 'Stem playback',
+       previewText: 'Normal playback was paused. Play vocals or instrumental directly in this modal.',
+@@ -808,7 +808,7 @@
+       downloadStem: 'Download {{label}}',
+       downloadAllZip: 'Download all stems as ZIP',
+       generating: 'Generating stems…',
+-      needsDemucs: 'Requires locally installed Demucs in the FastAPI Python environment.'
++      needsDemucs: 'Uses the stem backend configured in Admin: local Demucs or optional Replicate Demucs.'
+     },
+     srt: {
+       title: 'SRT subtitles',
+@@ -2625,6 +2625,7 @@
+         text: 'These settings are technically stored in the same settings object, but are not fully controlled by AI profiles.',
+         hint: 'Existing process logic remains unchanged; the grouping only improves transparency.',
+         srtScope: 'Independent transcription, alignment and SRT settings.',
++        stemScope: 'Local Demucs or optional Replicate Demucs.',
+         audioScope: 'Local audio analysis with its own model and runtime configuration.',
+         libraryScope: 'Manually started AI search terms per audio variant.',
+         libraryProfileHint: 'Only this function uses the tagging profile selected here.'
+@@ -2648,6 +2649,18 @@
+       fallbackBeforeEnd: 'Fallback seconds before end',
+       analysisTimeout: 'Analysis timeout seconds'
+     },
++    stems: {
++      title: 'Stem separation',
++      backend: 'Default backend',
++      local: 'Local Demucs',
++      replicate: 'Replicate Demucs',
++      backendHint: 'The selection applies to single, bulk and optional pre-SRT stem generation. Local Demucs remains the default.',
++      replicateModel: 'Replicate model',
++      localRuntime: 'Local Demucs installed',
++      replicateToken: 'Replicate API token configured',
++      replicateRuntime: 'Replicate runtime ready',
++      hint: 'Replicate is used only after explicit selection. Generated stems are immediately stored in the local app storage.'
++    },
+     audioAi: {
+       title: 'Local audio analysis',
+       text: 'Controls the analysis reports in library song details. All artifacts stay in app storage; model cache:',
+diff -ruN a/frontend-react/src/pages/AdminPage.jsx b/frontend-react/src/pages/AdminPage.jsx
+--- a/frontend-react/src/pages/AdminPage.jsx	2026-07-13 08:26:38.316563944 +0000
++++ b/frontend-react/src/pages/AdminPage.jsx	2026-07-13 08:26:38.308690567 +0000
+@@ -156,7 +156,8 @@
+         audio_ai_model_analysis_top_k: Math.max(5, Math.min(25, Number(next.audio_ai_model_analysis_top_k || 8))),
+         library_ai_tagging_enabled: Boolean(next.library_ai_tagging_enabled),
+         library_ai_tagging_profile_id: next.library_ai_tagging_profile_id ? Number(next.library_ai_tagging_profile_id) : null,
+-        library_ai_tagging_max_tags_per_asset: Math.max(2, Math.min(8, Number(next.library_ai_tagging_max_tags_per_asset || 5)))
++        library_ai_tagging_max_tags_per_asset: Math.max(2, Math.min(8, Number(next.library_ai_tagging_max_tags_per_asset || 5))),
++        stem_separation_backend: next.stem_separation_backend || 'local_demucs'
+       });
+       notify(t('admin.messages.assistantSaved', 'KI-Assistent gespeichert.'), 'success');
+       await load();
+@@ -1106,6 +1107,27 @@
+                 </div>
+               </details>
+ 
++              <details className="assistant-related-details" id="assistant-stem-separation-settings">
++                <summary><Music2 size={17} /> <strong>{t('admin.stems.title', 'Stem-Separation')}</strong><span className="muted">{t('admin.assistant.related.stemScope', 'Lokales Demucs oder optional Replicate Demucs')}</span></summary>
++                <div className="form-grid compact-grid">
++                  <label>{t('admin.stems.backend', 'Standard-Backend')}
++                    <select value={settings.stem_separation_backend || 'local_demucs'} onChange={(event) => setSettings({ ...settings, stem_separation_backend: event.target.value })}>
++                      {(settings.stem_separation_backends || ['local_demucs', 'replicate_demucs']).map((backend) => {
++                        const configured = settings.stem_separation_runtime?.[backend]?.configured;
++                        const label = backend === 'replicate_demucs' ? t('admin.stems.replicate', 'Replicate Demucs') : t('admin.stems.local', 'Lokales Demucs');
++                        return <option key={backend} value={backend} disabled={backend === 'replicate_demucs' && !configured}>{label} · {configured ? t('admin.provider.ready', 'bereit') : t('admin.provider.notConfigured', 'nicht konfiguriert')}</option>;
++                      })}
++                    </select>
++                    <small>{t('admin.stems.backendHint', 'Die Auswahl gilt für Einzel-, Sammel- und optionale SRT-Vorab-Stem-Erzeugung. Lokales Demucs bleibt der Standard.')}</small>
++                  </label>
++                  <label>{t('admin.stems.replicateModel', 'Replicate-Modell')}<input value={settings.replicate_demucs_model || '—'} readOnly /></label>
++                  <label className="check"><input type="checkbox" checked={Boolean(settings.stem_separation_runtime?.local_demucs?.configured)} readOnly /> {t('admin.stems.localRuntime', 'Lokales Demucs installiert')}</label>
++                  <label className="check"><input type="checkbox" checked={Boolean(settings.stem_separation_runtime?.replicate_demucs?.token_configured)} readOnly /> {t('admin.stems.replicateToken', 'Replicate API-Token konfiguriert')}</label>
++                  <label className="check"><input type="checkbox" checked={Boolean(settings.stem_separation_runtime?.replicate_demucs?.configured)} readOnly /> {t('admin.stems.replicateRuntime', 'Replicate-Laufzeit bereit')}</label>
++                  <p className="muted wide">{t('admin.stems.hint', 'Replicate wird nur bei expliziter Auswahl verwendet. Eingabe- und Ausgabedateien werden nach der Erzeugung lokal gespeichert; die temporären Replicate-Dateien sind nicht die dauerhafte Quelle.')}</p>
++                </div>
++              </details>
++
+               <details className="assistant-related-details">
+                 <summary><Cpu size={17} /> <strong>{t('admin.audioAi.title', 'Lokale Audioanalyse')}</strong><span className="muted">{t('admin.assistant.related.audioScope', 'Lokale Heuristiken und optionale Modellanalyse')}</span></summary>
+                 <div className="form-grid compact-grid">
+diff -ruN a/frontend-react/src/pages/LibraryPage.jsx b/frontend-react/src/pages/LibraryPage.jsx
+--- a/frontend-react/src/pages/LibraryPage.jsx	2026-07-13 08:26:38.370845039 +0000
++++ b/frontend-react/src/pages/LibraryPage.jsx	2026-07-13 08:26:38.362724780 +0000
+@@ -25,7 +25,7 @@
+ const wizardCaptureOptions = [
+   { key: 'timestampedLyrics', label: 'Timestamped Lyrics abrufen', description: 'Suno-synchronisierte Lyrics zur Audio-ID speichern.' },
+   { key: 'srt', label: 'SRT erzeugen', description: 'Lyrics-basiertes SRT erzeugen und speichern.' },
+-  { key: 'stems', label: 'Stems erzeugen', description: 'Vocals und Instrumental lokal trennen.' },
++  { key: 'stems', label: 'Stems erzeugen', description: 'Vocals und Instrumental mit dem konfigurierten Demucs-Backend trennen.' },
+   { key: 'waveform', label: 'Waveform neu berechnen', description: 'Wellenformdaten für Player/Timeline aktualisieren.' },
+ ];
+ 
+@@ -2853,7 +2853,7 @@
+               <p className="eyebrow">{t('library.stems.playback', 'Stem-Wiedergabe')}</p>
+               <h3>{pickTitle(asset)}</h3>
+               <p className="muted">{t('library.stems.previewText', 'Die normale Wiedergabe wurde pausiert. Spiele Vocals oder Instrumental direkt hier im Modal ab.')}</p>
+-              <p className="muted">{stems.backend ? `Backend: ${stems.backend}` : t('library.stems.files', 'Stem-Dateien')}{stems.bpm ? ` · ${stems.bpm} BPM` : ''}</p>
++              <p className="muted">{stems.backend ? `Backend: ${stems.backend === 'replicate_demucs' ? 'Replicate Demucs' : 'Lokales Demucs'}` : t('library.stems.files', 'Stem-Dateien')}{stems.bpm ? ` · ${stems.bpm} BPM` : ''}</p>
+             </div>
+           </div>
+           {!playableStems.length && <p className="warning-text">{t('library.stems.noPlayableFiles', 'Für diese Variante sind noch keine abspielbaren Stem-Dateien vorhanden.')}</p>}
+@@ -2884,7 +2884,7 @@
+         <div className="row between align-start">
+           <div>
+             <h4>{t('library.stems.title', 'Stem-Dateien')}</h4>
+-            <p className="muted">{t('library.stems.text', 'Vocals und Instrumental lokal erzeugen und einzeln oder als ZIP herunterladen.')}</p>
++            <p className="muted">{t('library.stems.text', 'Vocals und Instrumental mit dem in Admin gewählten Demucs-Backend erzeugen und einzeln oder als ZIP herunterladen.')}</p>
+           </div>
+           <span className={`status ${stems.available ? 'cached' : String(stems.status || '').toLowerCase() === 'failed' ? 'error' : loading ? 'processing' : ''}`}>{loading ? t('library.status.running', 'läuft') : stems.available ? t('library.status.done', 'fertig') : String(stems.status || '').toLowerCase() === 'failed' ? t('status.stats.error', 'Fehler') : t('library.status.notGenerated', 'nicht erzeugt')}</span>
+         </div>
+@@ -2897,7 +2897,7 @@
+           {stems.files?.vocals && <a className="button" href={api.archive.stemDownloadUrl(asset.id, 'vocals')}><Download size={15} /> Vocals</a>}
+           {stems.files?.instrumental && <a className="button" href={api.archive.stemDownloadUrl(asset.id, 'instrumental')}><Download size={15} /> Instrumental</a>}
+         </div>
+-        <p className="muted">{stems.available ? `Backend: ${stems.backend || 'demucs'}${stems.bpm ? ` · ${stems.bpm} BPM` : ''}` : t('library.stems.needsDemucs', 'Benötigt lokal installiertes Demucs im FastAPI-Python-Environment.')}</p>
++        <p className="muted">{stems.available ? `Backend: ${stems.backend === 'replicate_demucs' ? 'Replicate Demucs' : 'Lokales Demucs'}${stems.bpm ? ` · ${stems.bpm} BPM` : ''}` : t('library.stems.needsDemucs', 'Verwendet das in Admin konfigurierte Stem-Backend: lokales Demucs oder optional Replicate Demucs.')}</p>
+       </div>
+     );
+   }
+diff -ruN a/tests/test_optional_replicate_demucs_backend.py b/tests/test_optional_replicate_demucs_backend.py
+--- a/tests/test_optional_replicate_demucs_backend.py	1970-01-01 00:00:00.000000000 +0000
++++ b/tests/test_optional_replicate_demucs_backend.py	2026-07-13 08:26:38.509967150 +0000
+@@ -0,0 +1,254 @@
++from __future__ import annotations
++
++import sys
++import types
++from pathlib import Path
++
++import pytest
++
++from app.models import AppSetting, AudioAsset
++from app.services.stem_separation_service import (
++    LOCAL_DEMUCS_BACKEND,
++    REPLICATE_DEMUCS_BACKEND,
++    ReplicateDemucsError,
++    StemSeparationSettings,
++    load_stem_separation_settings,
++    parse_stem_backend,
++    run_replicate_demucs,
++)
++
++
++def test_stem_backend_parser_is_backward_compatible_and_strict():
++    assert parse_stem_backend(None) == LOCAL_DEMUCS_BACKEND
++    assert parse_stem_backend("demucs") == LOCAL_DEMUCS_BACKEND
++    assert parse_stem_backend("replicate") == REPLICATE_DEMUCS_BACKEND
++    assert parse_stem_backend("replicate-demucs") == REPLICATE_DEMUCS_BACKEND
++    with pytest.raises(ValueError):
++        parse_stem_backend("unknown-cloud")
++
++
++def test_admin_setting_selects_optional_replicate_backend(monkeypatch, isolated_db_session):
++    import app.services.stem_separation_service as service
++
++    isolated_db_session.add(AppSetting(key="ai_chat_settings", value={"stem_separation_backend": "replicate_demucs"}))
++    isolated_db_session.commit()
++
++    monkeypatch.setattr(service.importlib.util, "find_spec", lambda name: object() if name in {"replicate", "demucs"} else None)
++    monkeypatch.setattr(
++        service,
++        "get_settings",
++        lambda: types.SimpleNamespace(
++            stem_separation_backend=LOCAL_DEMUCS_BACKEND,
++            replicate_api_token="r8_test",
++            replicate_demucs_model="cjwbw/demucs:test-version",
++            replicate_demucs_model_name="htdemucs",
++            replicate_demucs_max_input_mb=100,
++        ),
++    )
++    settings = load_stem_separation_settings(isolated_db_session)
++
++    assert settings.backend == REPLICATE_DEMUCS_BACKEND
++    assert settings.local_demucs_available is True
++    assert settings.replicate_available is True
++    assert settings.replicate_token_configured is True
++    assert settings.replicate_model.startswith("cjwbw/demucs:")
++
++
++def test_replicate_demucs_saves_vocals_and_instrumental(monkeypatch, tmp_path: Path):
++    audio_path = tmp_path / "song.mp3"
++    audio_path.write_bytes(b"ID3" + b"audio" * 64)
++
++    class FakeFileOutput:
++        def __init__(self, payload: bytes, url: str):
++            self.payload = payload
++            self.url = url
++
++        def read(self) -> bytes:
++            return self.payload
++
++    calls: list[dict] = []
++
++    class FakeClient:
++        def __init__(self, api_token: str):
++            assert api_token == "r8_test"
++
++        def run(self, model_id: str, *, input: dict):
++            calls.append({"model_id": model_id, "input": dict(input)})
++            assert input["audio"].read(3) == b"ID3"
++            return {
++                "vocals": FakeFileOutput(b"RIFF-vocals", "https://replicate.delivery/vocals.wav"),
++                "other": FakeFileOutput(b"RIFF-instrumental", "https://replicate.delivery/instrumental.wav"),
++            }
++
++    fake_module = types.ModuleType("replicate")
++    fake_module.Client = FakeClient
++    monkeypatch.setitem(sys.modules, "replicate", fake_module)
++
++    result = run_replicate_demucs(
++        audio_path,
++        tmp_path / "output",
++        token="r8_test",
++        model_id="cjwbw/demucs:test-version",
++        model_name="htdemucs",
++        max_input_mb=100,
++    )
++
++    assert Path(result["vocals_path"]).read_bytes() == b"RIFF-vocals"
++    assert Path(result["instrumental_path"]).read_bytes() == b"RIFF-instrumental"
++    assert result["source_urls"]["vocals"].startswith("https://replicate.delivery/")
++    assert calls[0]["input"]["stem"] == "vocals"
++    assert calls[0]["input"]["output_format"] == "wav"
++
++
++def test_replicate_demucs_rejects_oversized_input(tmp_path: Path):
++    audio_path = tmp_path / "large.mp3"
++    audio_path.write_bytes(b"x" * (2 * 1024 * 1024))
++
++    with pytest.raises(ReplicateDemucsError, match="größer als das konfigurierte Replicate-Limit"):
++        run_replicate_demucs(
++            audio_path,
++            tmp_path / "output",
++            token="r8_test",
++            model_id="cjwbw/demucs:test-version",
++            max_input_mb=0,
++        )
++
++
++def test_audio_asset_generation_uses_replicate_without_changing_local_default(
++    monkeypatch,
++    isolated_db_session,
++    tmp_path: Path,
++):
++    import app.routers.audio_assets as router
++
++    audio_path = tmp_path / "source.mp3"
++    audio_path.write_bytes(b"ID3" + b"audio-data")
++    asset = AudioAsset(
++        source_url=str(audio_path),
++        local_path=str(audio_path),
++        filename=audio_path.name,
++        title="Replicate Stem Test",
++        status="cached",
++        metadata_json={},
++    )
++    isolated_db_session.add(asset)
++    isolated_db_session.commit()
++    isolated_db_session.refresh(asset)
++
++    runtime = StemSeparationSettings(
++        backend=REPLICATE_DEMUCS_BACKEND,
++        replicate_model="cjwbw/demucs:test-version",
++        replicate_model_name="htdemucs",
++        replicate_max_input_mb=100,
++        local_demucs_available=True,
++        replicate_available=True,
++        replicate_token_configured=True,
++    )
++    monkeypatch.setattr(router, "load_stem_separation_settings", lambda db: runtime)
++    monkeypatch.setattr(router, "_resolve_asset_audio_file", lambda current_asset: audio_path)
++    monkeypatch.setattr(router, "_stem_storage_path", lambda: tmp_path / "stems")
++    monkeypatch.setattr(
++        router,
++        "get_settings",
++        lambda: types.SimpleNamespace(replicate_api_token="r8_test", cover_storage_path=tmp_path / "covers"),
++    )
++
++    def fake_run(audio_path_arg, output_dir, **kwargs):
++        output_dir = Path(output_dir)
++        output_dir.mkdir(parents=True, exist_ok=True)
++        vocals = output_dir / "vocals.wav"
++        instrumental = output_dir / "instrumental.wav"
++        vocals.write_bytes(b"RIFF-vocals")
++        instrumental.write_bytes(b"RIFF-instrumental")
++        return {
++            "vocals_path": vocals,
++            "instrumental_path": instrumental,
++            "model": kwargs["model_id"],
++            "demucs_model": kwargs["model_name"],
++            "source_urls": {},
++        }
++
++    monkeypatch.setattr(router, "run_replicate_demucs", fake_run)
++
++    result = router.generate_stems_for_asset(
++        isolated_db_session,
++        asset.id,
++        backend=REPLICATE_DEMUCS_BACKEND,
++    )
++    isolated_db_session.refresh(asset)
++
++    stems = asset.metadata_json["stems"]
++    assert result["exists"] is True
++    assert result["backend"] == "replicate_demucs"
++    assert stems["stem_separation_backend"] == REPLICATE_DEMUCS_BACKEND
++    assert stems["provider"] == "replicate"
++    assert stems["files"]["vocals"]["filename"].endswith("_vocals.wav")
++    assert stems["files"]["instrumental"]["filename"].endswith("_instrumental.wav")
++
++
++def test_local_demucs_remains_default_and_keeps_existing_command(
++    monkeypatch,
++    isolated_db_session,
++    tmp_path: Path,
++):
++    import app.routers.audio_assets as router
++
++    audio_path = tmp_path / "local-source.mp3"
++    audio_path.write_bytes(b"ID3" + b"local-audio")
++    asset = AudioAsset(
++        source_url=str(audio_path),
++        local_path=str(audio_path),
++        filename=audio_path.name,
++        title="Local Stem Test",
++        status="cached",
++        metadata_json={},
++    )
++    isolated_db_session.add(asset)
++    isolated_db_session.commit()
++    isolated_db_session.refresh(asset)
++
++    runtime = StemSeparationSettings(
++        backend=LOCAL_DEMUCS_BACKEND,
++        replicate_model="cjwbw/demucs:test-version",
++        replicate_model_name="htdemucs",
++        replicate_max_input_mb=100,
++        local_demucs_available=True,
++        replicate_available=False,
++        replicate_token_configured=False,
++    )
++    monkeypatch.setattr(router, "load_stem_separation_settings", lambda db: runtime)
++    monkeypatch.setattr(router, "_resolve_asset_audio_file", lambda current_asset: audio_path)
++    monkeypatch.setattr(router, "_stem_storage_path", lambda: tmp_path / "stems")
++
++    commands: list[list[str]] = []
++
++    def fake_subprocess_run(command, **kwargs):
++        commands.append(list(command))
++        output_root = Path(command[command.index("--out") + 1])
++        stem_dir = output_root / "htdemucs" / audio_path.stem
++        stem_dir.mkdir(parents=True, exist_ok=True)
++        (stem_dir / "vocals.wav").write_bytes(b"RIFF-local-vocals")
++        (stem_dir / "no_vocals.wav").write_bytes(b"RIFF-local-instrumental")
++        return types.SimpleNamespace(returncode=0, stdout="", stderr="")
++
++    monkeypatch.setattr(router.subprocess, "run", fake_subprocess_run)
++
++    result = router.generate_stems_for_asset(isolated_db_session, asset.id)
++    isolated_db_session.refresh(asset)
++
++    assert result["exists"] is True
++    assert result["backend"] == "demucs"
++    assert asset.metadata_json["stems"]["stem_separation_backend"] == LOCAL_DEMUCS_BACKEND
++    assert len(commands) == 1
++    command = commands[0]
++    assert command[:8] == [
++        sys.executable,
++        "-m",
++        "demucs",
++        "--two-stems",
++        "vocals",
++        "-n",
++        "htdemucs",
++        "--out",
++    ]
++    assert command[-1] == str(audio_path)

@@ -1,0 +1,14 @@
+# Optionale Forced-Alignment-Engine (app/services/forced_alignment_service.py).
+# Ohne Installation bleibt die App voll funktionsfaehig, faellt aber fuer JEDEN
+# Song auf die fehleranfaelligere ASR-Heuristik-Kette in srt_transcript_service.py
+# zurueck (Anker+Interpolation). Fuer Songs mit Englisch/Jamaican-Patois-Anteilen
+# ist Forced-Alignment deutlich robuster, da kein Wort vom ASR erkannt werden muss --
+# die Wortgrenzen kommen direkt aus dem CTC-Emission-Pfad auf den BEKANNTEN Songtext.
+#
+# WSL2 Debian, CPU-only:
+#   pip install -r requirements-forced-alignment.txt --break-system-packages
+#
+# Danach prueft die App den Status automatisch beim Start (siehe Log-Zeile
+# "Forced-Alignment (MMS_FA) verfuegbar: ...").
+torch --index-url https://download.pytorch.org/whl/cpu
+torchaudio --index-url https://download.pytorch.org/whl/cpu

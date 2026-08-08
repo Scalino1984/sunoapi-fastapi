@@ -5,11 +5,11 @@ import { api } from '../api/client.js';
 import { EmptyState } from '../components/EmptyState.jsx';
 import { Modal } from '../components/Modal.jsx';
 import { SectionHeader } from '../components/SectionHeader.jsx';
-import { Waveform } from '../components/Waveform.jsx';
+import { useLiveAudioProgress, Waveform } from '../components/Waveform.jsx';
 import { LibrarySongDetails } from '../components/library/LibrarySongDetails.jsx';
 import { LibraryDetailAccordion } from '../components/library/LibraryDetailAccordion.jsx';
 import { useI18n } from '../i18n/I18nContext.jsx';
-import { assetSearchText, copyToClipboard, downloadTextFile, formatBoolean, formatDate, parseBackendDate, formatDuration, formatVocalGender, getGenerationOptions, groupAssetsByProject, handleCoverImageError, hasGenerationOptions, isPlayable, operationKey, operationLabel, pickCover, isCoverCached, pickLyrics, pickModel, pickPrompt, pickStyle, pickTitle, safeFilename, shortId, stableLibrarySortValue, updatedLibrarySortValue, summarizeStyle } from '../utils.js';
+import { assetSearchText, copyToClipboard, downloadTextFile, formatBoolean, formatDate, parseBackendDate, formatDuration, formatVocalGender, getGenerationOptions, groupAssetsByProject, handleCoverImageError, hasGenerationOptions, isPlayable, matchesSearchQuery, operationKey, operationLabel, pickCover, isCoverCached, pickLyrics, pickModel, pickPrompt, pickStyle, pickTitle, safeFilename, shortId, stableLibrarySortValue, updatedLibrarySortValue, summarizeStyle } from '../utils.js';
 
 
 const srtLiveColorOptions = [
@@ -25,7 +25,7 @@ const srtLiveColorOptions = [
 const wizardCaptureOptions = [
   { key: 'timestampedLyrics', label: 'Timestamped Lyrics abrufen', description: 'Suno-synchronisierte Lyrics zur Audio-ID speichern.' },
   { key: 'srt', label: 'SRT erzeugen', description: 'Lyrics-basiertes SRT erzeugen und speichern.' },
-  { key: 'stems', label: 'Stems erzeugen', description: 'Vocals und Instrumental lokal trennen.' },
+  { key: 'stems', label: 'Stems erzeugen', description: 'Vocals und Instrumental mit dem konfigurierten Demucs-Backend trennen.' },
   { key: 'waveform', label: 'Waveform neu berechnen', description: 'Wellenformdaten für Player/Timeline aktualisieren.' },
 ];
 
@@ -881,7 +881,7 @@ function isFrontendInteractionActive() {
   );
 }
 
-export function LibraryPage({ assets, loadError = '', voices = [], playlists = [], onReload, onPlay, notify, onUseLyric, onReusePrompt, openAssetId, openAssetRequestKey = 0, onOpenAssetHandled, resetSignal = 0, onOpenDaw, playbackState = {}, onToggleCurrentPlayback, onDetailTitleChange, routeDetailSlug = '', searchQuery = '', onTrashChanged }) {
+export function LibraryPage({ assets, loadError = '', voices = [], playlists = [], onReload, onTaskStarted, onPlay, notify, onUseLyric, onReusePrompt, openAssetId, openAssetRequestKey = 0, onOpenAssetHandled, resetSignal = 0, onOpenDaw, playbackState = {}, onToggleCurrentPlayback, onDetailTitleChange, routeDetailSlug = '', searchQuery = '', onTrashChanged }) {
   const { t } = useI18n();
   const query = String(searchQuery || '');
   const [type, setType] = useState('all');
@@ -1047,16 +1047,28 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
     const sourceProjects = localFilter === 'favorites'
       ? groupAssetsByProject(effectiveAssets.filter((asset) => isAssetFavorite(asset)))
       : projects;
-    let rows = sourceProjects.filter((project) => {
-      const matchesQuery = !needle || [project.title, ...project.assets.map(assetSearchText)].join(' ').toLowerCase().includes(needle);
+    let rows = sourceProjects.map((project) => {
+      const matchesProjectTitle = !needle || matchesSearchQuery(project.title, needle);
+      const matchingAssets = !needle || matchesProjectTitle
+        ? project.assets
+        : project.assets.filter((asset) => matchesSearchQuery(assetSearchText(asset), needle));
+      const matchesQuery = matchingAssets.length > 0;
       const matchesType = type === 'all' || project.assets.some((asset) => operationKey(asset.operation_type || asset.task_type || asset.operation_label) === type);
       const matchesLocal = localFilter === 'favorites'
         || localFilter === 'all'
         || (localFilter === 'audio-local' && project.assets.some(isAudioLocal))
         || (localFilter === 'cover-local' && project.assets.some(isCoverCached))
         || (localFilter === 'missing-backup' && project.assets.some((asset) => !isAudioLocal(asset) || !isCoverCached(asset)));
-      return matchesQuery && matchesType && matchesLocal;
-    });
+      if (!matchesQuery || !matchesType || !matchesLocal) return null;
+      // Ein Treffer in Prompt, Lyrics oder KI-Tags darf nicht stillschweigend
+      // alle anderen Varianten derselben Songgruppe als Treffer ausgeben.
+      if (matchingAssets.length === project.assets.length) return project;
+      return {
+        ...project,
+        assets: matchingAssets,
+        playable: matchingAssets.filter(isPlayable),
+      };
+    }).filter(Boolean);
     rows = [...rows].sort((a, b) => {
       if (sort === 'title') return String(a.title || '').localeCompare(String(b.title || ''), 'de', { sensitivity: 'base' });
       if (sort === 'oldest') return stableLibrarySortValue(a) - stableLibrarySortValue(b);
@@ -2853,7 +2865,7 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
               <p className="eyebrow">{t('library.stems.playback', 'Stem-Wiedergabe')}</p>
               <h3>{pickTitle(asset)}</h3>
               <p className="muted">{t('library.stems.previewText', 'Die normale Wiedergabe wurde pausiert. Spiele Vocals oder Instrumental direkt hier im Modal ab.')}</p>
-              <p className="muted">{stems.backend ? `Backend: ${stems.backend}` : t('library.stems.files', 'Stem-Dateien')}{stems.bpm ? ` · ${stems.bpm} BPM` : ''}</p>
+              <p className="muted">{stems.backend ? `Backend: ${stems.backend === 'replicate_demucs' ? 'Replicate Demucs' : 'Lokales Demucs'}` : t('library.stems.files', 'Stem-Dateien')}{stems.bpm ? ` · ${stems.bpm} BPM` : ''}</p>
             </div>
           </div>
           {!playableStems.length && <p className="warning-text">{t('library.stems.noPlayableFiles', 'Für diese Variante sind noch keine abspielbaren Stem-Dateien vorhanden.')}</p>}
@@ -2884,7 +2896,7 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
         <div className="row between align-start">
           <div>
             <h4>{t('library.stems.title', 'Stem-Dateien')}</h4>
-            <p className="muted">{t('library.stems.text', 'Vocals und Instrumental lokal erzeugen und einzeln oder als ZIP herunterladen.')}</p>
+            <p className="muted">{t('library.stems.text', 'Vocals und Instrumental mit dem in Admin gewählten Demucs-Backend erzeugen und einzeln oder als ZIP herunterladen.')}</p>
           </div>
           <span className={`status ${stems.available ? 'cached' : String(stems.status || '').toLowerCase() === 'failed' ? 'error' : loading ? 'processing' : ''}`}>{loading ? t('library.status.running', 'läuft') : stems.available ? t('library.status.done', 'fertig') : String(stems.status || '').toLowerCase() === 'failed' ? t('status.stats.error', 'Fehler') : t('library.status.notGenerated', 'nicht erzeugt')}</span>
         </div>
@@ -2897,7 +2909,7 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
           {stems.files?.vocals && <a className="button" href={api.archive.stemDownloadUrl(asset.id, 'vocals')}><Download size={15} /> Vocals</a>}
           {stems.files?.instrumental && <a className="button" href={api.archive.stemDownloadUrl(asset.id, 'instrumental')}><Download size={15} /> Instrumental</a>}
         </div>
-        <p className="muted">{stems.available ? `Backend: ${stems.backend || 'demucs'}${stems.bpm ? ` · ${stems.bpm} BPM` : ''}` : t('library.stems.needsDemucs', 'Benötigt lokal installiertes Demucs im FastAPI-Python-Environment.')}</p>
+        <p className="muted">{stems.available ? `Backend: ${stems.backend === 'replicate_demucs' ? 'Replicate Demucs' : 'Lokales Demucs'}${stems.bpm ? ` · ${stems.bpm} BPM` : ''}` : t('library.stems.needsDemucs', 'Verwendet das in Admin konfigurierte Stem-Backend: lokales Demucs oder optional Replicate Demucs.')}</p>
       </div>
     );
   }
@@ -3109,9 +3121,13 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
     const editorOpen = String(srtEditorAssetId || '') === String(asset.id);
     const rawOpen = srtRawOpenIds.has(asset.id);
     const segments = draftSegmentsForAsset(asset);
+    const liveAudio = useLiveAudioProgress(asset.id, playbackState?.currentTime || 0, playbackState?.isPlaying);
     const liveLine = liveSrtLineForAsset(asset);
     const liveSegments = srtSegmentsFromState(state);
-    const visibleSegment = liveLine || (!liveLine && isCurrentAsset(asset) ? findActiveSrtSegment(liveSegments, playbackState?.currentTime || 0) : null);
+    const liveTime = liveAudio.hasLiveTick && isCurrentAsset(asset) ? liveAudio.currentTime : playbackState?.currentTime || 0;
+    const visibleSegment = isCurrentAsset(asset)
+      ? (liveAudio.hasLiveTick ? findActiveSrtSegment(liveSegments, liveTime) : liveLine || findActiveSrtSegment(liveSegments, liveTime))
+      : null;
     const visibleText = String(visibleSegment?.text || '').trim();
     return (
       <div className="meta-card wide srt-card">
@@ -3139,8 +3155,8 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
         {hasSrt && (
           <div className={`srt-live-container ${isCurrentAsset(asset) ? 'is-live' : ''}`} style={srtLiveColorStyle}>
             <div className="srt-live-label">
-              <span>{isCurrentAsset(asset) ? playbackState?.isPlaying ? t('library.srt.liveRunning', 'Live-Untertitel läuft') : t('library.srt.liveReady', 'Live-Untertitel bereit') : t('library.srt.live', 'Live-Untertitel')}</span>
-              <small>{isCurrentAsset(asset) ? `${formatDuration(playbackState?.currentTime || 0)} / ${formatDuration(playbackState?.duration || asset.duration_seconds)}` : t('library.srt.startVariantToRead', 'Starte diese Variante zum Mitlesen')}</small>
+              <span>{isCurrentAsset(asset) ? (liveAudio.hasLiveTick ? liveAudio.isPlaying : playbackState?.isPlaying) ? t('library.srt.liveRunning', 'Live-Untertitel läuft') : t('library.srt.liveReady', 'Live-Untertitel bereit') : t('library.srt.live', 'Live-Untertitel')}</span>
+              <small>{isCurrentAsset(asset) ? `${formatDuration(liveTime)} / ${formatDuration(playbackState?.duration || asset.duration_seconds)}` : t('library.srt.startVariantToRead', 'Starte diese Variante zum Mitlesen')}</small>
             </div>
             <strong>{visibleText || '\u00a0'}</strong>
             {visibleSegment && <small>{formatDuration(visibleSegment.start)} → {formatDuration(visibleSegment.end)}</small>}
@@ -3179,9 +3195,13 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
     const hasSrt = hasAssetSrt(asset, srtByAsset);
     const hasHalfSrt = hasAssetHalfSrt(asset, srtByAsset);
     const segments = draftSegmentsForAsset(asset);
+    const liveAudio = useLiveAudioProgress(asset.id, playbackState?.currentTime || 0, playbackState?.isPlaying);
     const liveLine = liveSrtLineForAsset(asset);
     const liveSegments = srtSegmentsFromState(state);
-    const visibleSegment = liveLine || (!liveLine && isCurrentAsset(asset) ? findActiveSrtSegment(liveSegments, playbackState?.currentTime || 0) : null);
+    const liveTime = liveAudio.hasLiveTick && isCurrentAsset(asset) ? liveAudio.currentTime : playbackState?.currentTime || 0;
+    const visibleSegment = isCurrentAsset(asset)
+      ? (liveAudio.hasLiveTick ? findActiveSrtSegment(liveSegments, liveTime) : liveLine || findActiveSrtSegment(liveSegments, liveTime))
+      : null;
     const visibleText = String(visibleSegment?.text || '').trim();
     const rawOpen = srtRawOpenIds.has(asset.id);
     return (
@@ -3212,8 +3232,8 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
             <aside className="srt-modal-sidebar">
               <div className={`srt-live-container ${isCurrentAsset(asset) ? 'is-live' : ''}`} style={srtLiveColorStyle}>
                 <div className="srt-live-label">
-                  <span>{isCurrentAsset(asset) ? playbackState?.isPlaying ? t('library.srt.liveRunning', 'Live-Untertitel läuft') : t('library.srt.liveReady', 'Live-Untertitel bereit') : t('library.srt.live', 'Live-Untertitel')}</span>
-                  <small>{isCurrentAsset(asset) ? `${formatDuration(playbackState?.currentTime || 0)} / ${formatDuration(playbackState?.duration || asset.duration_seconds)}` : t('library.srt.startVariantToRead', 'Starte diese Variante zum Mitlesen')}</small>
+                  <span>{isCurrentAsset(asset) ? (liveAudio.hasLiveTick ? liveAudio.isPlaying : playbackState?.isPlaying) ? t('library.srt.liveRunning', 'Live-Untertitel läuft') : t('library.srt.liveReady', 'Live-Untertitel bereit') : t('library.srt.live', 'Live-Untertitel')}</span>
+                  <small>{isCurrentAsset(asset) ? `${formatDuration(liveTime)} / ${formatDuration(playbackState?.duration || asset.duration_seconds)}` : t('library.srt.startVariantToRead', 'Starte diese Variante zum Mitlesen')}</small>
                 </div>
                 <strong>{visibleText || '\u00a0'}</strong>
                 {visibleSegment && <small>{formatDuration(visibleSegment.start)} → {formatDuration(visibleSegment.end)}</small>}
@@ -3810,8 +3830,9 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
     try {
       setContentCacheBusy(true);
       const result = await api.archive.cacheMissingContent();
+      if (result?.queued && onTaskStarted) await onTaskStarted(result);
       notify?.(result?.message || t('library.messages.libraryContentChecked', 'Library-Inhalte wurden geprüft.'), result?.failed ? 'warning' : 'success');
-      await onReload?.({ forceContentRefresh: true });
+      await onReload?.();
     } catch (err) {
       notify?.(err?.message || t('library.messages.libraryContentCheckFailed', 'Library-Inhalte konnten nicht geprüft werden.'), 'error');
     } finally {
@@ -4771,7 +4792,7 @@ ${generationOptionsText(asset)}`,
           {advanced && active && (
             <div className="library-inline-waveform asset-flat-waveform">
               <span>{playbackState?.isPlaying ? t('library.playback.running', 'Läuft') : t('library.playback.ready', 'Bereit')} · {formatDuration(playbackState?.currentTime || 0)} / {formatDuration(playbackState?.duration || asset.duration_seconds)}</span>
-              <Waveform asset={asset} compact currentTime={playbackState?.currentTime || 0} durationSeconds={playbackState?.duration || asset.duration_seconds} interactive={false} />
+              <Waveform asset={asset} compact currentTime={playbackState?.currentTime || 0} durationSeconds={playbackState?.duration || asset.duration_seconds} interactive liveProgress />
             </div>
           )}
           {advanced && <div className="asset-flat-meta">
@@ -5192,7 +5213,7 @@ ${generationOptionsText(asset)}`,
                   {projectActive && currentProjectAsset && (
                     <div className="library-inline-waveform project-waveform">
                       <span>{projectPlaying ? t('library.playback.nowPlaying', 'Jetzt läuft') : t('library.playback.ready', 'Bereit')} · {formatDuration(playbackState?.currentTime || 0)} / {formatDuration(playbackState?.duration || currentProjectAsset.duration_seconds)}</span>
-                      <Waveform asset={currentProjectAsset} compact currentTime={playbackState?.currentTime || 0} durationSeconds={playbackState?.duration || currentProjectAsset.duration_seconds} interactive={false} />
+                      <Waveform asset={currentProjectAsset} compact currentTime={playbackState?.currentTime || 0} durationSeconds={playbackState?.duration || currentProjectAsset.duration_seconds} interactive liveProgress />
                     </div>
                   )}
                 </div>

@@ -338,6 +338,16 @@ export function MiniPlayer({ queue, currentIndex, loop, sidebarMode = 'open', mo
     const audio = audioRef.current;
     if (!audio) return;
     const nextTime = Number(audio.currentTime || 0);
+    if (typeof window !== 'undefined' && current?.id) {
+      window.dispatchEvent(new CustomEvent('audio:progress', {
+        detail: {
+          assetId: current.id,
+          currentTime: nextTime,
+          duration: Number(audio.duration || duration || current.duration_seconds || 0),
+          isPlaying: !audio.paused,
+        },
+      }));
+    }
     setCurrentTime((currentValue) => {
       if (!force && Math.abs(Number(currentValue || 0) - nextTime) < 0.045) return currentValue;
       return nextTime;
@@ -553,6 +563,26 @@ export function MiniPlayer({ queue, currentIndex, loop, sidebarMode = 'open', mo
     if (!audioRef.current) return;
     audioRef.current.muted = muted;
   }, [muted]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || !current?.id) return undefined;
+    const handleLibrarySeek = (event) => {
+      const detail = event?.detail || {};
+      if (String(detail.assetId || '') !== String(current.id)) return;
+      const audio = audioRef.current;
+      if (!audio) return;
+      const detectedDuration = resolveSeekDuration(audio, duration, current);
+      if (!(detectedDuration > 0)) return;
+      const requestedSeconds = Number(detail.seconds);
+      const ratio = Math.max(0, Math.min(1, Number(detail.ratio || 0)));
+      const target = Number.isFinite(requestedSeconds) ? requestedSeconds : ratio * detectedDuration;
+      audio.currentTime = Math.max(0, Math.min(detectedDuration, target));
+      syncAudioClock({ force: true });
+      if (detail.autoplay) audio.play().catch(() => null);
+    };
+    window.addEventListener('audio:seek', handleLibrarySeek);
+    return () => window.removeEventListener('audio:seek', handleLibrarySeek);
+  }, [current?.id, duration]);
 
   useEffect(() => {
     const nextState = {
@@ -843,6 +873,7 @@ export function MiniPlayer({ queue, currentIndex, loop, sidebarMode = 'open', mo
     audio.currentTime = target;
     setDuration((currentDuration) => detectedDuration > 0 && Math.abs(Number(currentDuration || 0) - detectedDuration) >= 0.05 ? detectedDuration : currentDuration);
     setCurrentTime(target);
+    syncAudioClock({ force: true });
   }
 
   function seekFromEvent(event) {
@@ -856,6 +887,7 @@ export function MiniPlayer({ queue, currentIndex, loop, sidebarMode = 'open', mo
     audio.currentTime = target;
     setDuration((currentDuration) => Math.abs(Number(currentDuration || 0) - detectedDuration) >= 0.05 ? detectedDuration : currentDuration);
     setCurrentTime(target);
+    syncAudioClock({ force: true });
   }
 
   function changeVolume(event) {

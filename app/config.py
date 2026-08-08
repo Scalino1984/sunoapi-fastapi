@@ -143,9 +143,20 @@ class Settings(BaseSettings):
     groq_base_url: str = "https://api.groq.com/openai/v1"
     voxtral_base_url: str = "https://api.mistral.ai/v1"
 
-    # Replicate KI-Cover-Generator
+    # Replicate KI-Cover-Generator und optionale cloudbasierte Demucs-Stem-Separation.
+    # Der Standardpfad bleibt lokales Demucs; Replicate wird nur nach expliziter
+    # Auswahl in den Admin-Einstellungen verwendet.
     replicate_api_token: str = Field(default="", repr=False)
     replicate_cover_text_model: str = "ibm-granite/granite-3.3-8b-instruct"
+    stem_separation_backend: str = "local_demucs"
+    replicate_demucs_model: str = "cjwbw/demucs:25a173108cff36ef9f80f854c162d01df9e6528be175794b81158fa03836d953"
+    replicate_demucs_model_name: str = "htdemucs"
+    replicate_demucs_max_input_mb: int = 100
+    # Replicate-Demucs läuft asynchron und wird gepollt. Das Gesamtlimit liegt
+    # bewusst deutlich über dem früheren 60-Sekunden-Sync-Wait des SDK.
+    replicate_demucs_timeout_seconds: int = 1200
+    replicate_demucs_poll_interval_seconds: float = 2.0
+    replicate_demucs_http_timeout_seconds: float = 300.0
 
     # Lokale Audio-KI-Analyse:
     # Speichert Reports isoliert unter storage/analysis und im AudioAsset.metadata_json.

@@ -1,0 +1,367 @@
+--- a/frontend-react/src/App.jsx
++++ b/frontend-react/src/App.jsx
+@@ -138,6 +138,7 @@
+ const ACTIVE_POLL_INTERVAL_MS = 10 * 1000;
+ const IDLE_POLL_INTERVAL_MS = 60 * 1000;
+ const MIN_STATUS_POLL_INTERVAL_MS = 8 * 1000;
++const MIN_NOTIFICATION_POLL_INTERVAL_MS = 5 * 1000;
+ const STATUS_DETAIL_POLL_MS = 2500;
+ const AUTH_KEEPALIVE_INTERVAL_MS = 10 * 60 * 1000;
+ const DEFAULT_BADGE_AUTO_CLOSE_MS = 8000;
+@@ -321,6 +322,7 @@
+   const tasksRef = useRef([]);
+   const pollingUntilRef = useRef(0);
+   const lastStatusPollAtRef = useRef(0);
++  const lastNotificationPollAtRef = useRef(Date.now());
+ 
+   useEffect(() => {
+     tasksRef.current = tasks;
+@@ -647,6 +649,20 @@
+     }
+   }, []);
+ 
++  const refreshNotificationsOnly = useCallback(async () => {
++    if (!user) return null;
++    const now = Date.now();
++    if (now - lastNotificationPollAtRef.current < MIN_NOTIFICATION_POLL_INTERVAL_MS) return null;
++    lastNotificationPollAtRef.current = now;
++    return refreshAll({
++      silent: true,
++      content: false,
++      tasks: false,
++      credits: false,
++      notifications: true
++    });
++  }, [user, refreshAll]);
++
+ 
+   useEffect(() => {
+     if (!user || playerState.isPlaying || !pendingContentRefreshRef.current) return;
+@@ -784,6 +800,18 @@
+   useEffect(() => {
+     if (!user) return undefined;
+ 
++    const onVisible = () => {
++      if (document.visibilityState !== 'visible') return;
++      refreshNotificationsOnly().catch(() => null);
++    };
++
++    document.addEventListener('visibilitychange', onVisible);
++    return () => document.removeEventListener('visibilitychange', onVisible);
++  }, [user, refreshNotificationsOnly]);
++
++  useEffect(() => {
++    if (!user) return undefined;
++
+     let stopped = false;
+     let busy = false;
+     let timerId = null;
+@@ -800,7 +828,15 @@
+       const forceWindowActive = now < pollingUntilRef.current;
+       const shouldPoll = openCount > 0 || forceWindowActive;
+ 
+-      if (!shouldPoll) return;
++      if (!shouldPoll) {
++        busy = true;
++        try {
++          await refreshNotificationsOnly();
++        } finally {
++          busy = false;
++        }
++        return;
++      }
+       if (now - lastStatusPollAtRef.current < MIN_STATUS_POLL_INTERVAL_MS) return;
+ 
+       busy = true;
+@@ -829,7 +865,7 @@
+       stopped = true;
+       if (timerId) window.clearTimeout(timerId);
+     };
+-  }, [user, refreshPendingAndReload]);
++  }, [user, refreshPendingAndReload, refreshNotificationsOnly]);
+ 
+   useEffect(() => {
+     if (playbackRefreshLockRef.current) return;
+--- a/app/services/library_content_cache_service.py
++++ b/app/services/library_content_cache_service.py
+@@ -14,11 +14,13 @@
+ 
+ from __future__ import annotations
+ 
++import base64
+ import hashlib
+ from datetime import datetime
+ from pathlib import Path
+ from typing import Any
+ from urllib.parse import unquote, urlparse
++from uuid import UUID
+ 
+ from sqlalchemy import String, cast
+ from sqlalchemy.orm import Session
+@@ -34,6 +36,10 @@
+ from app.services.task_lifecycle_service import append_task_debug_event, append_task_step_log
+ from app.utils.time_utils import utc_now_naive
+ 
++REMOVEAI_MEDIA_HOST = "musicfile.removeai.ai"
++REMOVEAI_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".avif"}
++
++
+ IMAGE_URL_KEYS = (
+     "source_image_url",
+     "sourceImageUrl",
+@@ -230,8 +236,54 @@
+     return [f"{base}{media_ref}" for base in _configured_remote_media_base_urls()]
+ 
+ 
++def _canonical_suno_cover_from_removeai(value: Any) -> str | None:
++    """Mappt fehlerhafte RemoveAI-Bild-Proxies auf die originale Suno-CDN-URL.
++
++    SunoAPI.org-Resultate enthalten teils ``musicfile.removeai.ai/<base64>.jpeg``.
++    Der Host ist fuer Audio-Proxy-IDs ausgelegt und versucht beim Aufruf den
++    kompletten Dateinamen als Base64 zu dekodieren. Die Bildendung macht den
++    Token ungueltig ("Invalid Base64 encoding"). Der Base64-Stamm enthaelt
++    jedoch die Suno-UUID, aus der sich die bekannte originale Cover-URL
++    deterministisch rekonstruieren laesst.
++    """
++    if not isinstance(value, str):
++        return None
++    text = value.strip()
++    if not text:
++        return None
++    parsed = urlparse(text)
++    if (parsed.hostname or "").lower() != REMOVEAI_MEDIA_HOST:
++        return None
++    suffix = Path(parsed.path).suffix.lower()
++    if suffix not in REMOVEAI_IMAGE_EXTENSIONS:
++        return None
++    token = Path(parsed.path).stem.strip()
++    if not token:
++        return None
++    try:
++        padded = token + ("=" * (-len(token) % 4))
++        decoded = base64.urlsafe_b64decode(padded.encode("ascii")).decode("ascii").strip()
++        media_id = str(UUID(decoded))
++    except Exception:
++        return None
++    return f"https://cdn2.suno.ai/image_{media_id}.jpeg"
++
++
++def _repair_malformed_cover_reference(target: Any, attribute: str) -> bool:
++    current = getattr(target, attribute, None)
++    canonical = _canonical_suno_cover_from_removeai(current)
++    if not canonical or canonical == current:
++        return False
++    setattr(target, attribute, canonical)
++    return True
++
++
+ def _add_cover_url_candidates(target: list[str], seen: set[str], value: Any) -> None:
+-    _add_unique_url(target, seen, value, media_type="image")
++    canonical = _canonical_suno_cover_from_removeai(value)
++    # Den bekannten fehlerhaften RemoveAI-Bildlink nie als Downloadkandidaten
++    # aufnehmen. Sonst erscheint er als letzter Debug-Link, obwohl der Endpoint
++    # schon beim Base64-Parsing scheitert.
++    _add_unique_url(target, seen, canonical or value, media_type="image")
+     for remote_url in _remote_media_candidate_urls(value, route=get_settings().suno_cover_public_route):
+         _add_unique_url(target, seen, remote_url, media_type="image")
+ 
+@@ -759,6 +811,7 @@
+     songs_checked = 0
+     audio_attempted = 0
+     cover_attempted = 0
++    cover_source_urls_fixed = 0
+     error_examples: list[dict[str, Any]] = []
+     unavailable_examples: list[dict[str, Any]] = []
+ 
+@@ -792,6 +845,11 @@
+     for asset in assets:
+         assets_checked += 1
+         try:
++            if _repair_malformed_cover_reference(asset, "image_url"):
++                db.add(asset)
++                cover_source_urls_fixed += 1
++                stale_metadata_fixed += 1
++
+             audio_exists, metadata_changed = ensure_audio_asset_local_metadata(asset)
+             if audio_exists:
+                 if metadata_changed:
+@@ -840,6 +898,11 @@
+             if not _local_cover_exists(asset.cover_local_url or asset.image_url):
+                 song_for_cover = db.query(Song).filter(Song.id == asset.song_id).first() if asset.song_id else None
+                 project_for_cover = db.query(AudioProject).filter(AudioProject.id == asset.project_id).first() if asset.project_id else None
++                for target, attribute in ((song_for_cover, "cover_image_url"), (project_for_cover, "cover_image_url")):
++                    if target is not None and _repair_malformed_cover_reference(target, attribute):
++                        db.add(target)
++                        cover_source_urls_fixed += 1
++                        stale_metadata_fixed += 1
+                 cover_errors: list[str] = []
+                 for cover_source in _known_cover_urls(db, asset, song=song_for_cover, project=project_for_cover):
+                     cover_attempted += 1
+@@ -872,6 +935,10 @@
+     for song in songs:
+         songs_checked += 1
+         try:
++            if _repair_malformed_cover_reference(song, "cover_image_url"):
++                db.add(song)
++                cover_source_urls_fixed += 1
++                stale_metadata_fixed += 1
+             if _local_cover_exists(song.cover_local_url or song.cover_image_url):
+                 continue
+             cover_sources: list[str] = []
+@@ -918,6 +985,7 @@
+         "songs_checked": songs_checked,
+         "audio_attempted": audio_attempted,
+         "cover_attempted": cover_attempted,
++        "cover_source_urls_fixed": cover_source_urls_fixed,
+         "skipped": skipped,
+         "unavailable": unavailable,
+         "failed": failed,
+@@ -1012,6 +1080,7 @@
+         "songs_checked": songs_checked,
+         "audio_attempted": audio_attempted,
+         "cover_attempted": cover_attempted,
++        "cover_source_urls_fixed": cover_source_urls_fixed,
+         "skipped": skipped,
+         "unavailable": unavailable,
+         "failed": failed,
+--- a/app/services/audio_cache_service.py
++++ b/app/services/audio_cache_service.py
+@@ -1030,6 +1030,16 @@
+             file_size_bytes=total_size,
+         )
+ 
++    def _cover_request_headers(self, url: str) -> dict[str, str]:
++        headers = {
++            "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
++            "User-Agent": self.settings.suno_clip_user_agent,
++        }
++        host = (urlparse(url).hostname or "").lower()
++        if host == "suno.ai" or host.endswith(".suno.ai") or host.endswith(".removeai.ai"):
++            headers["Referer"] = "https://suno.com/"
++        return headers
++
+     async def _open_validated_image_response(self, url: str) -> tuple[httpx.Response, httpx.AsyncClient]:
+         current_url = url
+         redirects = 0
+@@ -1037,7 +1047,7 @@
+         try:
+             while True:
+                 self._validate_public_url(current_url)
+-                request = client.build_request("GET", current_url, headers={"Accept": "image/*,*/*"})
++                request = client.build_request("GET", current_url, headers=self._cover_request_headers(current_url))
+                 response = await client.send(request, stream=True)
+                 if response.status_code in {301, 302, 303, 307, 308}:
+                     location = response.headers.get("location")
+--- a/tests/test_frontend_source_regressions.py
++++ b/tests/test_frontend_source_regressions.py
+@@ -313,7 +313,13 @@
+     assert "refreshPendingAndReload({ silent: true, credits: false })" in app
+     assert "shouldFetchCredits ? api.credits() : skippedContent" in app
+     assert "shouldFetchNotifications ? api.notifications.list(true) : skippedContent" in app
+-    assert "}, [user, refreshPendingAndReload]);" in app
++    assert "const refreshNotificationsOnly = useCallback" in app
++    assert "content: false" in app
++    assert "tasks: false" in app
++    assert "credits: false" in app
++    assert "await refreshNotificationsOnly();" in app
++    assert "document.addEventListener('visibilitychange', onVisible)" in app
++    assert "}, [user, refreshPendingAndReload, refreshNotificationsOnly]);" in app
+ 
+ 
+ def test_library_extended_assets_open_original_from_audio_action_menu_only():
+--- a/tests/test_library_content_cache_service.py
++++ b/tests/test_library_content_cache_service.py
+@@ -12,7 +12,13 @@
+ 
+ from app.config import get_settings
+ from app.models import AudioAsset, AudioProject, Song, SunoTask
+-from app.services.library_content_cache_service import _known_cover_urls, _repair_generation_options_from_tasks, cache_missing_library_content_once
++from app.services.library_content_cache_service import (
++    _canonical_suno_cover_from_removeai,
++    _known_cover_urls,
++    _repair_generation_options_from_tasks,
++    cache_missing_library_content_once,
++)
++from app.services.audio_cache_service import CoverCacheService
+ from app.services.library_ai_tagging_service import normalize_ai_tags
+ from app.services.music_service import MusicService
+ 
+@@ -98,6 +104,78 @@
+     assert "https://songstudio-react.klangneural.de/media/covers/ai_cover_server_only.jpg" in urls
+ 
+ 
++def test_known_cover_urls_replaces_invalid_removeai_image_proxy(isolated_db_session):
++    db = isolated_db_session
++    broken = "https://musicfile.removeai.ai/ZjlmODQ4MWMtMDk2ZS00Zjg1LWI3YmQtYjc2YzNiOGRhN2Q5.jpeg"
++    canonical = "https://cdn2.suno.ai/image_f9f8481c-096e-4f85-b7bd-b76c3b8da7d9.jpeg"
++    asset = AudioAsset(
++        source_url="https://cdn1.suno.ai/f9f8481c-096e-4f85-b7bd-b76c3b8da7d9.mp3",
++        image_url=broken,
++        status="remote",
++        metadata_json={
++            "candidate": {
++                "imageUrl": broken,
++                "sourceImageUrl": canonical,
++            }
++        },
++    )
++    db.add(asset)
++    db.commit()
++
++    urls = _known_cover_urls(db, asset)
++
++    assert _canonical_suno_cover_from_removeai(broken) == canonical
++    assert canonical in urls
++    assert broken not in urls
++    assert urls.count(canonical) == 1
++
++
++@pytest.mark.asyncio
++async def test_content_check_repairs_removeai_cover_reference_before_download(monkeypatch, isolated_db_session):
++    db = isolated_db_session
++    broken = "https://musicfile.removeai.ai/ZjlmODQ4MWMtMDk2ZS00Zjg1LWI3YmQtYjc2YzNiOGRhN2Q5.jpeg"
++    canonical = "https://cdn2.suno.ai/image_f9f8481c-096e-4f85-b7bd-b76c3b8da7d9.jpeg"
++    asset = AudioAsset(
++        source_url="manual://cover-only",
++        image_url=broken,
++        status="remote",
++        metadata_json={"candidate": {"imageUrl": broken, "sourceImageUrl": canonical}},
++    )
++    db.add(asset)
++    db.commit()
++
++    attempted: list[str] = []
++
++    async def no_provider_backfill(self, *, limit=40):
++        return 0
++
++    async def unavailable_cover(self, target, image_url=None):
++        attempted.append(str(image_url or ""))
++        raise ValueError(f"Client error '403 Forbidden' for url '{image_url}'")
++
++    monkeypatch.setattr(MusicService, "repair_imported_task_generation_options_from_provider", no_provider_backfill)
++    monkeypatch.setattr(CoverCacheService, "cache_asset_cover", unavailable_cover)
++
++    result = await cache_missing_library_content_once(db, limit=20, notify_always=False)
++
++    db.refresh(asset)
++    assert asset.image_url == canonical
++    assert result["cover_source_urls_fixed"] >= 1
++    assert canonical in attempted
++    assert broken not in attempted
++    assert all(broken not in str(item) for item in result["unavailable_examples"])
++
++
++def test_cover_download_headers_use_existing_suno_browser_identity(isolated_db_session):
++    service = CoverCacheService(isolated_db_session)
++
++    headers = service._cover_request_headers("https://cdn2.suno.ai/image_example.jpeg")
++
++    assert headers["User-Agent"] == service.settings.suno_clip_user_agent
++    assert headers["Referer"] == "https://suno.com/"
++    assert "image/" in headers["Accept"]
++
++
+ def test_library_ai_tag_normalization_keeps_tags_compact():
+     tags = normalize_ai_tags(["Rap", "rap", "Song", "Deutsch", "Male", "cinematic music", "very long tag name that should be shortened at a sane boundary"], max_tags=4)
+ 

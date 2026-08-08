@@ -1843,6 +1843,10 @@ class AiAdminSettingsRead(BaseModel):
     library_ai_tagging_enabled: bool = False
     library_ai_tagging_profile_id: int | None = None
     library_ai_tagging_max_tags_per_asset: int = Field(default=5, ge=2, le=8)
+    stem_separation_backend: str = "local_demucs"
+    stem_separation_backends: list[str] = Field(default_factory=lambda: ["local_demucs", "replicate_demucs"])
+    stem_separation_runtime: dict[str, Any] = Field(default_factory=dict)
+    replicate_demucs_model: str = ""
     transcription_backends: list[str] = Field(default_factory=lambda: ["groq", "whisperx", "openai_whisper_api", "voxtral"])
     transcription_languages: list[str] = Field(default_factory=lambda: ["auto", "de", "en"])
     transcription_runtime: dict[str, Any] = Field(default_factory=dict)
@@ -1853,8 +1857,10 @@ class AiAdminSettingsUpdate(BaseModel):
     default_model: str
     default_assistant_profile_id: int | None = None
     system_instruction: str | None = None
-    transcription_backend: str = "voxtral"
-    transcription_language: str = "de"
+    # Optional bei partiellen Admin-Updates; ein fehlendes Feld darf nicht
+    # versehentlich den konfigurierten Multiprovider auf Voxtral umschalten.
+    transcription_backend: str | None = None
+    transcription_language: str | None = None
     lyrics_template_mode: str = "lyrics_source_of_truth"
     lyrics_match_mode: str = "lenient"
     srt_output_enabled: bool = True
@@ -1881,6 +1887,7 @@ class AiAdminSettingsUpdate(BaseModel):
     library_ai_tagging_enabled: bool = False
     library_ai_tagging_profile_id: int | None = None
     library_ai_tagging_max_tags_per_asset: int = Field(default=5, ge=2, le=8)
+    stem_separation_backend: str = "local_demucs"
 
 
 class LibrarySearchIndexUpdate(BaseModel):

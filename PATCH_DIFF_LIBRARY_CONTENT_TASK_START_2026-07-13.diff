@@ -1,0 +1,391 @@
+--- /tmp/library_task_fix_before/app/services/library_content_cache_service.py	2026-07-13 02:21:13.772833152 +0000
++++ app/services/library_content_cache_service.py	2026-07-13 02:24:10.501143891 +0000
+@@ -27,13 +27,14 @@
+ from sqlalchemy.orm.attributes import flag_modified
+ 
+ from app.config import get_settings
++from app.database import SessionLocal
+ from app.services.portable_path_service import public_url_for_file, to_portable_path
+ from app.models import ActivityLog, AudioAsset, AudioProject, Song, StatusNotification, SunoTask
+ from app.services.audio_asset_repair_service import AUDIO_URL_PREFERENCE, is_audio_url, repair_local_file_metadata
+ from app.services.audio_asset_materialization_service import AudioAssetMaterializationService
+ from app.services.audio_cache_service import AudioCacheService, AudioCandidate, CoverCacheService
+ from app.services.music_service import MusicService
+-from app.services.task_lifecycle_service import append_task_debug_event, append_task_step_log
++from app.services.task_lifecycle_service import append_task_debug_event, append_task_step_log, mark_task_started
+ from app.utils.time_utils import utc_now_naive
+ 
+ REMOVEAI_MEDIA_HOST = "musicfile.removeai.ai"
+@@ -792,12 +793,44 @@
+     return changed_count
+ 
+ 
++def create_library_content_cache_task(db: Session, *, limit: int = 5000) -> SunoTask:
++    """Erzeugt den sichtbaren manuellen Library-Prueftask vor dem Worker-Start."""
++    safe_limit = min(5000, max(1, int(limit or 5000)))
++    task = SunoTask(
++        task_id=f"local-library-content-cache-{utc_now_naive().strftime('%Y%m%d%H%M%S%f')}",
++        task_type="library_content_cache",
++        status="CREATED",
++        request_payload={
++            "limit": safe_limit,
++            "background": True,
++            "manual": True,
++            "local_task": True,
++        },
++        response_payload={},
++        result_payload=None,
++    )
++    db.add(task)
++    db.flush()
++    mark_task_started(
++        db,
++        task,
++        payload={
++            "limit": safe_limit,
++            "manual": True,
++            "phase": "queued",
++            "detail": "Library-Inhalte werden im Hintergrund geprüft.",
++        },
++    )
++    return task
++
++
+ async def cache_missing_library_content_once(
+     db: Session,
+     *,
+     limit: int = 500,
+     notify_always: bool = True,
+     background: bool = False,
++    status_task: SunoTask | None = None,
+ ) -> dict[str, Any]:
+     audio_service = AudioCacheService(db)
+     cover_service = CoverCacheService(db)
+@@ -994,18 +1027,39 @@
+         "background": background,
+         "limit": limit,
+     }
+-    local_task = SunoTask(
+-        task_id=f"local-library-content-cache-{utc_now_naive().strftime('%Y%m%d%H%M%S%f')}",
+-        task_type="library_content_cache",
+-        status="SUCCESS" if failed == 0 else "PARTIAL_SUCCESS",
+-        request_payload={"limit": limit, "background": background},
+-        response_payload={},
+-        result_payload=result_payload,
+-        started_at=utc_now_naive(),
+-        completed_at=utc_now_naive(),
+-    )
+-    db.add(local_task)
+-    db.flush()
++    final_status = "SUCCESS" if failed == 0 else "PARTIAL_SUCCESS"
++    completed_at = utc_now_naive()
++    if status_task is None:
++        local_task = SunoTask(
++            task_id=f"local-library-content-cache-{completed_at.strftime('%Y%m%d%H%M%S%f')}",
++            task_type="library_content_cache",
++            status=final_status,
++            request_payload={"limit": limit, "background": background},
++            response_payload={},
++            result_payload=result_payload,
++            started_at=completed_at,
++            heartbeat_at=completed_at,
++            completed_at=completed_at,
++            progress=100,
++        )
++        db.add(local_task)
++        db.flush()
++    else:
++        local_task = status_task
++        local_task.status = final_status
++        local_task.result_payload = result_payload
++        local_task.completed_at = completed_at
++        local_task.heartbeat_at = completed_at
++        local_task.progress = 100
++        local_task.error_message = None
++        response_payload = dict(local_task.response_payload or {})
++        response_payload.update({
++            "background": True,
++            "status": final_status,
++            "completed_at": completed_at.isoformat(),
++        })
++        local_task.response_payload = response_payload
++        db.add(local_task)
+     append_task_debug_event(
+         db,
+         local_task,
+@@ -1089,3 +1143,77 @@
+         "background": background,
+         "message": message,
+     }
++
++async def run_library_content_cache_task(task_id: int, limit: int = 5000) -> None:
++    """Fuehrt den zuvor sichtbaren manuellen Library-Prueftask getrennt aus."""
++    db = SessionLocal()
++    try:
++        task = db.query(SunoTask).filter(SunoTask.id == int(task_id)).first()
++        if not task:
++            return
++        await cache_missing_library_content_once(
++            db,
++            limit=min(5000, max(1, int(limit or 5000))),
++            notify_always=True,
++            background=False,
++            status_task=task,
++        )
++    except Exception as exc:
++        db.rollback()
++        task = db.query(SunoTask).filter(SunoTask.id == int(task_id)).first()
++        if task:
++            now = utc_now_naive()
++            message = f"Library-Inhalte konnten nicht geprüft werden: {exc}"
++            task.status = "FAILED"
++            task.completed_at = now
++            task.heartbeat_at = now
++            task.error_message = str(exc)[:2000]
++            response_payload = dict(task.response_payload or {})
++            response_payload.update({
++                "background": True,
++                "status": "FAILED",
++                "completed_at": now.isoformat(),
++            })
++            task.response_payload = response_payload
++            append_task_debug_event(
++                db,
++                task,
++                event="library_content_cache_failed",
++                detail=message,
++                level="error",
++                data={"limit": limit, "error": str(exc)},
++                commit=False,
++            )
++            append_task_step_log(
++                db,
++                task,
++                phase="failed",
++                phase_label="Library-Inhalte prüfen fehlgeschlagen",
++                detail=message,
++                data={"limit": limit},
++                commit=False,
++            )
++            db.add(StatusNotification(
++                event_type="library_content_cache_failed",
++                title="Library-Inhalte prüfen fehlgeschlagen",
++                message=message,
++                severity="error",
++                status="unread",
++                task_local_id=task.id,
++                suno_task_id=task.task_id,
++                content_type="system",
++                content_id=task.id,
++                target_tab="library",
++                target_payload={
++                    "task_local_id": task.id,
++                    "task_type": task.task_type,
++                    "status": "FAILED",
++                    "error": str(exc)[:1000],
++                },
++                completed_at=now,
++            ))
++            db.commit()
++        raise
++    finally:
++        db.close()
++
+--- /tmp/library_task_fix_before/app/routers/archive.py	2026-07-13 02:21:13.781830439 +0000
++++ app/routers/archive.py	2026-07-13 02:24:10.501637855 +0000
+@@ -33,10 +33,11 @@
+ from app.services.audio_cache_service import AudioCacheService, AudioCandidate, CoverCacheService
+ from app.services.audio_asset_materialization_service import AudioAssetMaterializationService
+ from app.services.replicate_cover_service import MODELS as REPLICATE_COVER_MODELS, ReplicateCoverService
+-from app.services.library_content_cache_service import cache_missing_library_content_once
++from app.services.library_content_cache_service import create_library_content_cache_task, run_library_content_cache_task
+ from app.services.video_asset_service import attach_video_summaries_to_assets
+ from app.services.extend_continue_at_analysis_service import analyze_continue_at_for_asset, load_extend_continue_at_settings
+ from app.services.system_status_notification_service import create_system_status_notification
++from app.services.background_task_runner import run_detached_process
+ from app.suno_client import SunoAPIClient, SunoAPIError
+ from app.utils.time_utils import utc_now_naive
+ 
+@@ -490,8 +491,26 @@
+ 
+ 
+ @router.post("/content/cache-missing", response_model=dict)
+-async def cache_missing_library_content(limit: int = 5000, db: Session = Depends(get_db)):
+-    return await cache_missing_library_content_once(db, limit=limit, notify_always=True, background=False)
++def cache_missing_library_content(limit: int = 5000, db: Session = Depends(get_db)):
++    safe_limit = min(5000, max(1, int(limit or 5000)))
++    task = create_library_content_cache_task(db, limit=safe_limit)
++    run_detached_process(
++        f"library-content-cache-{task.id}",
++        run_library_content_cache_task,
++        task.id,
++        safe_limit,
++        finalize_task_id=task.id,
++    )
++    return {
++        "ok": True,
++        "queued": True,
++        "task_local_id": task.id,
++        "task_id": task.task_id,
++        "task_type": task.task_type,
++        "status": task.status,
++        "limit": safe_limit,
++        "message": "Library-Inhalte werden im Hintergrund geprüft.",
++    }
+ 
+ 
+ @router.get("/audio", response_model=list[AudioAssetRead])
+--- /tmp/library_task_fix_before/frontend-react/src/App.jsx	2026-07-13 02:21:13.795625377 +0000
++++ frontend-react/src/App.jsx	2026-07-13 02:22:15.723608329 +0000
+@@ -1434,6 +1434,17 @@
+     }
+   }, [refreshPendingAndReload, refreshAll, notify]);
+ 
++  const handleBackgroundTaskStarted = useCallback(async () => {
++    setPollingUntil(Date.now() + POLLING_AFTER_CREATE_MS);
++    await refreshAll({
++      silent: true,
++      content: false,
++      tasks: true,
++      credits: false,
++      notifications: true
++    });
++  }, [refreshAll]);
++
+   function findTaskForNotification(notification) {
+     const payload = notification?.target_payload || {};
+     const localId = payload.task_local_id || notification?.task_local_id;
+@@ -1791,7 +1802,7 @@
+ 
+   const currentPage = useMemo(() => {
+     if (activeTab === 'home') return <HomePage assets={assets} lyrics={lyrics} playlists={playlists} tasks={tasks} notifications={notifications} onNavigate={openMainTab} onPlay={play} onOpenAsset={requestLibraryAssetOpen} />;
+-    if (activeTab === 'library') return <LibraryPage assets={assets} loadError={libraryLoadError} voices={voices} playlists={playlists} onReload={refreshAll} onPlay={play} notify={notify} onUseLyric={useLyricForMusic} onReusePrompt={reusePromptForMusic} openAssetId={libraryOpenAssetId} openAssetRequestKey={libraryOpenRequestKey} onOpenAssetHandled={handleLibraryOpenAssetHandled} resetSignal={libraryResetSignal} onOpenDaw={openAssetInDaw} playbackState={stablePlaybackState} onToggleCurrentPlayback={toggleCurrentPlayer} onDetailTitleChange={handleLibraryDetailRouteChange} routeDetailSlug={libraryRouteDetailSlug} searchQuery={commandQuery} onTrashChanged={markTrashHasItems} />;
++    if (activeTab === 'library') return <LibraryPage assets={assets} loadError={libraryLoadError} voices={voices} playlists={playlists} onReload={refreshAll} onTaskStarted={handleBackgroundTaskStarted} onPlay={play} notify={notify} onUseLyric={useLyricForMusic} onReusePrompt={reusePromptForMusic} openAssetId={libraryOpenAssetId} openAssetRequestKey={libraryOpenRequestKey} onOpenAssetHandled={handleLibraryOpenAssetHandled} resetSignal={libraryResetSignal} onOpenDaw={openAssetInDaw} playbackState={stablePlaybackState} onToggleCurrentPlayback={toggleCurrentPlayer} onDetailTitleChange={handleLibraryDetailRouteChange} routeDetailSlug={libraryRouteDetailSlug} searchQuery={commandQuery} onTrashChanged={markTrashHasItems} />;
+     if (activeTab === 'imports') return <ImportPage notify={notify} onReload={refreshAll} onOpenAsset={requestLibraryAssetOpen} />;
+     if (activeTab === 'music') return <MusicPage styles={styles} voices={voices} uploadedFiles={uploadedFiles} assets={assets} draft={musicDraft} notify={notify} onRefresh={refreshAll} onMusicStarted={handleMusicStarted} initialWizard={musicWizardSignal} taskRefreshState={taskRefreshState} onCheckStatus={() => refreshPendingAndReload({ manual: true })} />;
+     if (activeTab === 'lyrics') return <LyricsStudioPage lyrics={lyrics} assets={assets} notify={notify} onRefresh={refreshAll} useForMusic={useLyricForMusic} />;
+@@ -1804,7 +1815,7 @@
+     if (activeTab === 'status') return <StatusPage notifications={notifications} tasks={tasks} onReload={refreshAll} onCheckStatus={() => refreshPendingAndReload({ manual: true })} taskRefreshState={taskRefreshState} onOpenNotification={openNotification} onOpenTaskDetails={openTaskDetails} notify={notify} />;
+     if (activeTab === 'help') return <HelpPage onNavigate={openMainTab} notify={notify} />;
+     return <SystemPage notify={notify} uploadedFiles={uploadedFiles} onRefresh={refreshAll} />;
+-  }, [activeTab, assets, libraryLoadError, lyrics, styles, voices, uploadedFiles, playlists, musicDraft, currentPageNotifications, currentPageTasks, libraryOpenAssetId, dawOpenAssetId, libraryResetSignal, libraryRouteDetailSlug, commandQuery, musicWizardSignal, currentPageTaskRefreshState, stablePlaybackState, toggleCurrentPlayer, handleLibraryOpenAssetHandled, refreshAll, refreshPendingAndReload, handleMusicStarted, notify, requestLibraryAssetOpen, handleLibraryDetailRouteChange, libraryOpenRequestKey, markTrashHasItems]);
++  }, [activeTab, assets, libraryLoadError, lyrics, styles, voices, uploadedFiles, playlists, musicDraft, currentPageNotifications, currentPageTasks, libraryOpenAssetId, dawOpenAssetId, libraryResetSignal, libraryRouteDetailSlug, commandQuery, musicWizardSignal, currentPageTaskRefreshState, stablePlaybackState, toggleCurrentPlayer, handleLibraryOpenAssetHandled, refreshAll, refreshPendingAndReload, handleMusicStarted, handleBackgroundTaskStarted, notify, requestLibraryAssetOpen, handleLibraryDetailRouteChange, libraryOpenRequestKey, markTrashHasItems]);
+ 
+   if (!authChecked) return <main className="loading">{t('app.loading', 'Lade Anwendung…')}</main>;
+   if (!user) return <Login onLogin={setUser} />;
+--- /tmp/library_task_fix_before/frontend-react/src/pages/LibraryPage.jsx	2026-07-13 02:21:13.805742322 +0000
++++ frontend-react/src/pages/LibraryPage.jsx	2026-07-13 02:22:15.722749505 +0000
+@@ -879,7 +879,7 @@
+   );
+ }
+ 
+-export function LibraryPage({ assets, loadError = '', voices = [], playlists = [], onReload, onPlay, notify, onUseLyric, onReusePrompt, openAssetId, openAssetRequestKey = 0, onOpenAssetHandled, resetSignal = 0, onOpenDaw, playbackState = {}, onToggleCurrentPlayback, onDetailTitleChange, routeDetailSlug = '', searchQuery = '', onTrashChanged }) {
++export function LibraryPage({ assets, loadError = '', voices = [], playlists = [], onReload, onTaskStarted, onPlay, notify, onUseLyric, onReusePrompt, openAssetId, openAssetRequestKey = 0, onOpenAssetHandled, resetSignal = 0, onOpenDaw, playbackState = {}, onToggleCurrentPlayback, onDetailTitleChange, routeDetailSlug = '', searchQuery = '', onTrashChanged }) {
+   const { t } = useI18n();
+   const query = String(searchQuery || '');
+   const [type, setType] = useState('all');
+@@ -3784,8 +3784,12 @@
+     try {
+       setContentCacheBusy(true);
+       const result = await api.archive.cacheMissingContent();
+-      notify?.(result?.message || t('library.messages.libraryContentChecked', 'Library-Inhalte wurden geprüft.'), result?.failed ? 'warning' : 'success');
+-      await onReload?.({ forceContentRefresh: true });
++      notify?.(result?.message || t('library.messages.libraryContentCheckStarted', 'Library-Inhalte werden im Hintergrund geprüft.'), 'success');
++      if (result?.queued && onTaskStarted) {
++        await onTaskStarted(result);
++      } else {
++        await onReload?.({ silent: true, content: false, credits: false, notifications: true, tasks: true });
++      }
+     } catch (err) {
+       notify?.(err?.message || t('library.messages.libraryContentCheckFailed', 'Library-Inhalte konnten nicht geprüft werden.'), 'error');
+     } finally {
+--- /tmp/library_task_fix_before/tests/test_library_content_cache_service.py	2026-07-13 02:21:13.814611629 +0000
++++ tests/test_library_content_cache_service.py	2026-07-13 02:22:15.723927396 +0000
+@@ -17,6 +17,7 @@
+     _known_cover_urls,
+     _repair_generation_options_from_tasks,
+     cache_missing_library_content_once,
++    create_library_content_cache_task,
+ )
+ from app.services.audio_cache_service import CoverCacheService
+ from app.services.library_ai_tagging_service import normalize_ai_tags
+@@ -299,3 +300,58 @@
+     assert task.request_payload["generation_options_provider_check_version"] == "sunoapi-options-v3"
+     assert asset.metadata_json["request_payload"]["negativeTags"] == "no noise"
+     assert asset.metadata_json["request_payload"]["personaId"] == "persona_provider"
++
++@pytest.mark.asyncio
++async def test_manual_content_check_reuses_precreated_running_task(monkeypatch, isolated_db_session):
++    db = isolated_db_session
++
++    async def no_provider_backfill(self, *, limit=40):
++        return 0
++
++    monkeypatch.setattr(MusicService, "repair_imported_task_generation_options_from_provider", no_provider_backfill)
++
++    task = create_library_content_cache_task(db, limit=123)
++    assert task.status == "RUNNING"
++    assert task.completed_at is None
++    assert task.request_payload["background"] is True
++
++    result = await cache_missing_library_content_once(
++        db,
++        limit=123,
++        notify_always=True,
++        background=False,
++        status_task=task,
++    )
++
++    db.refresh(task)
++    rows = db.query(SunoTask).filter(SunoTask.task_type == "library_content_cache").all()
++    assert result["ok"] is True
++    assert len(rows) == 1
++    assert rows[0].id == task.id
++    assert task.status == "SUCCESS"
++    assert task.completed_at is not None
++    assert task.progress == 100
++    assert task.result_payload["limit"] == 123
++
++
++def test_archive_content_check_returns_running_task_immediately(monkeypatch, isolated_db_session):
++    from app.routers import archive as archive_router
++
++    captured = {}
++
++    def fake_run_detached_process(name, target, *args, **kwargs):
++        captured.update({"name": name, "target": target, "args": args, "kwargs": kwargs})
++        return object()
++
++    monkeypatch.setattr(archive_router, "run_detached_process", fake_run_detached_process)
++
++    result = archive_router.cache_missing_library_content(limit=321, db=isolated_db_session)
++
++    task = isolated_db_session.query(SunoTask).filter(SunoTask.id == result["task_local_id"]).one()
++    assert result["queued"] is True
++    assert result["status"] == "RUNNING"
++    assert task.status == "RUNNING"
++    assert task.completed_at is None
++    assert captured["args"] == (task.id, 321)
++    assert captured["kwargs"]["finalize_task_id"] == task.id
++
+--- /tmp/library_task_fix_before/tests/test_frontend_source_regressions.py	2026-07-13 02:21:13.821217782 +0000
++++ tests/test_frontend_source_regressions.py	2026-07-13 02:22:15.724143399 +0000
+@@ -409,3 +409,18 @@
+     assert "asset-menu" in css
+     assert "mini-player" in css
+     assert "z-index" in css
++
++def test_library_content_check_uses_background_task_start_callback():
++    source = (ROOT / "frontend-react/src/pages/LibraryPage.jsx").read_text(encoding="utf-8")
++    assert "onTaskStarted" in source
++    assert "result?.queued && onTaskStarted" in source
++    assert "await onTaskStarted(result)" in source
++    assert "forceContentRefresh: true" not in source[source.index("async function cacheMissingLibraryContent"):source.index("function audioMenuKey")]
++
++
++def test_app_enables_polling_window_for_library_background_tasks():
++    source = (ROOT / "frontend-react/src/App.jsx").read_text(encoding="utf-8")
++    assert "const handleBackgroundTaskStarted = useCallback" in source
++    assert "setPollingUntil(Date.now() + POLLING_AFTER_CREATE_MS)" in source
++    assert "onTaskStarted={handleBackgroundTaskStarted}" in source
++

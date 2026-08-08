@@ -1699,7 +1699,11 @@ class GlobalAssistantService:
             signature.add("male")
         if "female" in lowered:
             signature.add("female")
-        if any(token in lowered for token in ("singer", "singing", "sung", "belting", "falsetto", "vocalist")):
+        # "No Singing" describes an exclusion, not a singer role.  Keeping it in
+        # the singer scan made a rapper block with "No Singing" look like an
+        # impossible singer/section combination during preview validation.
+        without_no_singing = re.sub(r"\bno\s+singing\b", "", lowered)
+        if any(token in without_no_singing for token in ("singer", "singing", "sung", "belting", "falsetto", "vocalist")):
             signature.add("singer")
         without_no_rap = lowered.replace("no rap", "")
         if any(token in without_no_rap for token in ("rapper", " rap ", "rap break", "spoken rap", "toaster")):
@@ -1752,6 +1756,53 @@ class GlobalAssistantService:
         flush()
         return conflicts
 
+    def _remove_conflicting_section_exclusions(
+        self,
+        tag: str,
+        local_roles: list[frozenset[str]],
+    ) -> str:
+        """Keep a generated section header compatible with its local role blocks.
+
+        A section-wide ``No Rap`` / ``No Singing`` is invalid when the original
+        lyrics contain a local rapper / singer block in that very section.  The
+        local block is the more precise user-authored instruction, so only the
+        incompatible generated exclusion is removed.
+        """
+        has_rapper = any("rapper" in role for role in local_roles)
+        has_singer = any("singer" in role for role in local_roles)
+        if not has_rapper and not has_singer:
+            return tag
+
+        inner = str(tag or "").strip().strip("[]").strip()
+        if ":" not in inner:
+            return tag
+        section, descriptor_text = (part.strip() for part in inner.split(":", 1))
+        descriptors = [part.strip() for part in re.split(r"\s*[,|]\s*", descriptor_text) if part.strip()]
+        compatible_descriptors = [
+            descriptor
+            for descriptor in descriptors
+            if not (
+                (has_rapper and re.search(r"\bno\s+rap\b", descriptor, re.IGNORECASE))
+                or (has_singer and re.search(r"\bno\s+singing\b", descriptor, re.IGNORECASE))
+            )
+        ]
+        if len(compatible_descriptors) == len(descriptors):
+            return tag
+        if not compatible_descriptors:
+            return f"[{section}]"
+        return f"[{section}: {', '.join(compatible_descriptors)}]"
+
+    def _local_roles_until_next_section(self, lines: list[str], start_index: int) -> list[frozenset[str]]:
+        roles: list[frozenset[str]] = []
+        for raw_line in lines[start_index:]:
+            line = str(raw_line or "").strip()
+            if self._lyric_section_meta(line):
+                break
+            signature = self._role_directive_signature(line)
+            if signature:
+                roles.append(signature)
+        return roles
+
     def _validate_style_tagged_lyrics(self, original: str, candidate: str) -> list[str]:
         errors: list[str] = []
         if self._lyric_content_lines(original) != self._lyric_content_lines(candidate):
@@ -1782,7 +1833,12 @@ class GlobalAssistantService:
                 break
             candidate_index += 1
 
-        errors.extend(self._section_role_conflicts(candidate))
+        # Do not reject a preview merely because the source text already contains
+        # a contradictory user-authored section instruction.  The preview must
+        # preserve that text; only conflicts introduced by the conversion are an
+        # error.
+        original_conflicts = set(self._section_role_conflicts(original))
+        errors.extend(error for error in self._section_role_conflicts(candidate) if error not in original_conflicts)
         return list(dict.fromkeys(errors))
 
     def _section_descriptor_parts(self, line: str) -> list[str]:
@@ -2007,6 +2063,10 @@ class GlobalAssistantService:
                     index += 1
                     continue
                 tag_text = str(replacement.get("tag") or "").strip()
+                tag_text = self._remove_conflicting_section_exclusions(
+                    tag_text,
+                    self._local_roles_until_next_section(lines, index + 1),
+                )
                 output.append(tag_text)
                 inserted_keys.add(self._lyric_section_key(f"{replacement.get('section') or ''} {tag_text}"))
                 inserted_bases.add(self._lyric_section_base_key(f"{replacement.get('section') or ''} {tag_text}"))

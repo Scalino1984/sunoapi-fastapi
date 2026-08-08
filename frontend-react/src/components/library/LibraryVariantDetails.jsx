@@ -165,7 +165,7 @@ export function LibraryVariantDetails({ ctx, asset, index, activeProject, projec
                 </span>
                 {voiceLabelForAsset(asset) && <span><strong>{voiceLabelForAsset(asset)}</strong><small>{t('library.detail.voice', 'Stimme')}</small></span>}
               </div>
-              {isCurrentAsset(asset) && <div className="library-inline-waveform"><span>{playbackState?.isPlaying ? t('library.playback.running', 'Läuft') : t('library.playback.ready', 'Bereit')} · {formatDuration(playbackState?.currentTime || 0)} / {formatDuration(playbackState?.duration || asset.duration_seconds)}</span><Waveform asset={asset} compact currentTime={playbackState?.currentTime || 0} durationSeconds={playbackState?.duration || asset.duration_seconds} interactive={false} /></div>}
+              {isCurrentAsset(asset) && <div className="library-inline-waveform"><span>{playbackState?.isPlaying ? t('library.playback.running', 'Läuft') : t('library.playback.ready', 'Bereit')} · {formatDuration(playbackState?.currentTime || 0)} / {formatDuration(playbackState?.duration || asset.duration_seconds)}</span><Waveform asset={asset} compact currentTime={playbackState?.currentTime || 0} durationSeconds={playbackState?.duration || asset.duration_seconds} interactive liveProgress /></div>}
             </section>
 
             <LibraryDetailSection

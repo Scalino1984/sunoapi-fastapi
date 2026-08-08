@@ -1,0 +1,2720 @@
+--- a/.env.example
++++ b/.env.example
+@@ -335,11 +335,11 @@
+ 
+ 
+ # -----------------------------------------------------------------------------
+-# Replicate cover generation
++# Replicate cover generation and optional remote Demucs stems
+ # -----------------------------------------------------------------------------
+ 
+-# Backend: API token for Replicate image generation.
+-# Frontend/Admin: Enables "Cover generieren" actions in library/song details.
++# Backend: API token for Replicate image generation and optional remote Demucs stem separation.
++# Frontend/Admin: Enables cover actions and, when selected in Admin, Demucs through Replicate.
+ REPLICATE_API_TOKEN=CHANGE_ME_OR_LEAVE_EMPTY
+ 
+ # Backend: Text model used to prepare/enrich Replicate cover prompts.
+--- a/app/routers/admin.py
++++ b/app/routers/admin.py
+@@ -31,6 +31,12 @@
+     VocalTagUpdate,
+ )
+ from app.services.ai_chat_service import AiChatService, AiProviderError
++from app.services.stem_generation_service import (
++    STEM_GENERATION_BACKENDS,
++    load_stem_generation_settings,
++    normalize_replicate_model,
++    normalize_stem_backend,
++)
+ from app.services.library_search_index_service import (
+     delete_library_search_index,
+     list_library_search_index,
+@@ -78,6 +84,8 @@
+             "srt_output_enabled": True,
+             "srt_auto_regenerate": False,
+             "srt_generate_vocal_stems_before_transcription": False,
++            "stem_generation_backend": "local_demucs",
++            "stem_replicate_model": "cjwbw/demucs:25a173108cff36ef9f80f854c162d01df9e6528be175794b81158fa03836d953",
+             "srt_ai_cleanup_enabled": True,
+             "library_content_polling_enabled": False,
+             "library_content_polling_interval_minutes": 15,
+@@ -122,6 +130,8 @@
+     if transcription_language not in {"auto", "de", "en"}:
+         transcription_language = "auto"
+ 
++    stem_settings = load_stem_generation_settings(db)
++
+     return {
+         "default_provider": provider,
+         "default_model": model,
+@@ -141,6 +151,13 @@
+         "srt_output_enabled": bool(value.get("srt_output_enabled", True)),
+         "srt_auto_regenerate": bool(value.get("srt_auto_regenerate", False)),
+         "srt_generate_vocal_stems_before_transcription": bool(value.get("srt_generate_vocal_stems_before_transcription", False)),
++        "stem_generation_backend": stem_settings["backend"],
++        "stem_replicate_model": stem_settings["replicate_model"],
++        "stem_runtime": {
++            "local_demucs": {"configured": stem_settings["local_configured"]},
++            "replicate_demucs": {"configured": stem_settings["replicate_configured"]},
++            "selected_configured": stem_settings["selected_configured"],
++        },
+         "srt_ai_cleanup_enabled": bool(value.get("srt_ai_cleanup_enabled", True)),
+         "library_content_polling_enabled": bool(value.get("library_content_polling_enabled", False)),
+         "library_content_polling_interval_minutes": _bounded_int(value.get("library_content_polling_interval_minutes"), 15, 1, 1440),
+@@ -227,6 +244,11 @@
+     if transcription_language not in {"auto", "de", "en"}:
+         raise HTTPException(status_code=400, detail="Transkriptionssprache ist nicht freigegeben.")
+ 
++    stem_backend = normalize_stem_backend(payload.stem_generation_backend)
++    if stem_backend not in STEM_GENERATION_BACKENDS:
++        raise HTTPException(status_code=400, detail="Stem-Backend ist nicht freigegeben.")
++    stem_replicate_model = normalize_replicate_model(payload.stem_replicate_model)
++
+     row.value = {
+         "default_provider": provider,
+         "default_model": model,
+@@ -239,6 +261,8 @@
+         "srt_output_enabled": bool(payload.srt_output_enabled),
+         "srt_auto_regenerate": bool(payload.srt_auto_regenerate),
+         "srt_generate_vocal_stems_before_transcription": bool(payload.srt_generate_vocal_stems_before_transcription),
++        "stem_generation_backend": stem_backend,
++        "stem_replicate_model": stem_replicate_model,
+         "srt_ai_cleanup_enabled": bool(payload.srt_ai_cleanup_enabled),
+         "library_content_polling_enabled": bool(payload.library_content_polling_enabled),
+         "library_content_polling_interval_minutes": _bounded_int(payload.library_content_polling_interval_minutes, 15, 1, 1440),
+--- a/app/routers/audio_assets.py
++++ b/app/routers/audio_assets.py
+@@ -49,6 +49,15 @@
+ )
+ from app.services.library_search_index_service import active_library_tagging_tasks_by_asset
+ from app.services.background_task_runner import run_detached_process
++from app.services.stem_generation_service import (
++    LOCAL_DEMUCS_BACKEND,
++    REPLICATE_DEMUCS_BACKEND,
++    load_stem_generation_settings,
++    normalize_replicate_model,
++    normalize_stem_backend,
++    run_replicate_demucs,
++    stem_backend_label,
++)
+ from app.services.task_lifecycle_service import (
+     append_task_debug_event,
+     append_task_step_log,
+@@ -579,6 +588,47 @@
+     return None, None
+ 
+ 
++def _ensure_wav_stem_source(source: Path, work_dir: Path, kind: str) -> Path:
++    """Liefert eine echte WAV-Datei, unabhängig vom Remote-Ausgabeformat."""
++    try:
++        with source.open("rb") as handle:
++            header = handle.read(12)
++    except OSError as exc:
++        raise RuntimeError(f"{kind}-Stem konnte nicht gelesen werden: {exc}") from exc
++    if source.suffix.lower() == ".wav" and header[:4] == b"RIFF" and header[8:12] == b"WAVE":
++        return source
++    ffmpeg = shutil.which("ffmpeg")
++    if not ffmpeg:
++        raise RuntimeError(f"{kind}-Stem liegt nicht als WAV vor und ffmpeg ist für die Konvertierung nicht verfügbar.")
++    target = work_dir / f"normalized_{kind}.wav"
++    completed = subprocess.run(
++        [
++            ffmpeg,
++            "-nostdin",
++            "-hide_banner",
++            "-loglevel",
++            "error",
++            "-y",
++            "-i",
++            str(source),
++            "-vn",
++            "-acodec",
++            "pcm_s16le",
++            "-ar",
++            "44100",
++            "-ac",
++            "2",
++            str(target),
++        ],
++        capture_output=True,
++        text=True,
++        timeout=60 * 20,
++    )
++    if completed.returncode != 0 or not target.exists() or target.stat().st_size <= 0:
++        detail = (completed.stderr or completed.stdout or "Stem-Konvertierung fehlgeschlagen.").strip()[-1200:]
++        raise RuntimeError(detail)
++    return target
++
+ def _copy_stem_file(source: Path, target: Path) -> dict[str, Any]:
+     target.parent.mkdir(parents=True, exist_ok=True)
+     shutil.copy2(source, target)
+@@ -587,14 +637,13 @@
+         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+             digest.update(chunk)
+     return {
+-        "local_path": to_portable_path(target, storage_root=get_settings().cover_storage_path),
++        "local_path": to_portable_path(target, storage_root=_stem_storage_path()),
+         "filename": target.name,
+         "content_type": "audio/wav",
+         "file_size_bytes": target.stat().st_size,
+         "checksum_sha256": digest.hexdigest(),
+     }
+ 
+-
+ def _asset_title(asset: AudioAsset, fallback: str = "AudioAsset") -> str:
+     return str(asset.display_title or asset.title or asset.filename or fallback).strip() or fallback
+ 
+@@ -870,18 +919,30 @@
+         raise HTTPException(status_code=500, detail=f"WAV-Konvertierung fehlgeschlagen: {exc}") from exc
+ 
+ 
+-def _create_stem_status_task(db: Session, asset: AudioAsset) -> SunoTask:
++def _create_stem_status_task(
++    db: Session,
++    asset: AudioAsset,
++    *,
++    backend: str = LOCAL_DEMUCS_BACKEND,
++    replicate_model: str | None = None,
++) -> SunoTask:
++    selected_backend = normalize_stem_backend(backend)
++    backend_label = stem_backend_label(selected_backend)
+     title = _asset_title(asset, f"AudioAsset {asset.id}")
++    request_payload: dict[str, Any] = {
++        "audio_asset_id": asset.id,
++        "title": title,
++        "backend": selected_backend,
++        "backend_label": backend_label,
++        "local_task": True,
++    }
++    if selected_backend == REPLICATE_DEMUCS_BACKEND:
++        request_payload["replicate_model"] = normalize_replicate_model(replicate_model)
+     task = SunoTask(
+         task_id=None,
+         task_type="generate_stems",
+         status="RUNNING",
+-        request_payload={
+-            "audio_asset_id": asset.id,
+-            "title": title,
+-            "backend": "demucs",
+-            "local_task": True,
+-        },
++        request_payload=request_payload,
+         response_payload=None,
+         result_payload=None,
+         error_message=None,
+@@ -893,8 +954,8 @@
+         db,
+         task,
+         event="stem_generation_started",
+-        detail="Stem-Erzeugung wurde gestartet.",
+-        data={"audio_asset_id": asset.id, "title": title, "backend": "demucs"},
++        detail=f"Stem-Erzeugung wurde mit {backend_label} gestartet.",
++        data={"audio_asset_id": asset.id, "title": title, **request_payload},
+         commit=False,
+     )
+     append_task_step_log(
+@@ -902,14 +963,14 @@
+         task,
+         phase="started",
+         phase_label="Stem-Erzeugung gestartet",
+-        detail="Vocals und Instrumental werden lokal mit Demucs erzeugt.",
+-        data={"audio_asset_id": asset.id},
++        detail=f"Vocals und Instrumental werden mit {backend_label} erzeugt.",
++        data={"audio_asset_id": asset.id, "backend": selected_backend},
+         commit=False,
+     )
+     db.add(StatusNotification(
+         event_type="stem_generation_started",
+         title=f"Stem-Erzeugung läuft: {title}",
+-        message="Vocals und Instrumental werden lokal mit Demucs erzeugt.",
++        message=f"Vocals und Instrumental werden mit {backend_label} erzeugt.",
+         severity="info",
+         status="unread",
+         task_local_id=task.id,
+@@ -917,15 +978,23 @@
+         content_type="audio",
+         content_id=asset.id,
+         target_tab="status",
+-        target_payload={"audio_asset_id": asset.id, "task_local_id": task.id, "task_type": "generate_stems", "status": "RUNNING"},
++        target_payload={
++            "audio_asset_id": asset.id,
++            "task_local_id": task.id,
++            "task_type": "generate_stems",
++            "status": "RUNNING",
++            "backend": selected_backend,
++        },
+     ))
+     db.commit()
+     return task
+ 
+-
+ def _finish_stem_status_task(db: Session, task: SunoTask | None, asset: AudioAsset, status: str, message: str, result_payload: dict[str, Any] | None = None) -> None:
+     title = _asset_title(asset, f"AudioAsset {asset.id}")
+     now = utc_now_naive()
++    task_request = task.request_payload if task and isinstance(task.request_payload, dict) else {}
++    result_backend = result_payload.get("backend") if isinstance(result_payload, dict) else None
++    backend = normalize_stem_backend(result_backend or task_request.get("backend") or _asset_stem_metadata(asset).get("backend"))
+     if task:
+         task.status = status
+         task.error_message = None if status == "SUCCESS" else message
+@@ -975,12 +1044,11 @@
+         content_type="audio",
+         content_id=asset.id,
+         target_tab="status",
+-        target_payload={"audio_asset_id": asset.id, "task_local_id": task.id if task else None, "task_type": "generate_stems", "status": status},
++        target_payload={"audio_asset_id": asset.id, "task_local_id": task.id if task else None, "task_type": "generate_stems", "status": status, "backend": backend},
+         completed_at=now,
+     ))
+     db.commit()
+ 
+-
+ def _build_stems_zip(asset: AudioAsset) -> tuple[bytes, str]:
+     files = _stem_file_entries(asset)
+     title = asset.display_title or asset.title or f"audio_{asset.id}"
+@@ -1005,20 +1073,47 @@
+     return buffer.getvalue(), f"{safe_title}_{bpm}bpm_stems_asset_{asset.id}.zip"
+ 
+ 
+-def generate_stems_for_asset(db: Session, audio_asset_id: int, status_task: SunoTask | None = None) -> dict[str, Any]:
++def generate_stems_for_asset(
++    db: Session,
++    audio_asset_id: int,
++    status_task: SunoTask | None = None,
++    *,
++    backend_override: str | None = None,
++    replicate_model_override: str | None = None,
++) -> dict[str, Any]:
+     asset = db.query(AudioAsset).filter(AudioAsset.id == audio_asset_id, AudioAsset.is_deleted.is_(False)).first()
+     if not asset:
+         raise HTTPException(status_code=404, detail="AudioAsset wurde nicht gefunden.")
+ 
+-    stem_task: SunoTask | None = None
++    stem_task: SunoTask | None = status_task
++    selected_backend = LOCAL_DEMUCS_BACKEND
++    backend_label = stem_backend_label(selected_backend)
+     try:
+         audio_path = _resolve_asset_audio_file(asset)
+         if not audio_path:
+             raise HTTPException(status_code=422, detail="Keine lokale Audiodatei für Stem-Erzeugung gefunden.")
+-        if importlib.util.find_spec("demucs") is None:
+-            raise HTTPException(status_code=422, detail="Demucs ist nicht im FastAPI-Python-Environment installiert. Installiere es z. B. mit: pip install demucs")
+ 
+-        stem_task = status_task or _create_stem_status_task(db, asset)
++        stem_settings = load_stem_generation_settings(db)
++        selected_backend = normalize_stem_backend(backend_override or stem_settings.get("backend"))
++        replicate_model = normalize_replicate_model(replicate_model_override or stem_settings.get("replicate_model"))
++        backend_label = stem_backend_label(selected_backend)
++        if selected_backend == LOCAL_DEMUCS_BACKEND and importlib.util.find_spec("demucs") is None:
++            raise HTTPException(
++                status_code=422,
++                detail="Demucs ist nicht im FastAPI-Python-Environment installiert. Installiere es z. B. mit: pip install demucs oder wähle im Adminbereich Demucs über Replicate.",
++            )
++        if selected_backend == REPLICATE_DEMUCS_BACKEND and not str(get_settings().replicate_api_token or "").strip():
++            raise HTTPException(
++                status_code=422,
++                detail="Replicate ist für die Stem-Erzeugung ausgewählt, aber REPLICATE_API_TOKEN ist nicht konfiguriert.",
++            )
++
++        stem_task = stem_task or _create_stem_status_task(
++            db,
++            asset,
++            backend=selected_backend,
++            replicate_model=replicate_model,
++        )
+         bpm = _extract_bpm_from_asset(asset)
+         bpm_part = f"{bpm}bpm" if bpm else "unknownbpm"
+         safe_title = _safe_zip_part(asset.display_title or asset.title or audio_path.stem or f"audio_{asset.id}", f"audio_{asset.id}")
+@@ -1029,64 +1124,98 @@
+         stems_meta = metadata.get("stems") if isinstance(metadata.get("stems"), dict) else {}
+         stems_meta.update({
+             "status": "running",
+-            "backend": "demucs",
++            "backend": selected_backend,
++            "backend_label": backend_label,
+             "started_at": utc_now_naive().isoformat(),
+             "bpm": bpm,
+             "task_local_id": stem_task.id,
+         })
++        if selected_backend == REPLICATE_DEMUCS_BACKEND:
++            stems_meta["replicate_model"] = replicate_model
+         metadata["stems"] = stems_meta
+         asset.metadata_json = metadata
+         db.commit()
+ 
++        execution_metadata: dict[str, Any] = {}
+         with tempfile.TemporaryDirectory(prefix=f"songstudio_stems_{asset.id}_") as tmp:
+             out_root = Path(tmp).resolve()
+-            cmd = [
+-                sys.executable,
+-                "-m",
+-                "demucs",
+-                "--two-stems",
+-                "vocals",
+-                "-n",
+-                "htdemucs",
+-                "--out",
+-                str(out_root),
+-                str(audio_path),
+-            ]
+-            completed = subprocess.run(cmd, capture_output=True, text=True, timeout=60 * 60)
+-            if completed.returncode != 0:
+-                detail = (completed.stderr or completed.stdout or "Demucs fehlgeschlagen.").strip()[-1200:]
+-                raise RuntimeError(detail)
+-            vocals_src, instrumental_src = _find_demucs_output(out_root, audio_path.stem, audio_path.name)
+-            if not vocals_src or not instrumental_src:
+-                raise RuntimeError("Demucs hat keine vocals.wav und no_vocals.wav erzeugt.")
+-            vocals_info = _copy_stem_file(vocals_src, target_dir / f"{safe_title}_{bpm_part}_vocals.wav")
+-            instrumental_info = _copy_stem_file(instrumental_src, target_dir / f"{safe_title}_{bpm_part}_instrumental.wav")
++            if selected_backend == LOCAL_DEMUCS_BACKEND:
++                cmd = [
++                    sys.executable,
++                    "-m",
++                    "demucs",
++                    "--two-stems",
++                    "vocals",
++                    "-n",
++                    "htdemucs",
++                    "--out",
++                    str(out_root),
++                    str(audio_path),
++                ]
++                completed = subprocess.run(cmd, capture_output=True, text=True, timeout=60 * 60)
++                if completed.returncode != 0:
++                    detail = (completed.stderr or completed.stdout or "Demucs fehlgeschlagen.").strip()[-1200:]
++                    raise RuntimeError(detail)
++                vocals_src, instrumental_src = _find_demucs_output(out_root, audio_path.stem, audio_path.name)
++                if not vocals_src or not instrumental_src:
++                    raise RuntimeError("Demucs hat keine vocals.wav und no_vocals.wav erzeugt.")
++                execution_metadata = {"model": "htdemucs", "mode": "two_stems_vocals"}
++            else:
++                vocals_src, instrumental_src, execution_metadata = run_replicate_demucs(
++                    audio_path,
++                    out_root / "replicate_output",
++                    model_id=replicate_model,
++                    api_token=str(get_settings().replicate_api_token or "").strip(),
++                )
++
++            vocals_wav = _ensure_wav_stem_source(vocals_src, out_root, "vocals")
++            instrumental_wav = _ensure_wav_stem_source(instrumental_src, out_root, "instrumental")
++            vocals_info = _copy_stem_file(vocals_wav, target_dir / f"{safe_title}_{bpm_part}_vocals.wav")
++            instrumental_info = _copy_stem_file(instrumental_wav, target_dir / f"{safe_title}_{bpm_part}_instrumental.wav")
+ 
+         metadata = _safe_metadata(asset.metadata_json)
+         metadata["stems"] = {
+             "status": "completed",
+-            "backend": "demucs",
++            "backend": selected_backend,
++            "backend_label": backend_label,
+             "mode": "two_stems_vocals",
+             "bpm": bpm,
+             "generated_at": utc_now_naive().isoformat(),
+             "source_audio_path": str(audio_path),
+             "task_local_id": stem_task.id,
++            "execution": execution_metadata,
+             "files": {
+                 "vocals": vocals_info,
+                 "instrumental": instrumental_info,
+             },
+         }
++        if selected_backend == REPLICATE_DEMUCS_BACKEND:
++            metadata["stems"]["replicate_model"] = replicate_model
+         asset.metadata_json = metadata
+         db.commit()
+         db.refresh(asset)
+         result = _stem_download_payload(asset)
+-        _finish_stem_status_task(db, stem_task, asset, "SUCCESS", "Stem-Dateien wurden erzeugt und gespeichert.", result)
++        _finish_stem_status_task(
++            db,
++            stem_task,
++            asset,
++            "SUCCESS",
++            f"Stem-Dateien wurden mit {backend_label} erzeugt und lokal gespeichert.",
++            result,
++        )
+         return result
+     except HTTPException as exc:
+         metadata = _safe_metadata(asset.metadata_json) if asset else {}
+         if asset:
+             stems_meta = metadata.get("stems") if isinstance(metadata.get("stems"), dict) else {}
+-            stems_meta.update({"status": "failed", "error_message": str(exc.detail), "updated_at": utc_now_naive().isoformat(), "task_local_id": stem_task.id if stem_task else None})
++            stems_meta.update({
++                "status": "failed",
++                "backend": selected_backend,
++                "backend_label": backend_label,
++                "error_message": str(exc.detail),
++                "updated_at": utc_now_naive().isoformat(),
++                "task_local_id": stem_task.id if stem_task else None,
++            })
+             metadata["stems"] = stems_meta
+             asset.metadata_json = metadata
+             db.commit()
+@@ -1096,7 +1225,14 @@
+         if asset:
+             metadata = _safe_metadata(asset.metadata_json)
+             stems_meta = metadata.get("stems") if isinstance(metadata.get("stems"), dict) else {}
+-            stems_meta.update({"status": "failed", "error_message": str(exc), "updated_at": utc_now_naive().isoformat(), "task_local_id": stem_task.id if stem_task else None})
++            stems_meta.update({
++                "status": "failed",
++                "backend": selected_backend,
++                "backend_label": backend_label,
++                "error_message": str(exc),
++                "updated_at": utc_now_naive().isoformat(),
++                "task_local_id": stem_task.id if stem_task else None,
++            })
+             metadata["stems"] = stems_meta
+             asset.metadata_json = metadata
+             db.commit()
+@@ -1682,6 +1818,8 @@
+     errors: list[dict[str, Any]] = []
+     try:
+         asset_ids = _dedupe_positive_ids(payload.get("ids") or [])
++        backend = normalize_stem_backend(payload.get("backend"))
++        replicate_model = normalize_replicate_model(payload.get("replicate_model"))
+         total = len(asset_ids)
+         for index, asset_id in enumerate(asset_ids, start=1):
+             heartbeat_task(db, master_task_id, progress={"current": index, "total": total, "audio_asset_id": asset_id, "success": success, "failed": failed, "skipped": skipped})
+@@ -1699,7 +1837,12 @@
+                 if not local_path or not local_path.exists() or not local_path.is_file():
+                     skipped += 1
+                     continue
+-                generate_stems_for_asset(db, asset_id)
++                generate_stems_for_asset(
++                    db,
++                    asset_id,
++                    backend_override=backend,
++                    replicate_model_override=replicate_model,
++                )
+                 success += 1
+             except Exception as exc:
+                 failed += 1
+@@ -1731,7 +1874,6 @@
+         stop_heartbeat()
+         db.close()
+ 
+-
+ def _delete_srt_content(db: Session, asset: AudioAsset) -> dict[str, Any]:
+     settings = get_settings()
+     rows = db.query(AudioTranscript).filter(AudioTranscript.audio_asset_id == asset.id).all()
+@@ -2481,6 +2623,8 @@
+     if isinstance(stem_files.get("vocals"), dict):
+         result["skipped_reason"] = "vocal_stem_exists"
+         return result
++    stem_settings = load_stem_generation_settings(db)
++    selected_backend = normalize_stem_backend(stem_settings.get("backend"))
+     if status_task is not None:
+         heartbeat_task(
+             db,
+@@ -2490,29 +2634,42 @@
+                 "total": 1,
+                 "audio_asset_id": audio_asset_id,
+                 "phase": "vocal_stems_before_srt",
+-                "detail": "Vocal-Stems werden vor der SRT-Transkription erzeugt (Demucs).",
++                "backend": selected_backend,
++                "detail": f"Vocal-Stems werden vor der SRT-Transkription mit {stem_backend_label(selected_backend)} erzeugt.",
+             },
+         )
+-    generate_stems_for_asset(db, audio_asset_id)
++    generate_stems_for_asset(
++        db,
++        audio_asset_id,
++        backend_override=selected_backend,
++        replicate_model_override=stem_settings.get("replicate_model"),
++    )
+     result["generated"] = True
+     return result
+ 
+-
+ def _run_single_stems_generation_background(task_id: int, audio_asset_id: int) -> None:
+     db = SessionLocal()
+     try:
+         task = db.query(SunoTask).filter(SunoTask.id == task_id).first()
+-        heartbeat_task(db, task_id, progress={"current": 1, "total": 1, "audio_asset_id": audio_asset_id})
++        request_payload = task.request_payload if task and isinstance(task.request_payload, dict) else {}
++        backend = normalize_stem_backend(request_payload.get("backend"))
++        replicate_model = normalize_replicate_model(request_payload.get("replicate_model"))
++        heartbeat_task(db, task_id, progress={"current": 1, "total": 1, "audio_asset_id": audio_asset_id, "backend": backend})
+         if is_cancel_requested(db, task_id):
+             raise RuntimeError("Stem-Erzeugung wurde vor dem Start abgebrochen.")
+-        generate_stems_for_asset(db, audio_asset_id, status_task=task)
++        generate_stems_for_asset(
++            db,
++            audio_asset_id,
++            status_task=task,
++            backend_override=backend,
++            replicate_model_override=replicate_model,
++        )
+     except Exception:
+         db.rollback()
+         raise
+     finally:
+         db.close()
+ 
+-
+ def _run_audio_ai_analysis_background(task_id: int, audio_asset_id: int, payload: dict[str, Any]) -> None:
+     db = SessionLocal()
+     try:
+@@ -2618,23 +2775,32 @@
+ @router.post("/bulk/stems/generate")
+ def bulk_generate_stems(payload: BulkGenerateStemsRequest, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+     asset_ids = _dedupe_positive_ids(payload.ids)
++    stem_settings = load_stem_generation_settings(db)
++    backend = normalize_stem_backend(stem_settings.get("backend"))
++    replicate_model = normalize_replicate_model(stem_settings.get("replicate_model"))
+     task = _create_bulk_status_task(
+         db,
+         task_type="bulk_generate_stems",
+         title="Stem-Sammellauf gestartet",
+-        message=f"Stem-Erzeugung für {len(asset_ids)} Varianten läuft im Hintergrund.",
++        message=f"Stem-Erzeugung für {len(asset_ids)} Varianten läuft mit {stem_backend_label(backend)} im Hintergrund.",
+         asset_ids=asset_ids,
++        request_payload={"backend": backend, "replicate_model": replicate_model if backend == REPLICATE_DEMUCS_BACKEND else None},
++    )
++    run_detached_process(
++        f"bulk-stems-{task.id}",
++        _run_bulk_stems_generation_background,
++        task.id,
++        {"ids": asset_ids, "backend": backend, "replicate_model": replicate_model},
+     )
+-    run_detached_process(f"bulk-stems-{task.id}", _run_bulk_stems_generation_background, task.id, {"ids": asset_ids})
+     return {
+         "task_local_id": task.id,
+         "task_type": "bulk_generate_stems",
+         "status": "RUNNING",
+         "count": len(asset_ids),
+-        "message": "Stem-Sammellauf wurde gestartet und läuft im Hintergrund.",
++        "backend": backend,
++        "message": f"Stem-Sammellauf mit {stem_backend_label(backend)} wurde gestartet und läuft im Hintergrund.",
+     }
+ 
+-
+ @router.post("/bulk/ai-tags/generate")
+ def bulk_generate_library_ai_tags(payload: BulkLibraryAiTaggingRequest, db: Session = Depends(get_db)):
+     settings = load_library_ai_tagging_settings(db)
+@@ -2715,11 +2881,13 @@
+     asset = db.query(AudioAsset).filter(AudioAsset.id == audio_asset_id, AudioAsset.is_deleted.is_(False)).first()
+     if not asset:
+         raise HTTPException(status_code=404, detail="AudioAsset wurde nicht gefunden.")
+-    task = _create_stem_status_task(db, asset)
+-    mark_task_started(db, task, payload={"audio_asset_id": audio_asset_id})
++    stem_settings = load_stem_generation_settings(db)
++    backend = normalize_stem_backend(stem_settings.get("backend"))
++    replicate_model = normalize_replicate_model(stem_settings.get("replicate_model"))
++    task = _create_stem_status_task(db, asset, backend=backend, replicate_model=replicate_model)
++    mark_task_started(db, task, payload={"audio_asset_id": audio_asset_id, "backend": backend, "replicate_model": replicate_model if backend == REPLICATE_DEMUCS_BACKEND else None})
+     run_detached_process(f"stems-asset-{audio_asset_id}-{task.id}", _run_single_stems_generation_background, task.id, audio_asset_id)
+-    return {"ok": True, "queued": True, "task_local_id": task.id, "task_type": "generate_stems", "status": "RUNNING", "audio_asset_id": audio_asset_id, "message": "Stem-Erzeugung wurde gestartet und läuft im Hintergrund."}
+-
++    return {"ok": True, "queued": True, "task_local_id": task.id, "task_type": "generate_stems", "status": "RUNNING", "audio_asset_id": audio_asset_id, "backend": backend, "message": f"Stem-Erzeugung mit {stem_backend_label(backend)} wurde gestartet und läuft im Hintergrund."}
+ 
+ @router.get("/{audio_asset_id}/analysis")
+ def read_audio_ai_analysis(audio_asset_id: int, db: Session = Depends(get_db)):
+--- a/app/routers/music.py
++++ b/app/routers/music.py
+@@ -53,6 +53,13 @@
+ from app.services.song_library_sync_service import SongLibrarySyncService
+ from app.services.system_status_notification_service import create_system_status_notification
+ from app.services.background_task_runner import run_detached_process
++from app.services.stem_generation_service import (
++    REPLICATE_DEMUCS_BACKEND,
++    load_stem_generation_settings,
++    normalize_replicate_model,
++    normalize_stem_backend,
++    stem_backend_label,
++)
+ from app.services.task_lifecycle_service import (
+     append_task_debug_event,
+     append_task_step_log,
+@@ -274,16 +281,24 @@
+     if not asset_ids:
+         return actions
+     if generate_stems:
++        stem_settings = load_stem_generation_settings(db)
++        backend = normalize_stem_backend(stem_settings.get("backend"))
++        replicate_model = normalize_replicate_model(stem_settings.get("replicate_model"))
+         task = _create_bulk_status_task(
+             db,
+             task_type="bulk_generate_stems",
+             title="Stem-Erzeugung nach Import gestartet",
+-            message=f"Stem-Erzeugung für {len(asset_ids)} importierte Variante(n) läuft im Hintergrund.",
++            message=f"Stem-Erzeugung für {len(asset_ids)} importierte Variante(n) läuft mit {stem_backend_label(backend)} im Hintergrund.",
+             asset_ids=asset_ids,
+-            request_payload={"source": "post_import", "generate_stems": True},
++            request_payload={
++                "source": "post_import",
++                "generate_stems": True,
++                "backend": backend,
++                "replicate_model": replicate_model if backend == REPLICATE_DEMUCS_BACKEND else None,
++            },
+         )
+-        actions.append({"type": "stems", "task_local_id": task.id, "count": len(asset_ids), "status": "RUNNING"})
+-        await _run_bulk_stems_generation_background(task.id, {"ids": asset_ids})
++        actions.append({"type": "stems", "task_local_id": task.id, "count": len(asset_ids), "status": "RUNNING", "backend": backend})
++        await _run_bulk_stems_generation_background(task.id, {"ids": asset_ids, "backend": backend, "replicate_model": replicate_model})
+     if generate_srt:
+         task = _create_bulk_status_task(
+             db,
+@@ -495,16 +510,29 @@
+     if not asset_ids:
+         return actions
+     if generate_stems:
++        stem_settings = load_stem_generation_settings(db)
++        backend = normalize_stem_backend(stem_settings.get("backend"))
++        replicate_model = normalize_replicate_model(stem_settings.get("replicate_model"))
+         task = _create_bulk_status_task(
+             db,
+             task_type="bulk_generate_stems",
+             title="Stem-Erzeugung nach Import gestartet",
+-            message=f"Stem-Erzeugung für {len(asset_ids)} importierte Variante(n) läuft im Hintergrund.",
++            message=f"Stem-Erzeugung für {len(asset_ids)} importierte Variante(n) läuft mit {stem_backend_label(backend)} im Hintergrund.",
+             asset_ids=asset_ids,
+-            request_payload={"source": "post_import", "generate_stems": True},
++            request_payload={
++                "source": "post_import",
++                "generate_stems": True,
++                "backend": backend,
++                "replicate_model": replicate_model if backend == REPLICATE_DEMUCS_BACKEND else None,
++            },
++        )
++        run_detached_process(
++            f"post-import-stems-{task.id}",
++            _run_bulk_stems_generation_background,
++            task.id,
++            {"ids": asset_ids, "backend": backend, "replicate_model": replicate_model},
+         )
+-        run_detached_process(f"post-import-stems-{task.id}", _run_bulk_stems_generation_background, task.id, {"ids": asset_ids})
+-        actions.append({"type": "stems", "task_local_id": task.id, "count": len(asset_ids), "status": "RUNNING"})
++        actions.append({"type": "stems", "task_local_id": task.id, "count": len(asset_ids), "status": "RUNNING", "backend": backend})
+     if generate_srt:
+         task = _create_bulk_status_task(
+             db,
+--- a/app/schemas.py
++++ b/app/schemas.py
+@@ -1820,6 +1820,9 @@
+     srt_output_enabled: bool = True
+     srt_auto_regenerate: bool = False
+     srt_generate_vocal_stems_before_transcription: bool = False
++    stem_generation_backend: str = "local_demucs"
++    stem_replicate_model: str = Field(default="cjwbw/demucs:25a173108cff36ef9f80f854c162d01df9e6528be175794b81158fa03836d953", min_length=3, max_length=240)
++    stem_runtime: dict[str, Any] = Field(default_factory=dict)
+     srt_ai_cleanup_enabled: bool = True
+     srt_alignment_engine: str = "heuristic"
+     srt_quality_gate_enabled: bool = False
+@@ -1860,6 +1863,8 @@
+     srt_output_enabled: bool = True
+     srt_auto_regenerate: bool = False
+     srt_generate_vocal_stems_before_transcription: bool = False
++    stem_generation_backend: str = "local_demucs"
++    stem_replicate_model: str = Field(default="cjwbw/demucs:25a173108cff36ef9f80f854c162d01df9e6528be175794b81158fa03836d953", min_length=3, max_length=240)
+     srt_ai_cleanup_enabled: bool = True
+     srt_alignment_engine: str = "heuristic"
+     srt_quality_gate_enabled: bool = False
+--- a/app/services/library_content_cache_service.py
++++ b/app/services/library_content_cache_service.py
+@@ -1095,6 +1095,7 @@
+     ))
+ 
+     should_notify = notify_always or (background and changed_total > 0)
++    notification: StatusNotification | None = None
+     if should_notify:
+         if background and changed_total > 0:
+             title = "Neue Inhalte wurden geladen"
+@@ -1104,7 +1105,7 @@
+             title = "Library-Inhalte geprüft"
+             notification_message = f"Nachgeladen: {audio_cached} Audios, {cover_cached} Cover. Metadaten repariert: {stale_metadata_fixed}.{materialization_note} Übersprungen: {skipped}, nicht cachebar: {unavailable}, Fehler: {failed}."
+             event_type = "library_content_cache_completed"
+-        db.add(StatusNotification(
++        notification = StatusNotification(
+             event_type=event_type,
+             title=title,
+             message=notification_message,
+@@ -1115,9 +1116,17 @@
+             content_type="system",
+             content_id=local_task.id,
+             target_tab="library",
+-            target_payload=result_payload,
++            target_payload=dict(result_payload),
+             completed_at=utc_now_naive(),
+-        ))
++        )
++        db.add(notification)
++        db.flush()
++        result_payload = {**result_payload, "notification_id": notification.id}
++        local_task.result_payload = result_payload
++        response_payload = dict(local_task.response_payload or {})
++        response_payload["notification_id"] = notification.id
++        local_task.response_payload = response_payload
++        db.add(local_task)
+     db.commit()
+ 
+     return {
+@@ -1141,6 +1150,7 @@
+         "unavailable_examples": unavailable_examples,
+         "error_examples": error_examples,
+         "background": background,
++        "notification_id": notification.id if notification is not None else None,
+         "message": message,
+     }
+ 
+--- a/app/services/srt_transcript_service.py
++++ b/app/services/srt_transcript_service.py
+@@ -53,7 +53,7 @@
+ from app.services.audio_asset_repair_service import is_audio_url, repair_local_file_metadata
+ from app.services.audio_cache_service import AudioCacheService, AudioCandidate
+ from app.services.ai_chat_service import AiChatService, AiProviderError
+-from app.services.waveform_service import extract_structure_marker
++from app.services.waveform_service import extract_structure_marker, extract_waveform_structure_marker
+ from app.utils.time_utils import utc_now_naive
+ 
+ TRANSCRIPTION_SETTINGS_KEY = "ai_chat_settings"
+@@ -3486,16 +3486,24 @@
+     }
+ 
+ 
+-def _structure_markers_from_line(line: str) -> list[dict[str, str]]:
++def _structure_markers_from_line(line: str, *, waveform_only: bool = False) -> list[dict[str, str]]:
++    """Return structure markers from a tagged lyric line.
++
++    The broader SRT alignment path keeps its established support for performance
++    markers such as Fade Out.  Waveform storage can opt into arrangement-only
++    markers so local vocal tags never split the visible song timeline.
++    """
++
++    parser = extract_waveform_structure_marker if waveform_only else extract_structure_marker
+     markers: list[dict[str, str]] = []
+     for match in re.finditer(r"\[([^\]\n]{1,260})\]", str(line or "")):
+-        marker = extract_structure_marker(match.group(1))
++        marker = parser(match.group(1))
+         if marker:
+             markers.append(marker)
+     return markers
+ 
+ 
+-def _source_structure_lyrics_lines(source_lyrics: str) -> list[dict[str, Any]]:
++def _source_structure_lyrics_lines(source_lyrics: str, *, waveform_only: bool = False) -> list[dict[str, Any]]:
+     """Map original tagged lyrics to the visible lines used by SRT alignment.
+ 
+     The SRT pipeline intentionally removes prompt/structure tags before alignment.
+@@ -3513,7 +3521,7 @@
+         if not line:
+             continue
+ 
+-        markers = _structure_markers_from_line(line)
++        markers = _structure_markers_from_line(line, waveform_only=waveform_only)
+         if markers:
+             current_marker = markers[0]
+             saw_explicit_marker = True
+@@ -3607,8 +3615,10 @@
+     source_lyrics: str,
+     srt_segments: list[dict[str, Any]],
+     duration_seconds: float | int | None,
++    *,
++    waveform_only: bool = False,
+ ) -> list[dict[str, Any]]:
+-    source_lines = _source_structure_lyrics_lines(source_lyrics)
++    source_lines = _source_structure_lyrics_lines(source_lyrics, waveform_only=waveform_only)
+     if not source_lines or not srt_segments:
+         return []
+ 
+@@ -3717,7 +3727,7 @@
+     duration_seconds: float | int | None,
+ ) -> list[dict[str, Any]]:
+     effective_duration = duration_seconds or asset.duration_seconds
+-    structure_segments = build_structure_segments_from_srt_alignment(source_lyrics, srt_segments, effective_duration)
++    structure_segments = build_structure_segments_from_srt_alignment(source_lyrics, srt_segments, effective_duration, waveform_only=True)
+     if not structure_segments:
+         return []
+ 
+@@ -4314,18 +4324,18 @@
+ 
+ 
+ def select_audio_path_for_transcription(asset: AudioAsset, original_audio_path: Path, prefer_existing_vocal_stem: bool = True) -> tuple[Path, dict[str, Any]]:
++    metadata = asset.metadata_json if isinstance(asset.metadata_json, dict) else {}
++    stems = metadata.get("stems") if isinstance(metadata.get("stems"), dict) else {}
+     if prefer_existing_vocal_stem:
+         vocal_stem = _existing_vocal_stem_path(asset)
+         if vocal_stem:
+             return vocal_stem, {
+                 "source": "existing_vocal_stem",
+-                "stem_backend": "demucs",
++                "stem_backend": stems.get("backend") or "demucs",
+                 "stem_kind": "vocals",
+                 "path": str(vocal_stem),
+             }
+ 
+-    metadata = asset.metadata_json if isinstance(asset.metadata_json, dict) else {}
+-    stems = metadata.get("stems") if isinstance(metadata.get("stems"), dict) else {}
+     return original_audio_path, {
+         "source": "original_audio",
+         "stem_status": stems.get("status") or "missing",
+--- a/app/services/stem_generation_service.py
++++ b/app/services/stem_generation_service.py
+@@ -0,0 +1,268 @@
++from __future__ import annotations
++
++"""Backend-Auswahl und Replicate-Ausführung für Demucs-Stems.
++
++Der bestehende lokale Demucs-Pfad bleibt Standard. Replicate ist eine optionale
++Ausführungsumgebung für schwache Server und liefert weiterhin dieselben zwei
++lokal gespeicherten Dateien (Vocals + Instrumental) an den bestehenden
++AudioAsset-/Download-Workflow.
++"""
++
++from collections.abc import Iterable
++from pathlib import Path
++from typing import Any
++from urllib.parse import urlparse
++from zipfile import BadZipFile, ZipFile
++import importlib.util
++import mimetypes
++import re
++import shutil
++
++import httpx
++from sqlalchemy.orm import Session
++
++from app.config import get_settings
++from app.models import AppSetting
++
++
++AI_SETTINGS_KEY = "ai_chat_settings"
++LOCAL_DEMUCS_BACKEND = "local_demucs"
++REPLICATE_DEMUCS_BACKEND = "replicate_demucs"
++STEM_GENERATION_BACKENDS = {LOCAL_DEMUCS_BACKEND, REPLICATE_DEMUCS_BACKEND}
++DEFAULT_REPLICATE_DEMUCS_MODEL = (
++    "cjwbw/demucs:25a173108cff36ef9f80f854c162d01df9e6528be175794b81158fa03836d953"
++)
++REPLICATE_LOCAL_FILE_LIMIT_BYTES = 100 * 1024 * 1024
++
++
++def normalize_stem_backend(value: Any) -> str:
++    backend = str(value or LOCAL_DEMUCS_BACKEND).strip().lower()
++    aliases = {
++        "demucs": LOCAL_DEMUCS_BACKEND,
++        "local": LOCAL_DEMUCS_BACKEND,
++        "replicate": REPLICATE_DEMUCS_BACKEND,
++    }
++    backend = aliases.get(backend, backend)
++    return backend if backend in STEM_GENERATION_BACKENDS else LOCAL_DEMUCS_BACKEND
++
++
++def normalize_replicate_model(value: Any) -> str:
++    model = str(value or DEFAULT_REPLICATE_DEMUCS_MODEL).strip()
++    if not model or len(model) > 240 or not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?::[A-Fa-f0-9]{16,128})?", model):
++        return DEFAULT_REPLICATE_DEMUCS_MODEL
++    return model
++
++
++def load_stem_generation_settings(db: Session) -> dict[str, Any]:
++    app_settings = get_settings()
++    row = db.query(AppSetting).filter(AppSetting.key == AI_SETTINGS_KEY).first()
++    value = row.value if row and isinstance(row.value, dict) else {}
++    backend = normalize_stem_backend(value.get("stem_generation_backend"))
++    model = normalize_replicate_model(value.get("stem_replicate_model"))
++    local_configured = importlib.util.find_spec("demucs") is not None
++    replicate_configured = bool(str(app_settings.replicate_api_token or "").strip())
++    return {
++        "backend": backend,
++        "replicate_model": model,
++        "local_configured": local_configured,
++        "replicate_configured": replicate_configured,
++        "selected_configured": local_configured if backend == LOCAL_DEMUCS_BACKEND else replicate_configured,
++    }
++
++
++def stem_backend_label(backend: str) -> str:
++    normalized = normalize_stem_backend(backend)
++    return "Demucs lokal" if normalized == LOCAL_DEMUCS_BACKEND else "Demucs über Replicate"
++
++
++def _safe_filename(value: str, fallback: str) -> str:
++    candidate = Path(str(value or "").split("?", 1)[0]).name
++    candidate = re.sub(r"[^A-Za-z0-9._-]+", "_", candidate).strip("._")
++    return candidate or fallback
++
++
++def _output_url(value: Any) -> str | None:
++    url_attr = getattr(value, "url", None)
++    if callable(url_attr):
++        try:
++            url_attr = url_attr()
++        except Exception:
++            url_attr = None
++    if isinstance(url_attr, str) and url_attr.startswith(("http://", "https://")):
++        return url_attr
++    if isinstance(value, str) and value.startswith(("http://", "https://")):
++        return value
++    return None
++
++
++def _iter_output_items(value: Any, key: str = "output") -> Iterable[tuple[str, Any]]:
++    if value is None:
++        return
++    if isinstance(value, dict):
++        for child_key, child in value.items():
++            yield from _iter_output_items(child, str(child_key))
++        return
++    if isinstance(value, (list, tuple, set)):
++        for index, child in enumerate(value):
++            yield from _iter_output_items(child, f"{key}_{index + 1}")
++        return
++    yield key, value
++
++
++def _read_output_bytes(value: Any, timeout_seconds: float = 180.0) -> tuple[bytes, str | None]:
++    if isinstance(value, (bytes, bytearray, memoryview)):
++        return bytes(value), None
++    read = getattr(value, "read", None)
++    if callable(read):
++        data = read()
++        if isinstance(data, str):
++            data = data.encode("utf-8")
++        if isinstance(data, (bytes, bytearray, memoryview)):
++            return bytes(data), _output_url(value)
++    url = _output_url(value)
++    if url:
++        with httpx.Client(timeout=timeout_seconds, follow_redirects=True) as client:
++            response = client.get(url)
++            response.raise_for_status()
++            return response.content, url
++    raise RuntimeError(f"Replicate-Ausgabe {type(value).__name__} enthält keine lesbaren Dateidaten.")
++
++
++def _safe_extract_zip(path: Path, destination: Path) -> list[Path]:
++    extracted: list[Path] = []
++    try:
++        with ZipFile(path) as archive:
++            root = destination.resolve()
++            for member in archive.infolist():
++                if member.is_dir():
++                    continue
++                target = (root / member.filename).resolve()
++                try:
++                    target.relative_to(root)
++                except ValueError:
++                    continue
++                target.parent.mkdir(parents=True, exist_ok=True)
++                with archive.open(member) as source, target.open("wb") as output:
++                    shutil.copyfileobj(source, output)
++                if target.stat().st_size > 0:
++                    extracted.append(target)
++    except BadZipFile:
++        return []
++    return extracted
++
++
++def materialize_replicate_output(output: Any, output_root: Path) -> list[Path]:
++    output_root.mkdir(parents=True, exist_ok=True)
++    materialized: list[Path] = []
++    for index, (key, value) in enumerate(_iter_output_items(output), start=1):
++        data, remote_url = _read_output_bytes(value)
++        if not data:
++            continue
++        remote_name = Path(urlparse(remote_url).path).name if remote_url else ""
++        guessed_extension = Path(remote_name).suffix or mimetypes.guess_extension(
++            mimetypes.guess_type(remote_name)[0] or ""
++        ) or ".bin"
++        key_name = _safe_filename(key, f"output_{index}")
++        if Path(key_name).suffix:
++            filename = key_name
++        elif remote_name:
++            filename = f"{key_name}_{_safe_filename(remote_name, f'output_{index}{guessed_extension}') }"
++        else:
++            filename = f"{key_name}{guessed_extension}"
++        target = output_root / filename
++        target.write_bytes(data)
++        materialized.append(target)
++        if data[:4] == b"PK\x03\x04" or target.suffix.lower() == ".zip":
++            materialized.extend(_safe_extract_zip(target, output_root / f"{target.stem}_files"))
++    return materialized
++
++
++def _role_score(path: Path, role: str) -> int:
++    name = path.name.lower().replace("-", "_")
++    if role == "vocals":
++        if "no_vocals" in name or "instrumental" in name or "accompaniment" in name:
++            return -100
++        if re.search(r"(^|_)vocals?($|[_.])", name):
++            return 100
++        if "voice" in name:
++            return 80
++        return 0
++    if "no_vocals" in name:
++        return 110
++    if "instrumental" in name:
++        return 100
++    if "accompaniment" in name:
++        return 90
++    if "other" in name and "vocals" not in name:
++        return 20
++    return 0
++
++
++def find_replicate_stem_files(paths: Iterable[Path]) -> tuple[Path, Path]:
++    audio_extensions = {".wav", ".mp3", ".flac", ".m4a", ".aac", ".ogg"}
++    candidates = [path for path in paths if path.is_file() and path.suffix.lower() in audio_extensions and path.stat().st_size > 0]
++    vocals = max(candidates, key=lambda path: _role_score(path, "vocals"), default=None)
++    instrumental = max(candidates, key=lambda path: _role_score(path, "instrumental"), default=None)
++    if not vocals or _role_score(vocals, "vocals") <= 0:
++        raise RuntimeError("Replicate-Demucs-Ausgabe enthält keinen eindeutig erkennbaren Vocal-Stem.")
++    if not instrumental or _role_score(instrumental, "instrumental") <= 0:
++        raise RuntimeError("Replicate-Demucs-Ausgabe enthält keinen eindeutig erkennbaren Instrumental-/no_vocals-Stem.")
++    if vocals.resolve() == instrumental.resolve():
++        raise RuntimeError("Replicate-Demucs hat Vocal- und Instrumental-Stem nicht getrennt geliefert.")
++    return vocals, instrumental
++
++
++def run_replicate_demucs(audio_path: Path, output_root: Path, *, model_id: str, api_token: str) -> tuple[Path, Path, dict[str, Any]]:
++    if not api_token.strip():
++        raise RuntimeError("Replicate ist nicht konfiguriert. Setze REPLICATE_API_TOKEN in der Backend-Umgebung.")
++    if audio_path.stat().st_size > REPLICATE_LOCAL_FILE_LIMIT_BYTES:
++        raise RuntimeError("Die Audiodatei ist größer als 100 MB und kann nicht als lokaler Replicate-Input hochgeladen werden.")
++    try:
++        import replicate
++    except ImportError as exc:  # pragma: no cover - durch requirements.txt abgedeckt
++        raise RuntimeError("Das Python-Paket 'replicate' ist nicht installiert.") from exc
++
++    model = normalize_replicate_model(model_id)
++    with audio_path.open("rb") as audio_handle:
++        client_class = getattr(replicate, "Client", None)
++        if client_class is not None:
++            client = client_class(api_token=api_token)
++            output = client.run(
++                model,
++                input={
++                    "audio": audio_handle,
++                    "model_name": "htdemucs",
++                    "stem": "vocals",
++                    "output_format": "wav",
++                    "clip_mode": "rescale",
++                    "shifts": 1,
++                },
++            )
++        else:  # Kompatibilität mit älteren replicate-Python-Versionen
++            import os
++            old_token = os.environ.get("REPLICATE_API_TOKEN")
++            os.environ["REPLICATE_API_TOKEN"] = api_token
++            try:
++                output = replicate.run(
++                    model,
++                    input={
++                        "audio": audio_handle,
++                        "model_name": "htdemucs",
++                        "stem": "vocals",
++                        "output_format": "wav",
++                        "clip_mode": "rescale",
++                        "shifts": 1,
++                    },
++                )
++            finally:
++                if old_token is None:
++                    os.environ.pop("REPLICATE_API_TOKEN", None)
++                else:
++                    os.environ["REPLICATE_API_TOKEN"] = old_token
++
++    materialized = materialize_replicate_output(output, output_root)
++    vocals, instrumental = find_replicate_stem_files(materialized)
++    return vocals, instrumental, {
++        "model": model,
++        "output_files": [path.name for path in materialized if path.is_file()],
++    }
+--- a/app/services/waveform_service.py
++++ b/app/services/waveform_service.py
+@@ -79,6 +79,39 @@
+ 
+ NUMBERED_SECTION_TYPES = {"verse", "chorus", "hook", "refrain", "rap_verse", "spoken_verse"}
+ 
++# Die SRT-Struktur darf die erweiterte Suno-Tag-Taxonomie behalten. Für die
++# kompakte Waveform in Library, Songdetails und Player zählen dagegen nur
++# echte Arrangement-Abschnitte. Vocal-/FX-Tags würden sonst kurze,
++# überlappende Mini-Segmente erzeugen.
++WAVEFORM_SECTION_TYPES = {
++    "instrumental_outro",
++    "instrumental_intro",
++    "intro",
++    "instrumental_break",
++    "pre_verse",
++    "rap_verse",
++    "spoken_verse",
++    "verse",
++    "pre_hook",
++    "post_hook",
++    "pre_chorus",
++    "post_chorus",
++    "chorus",
++    "hook",
++    "refrain",
++    "bridge",
++    "breakdown",
++    "break",
++    "interlude",
++    "instrumental",
++    "drop",
++    "build_up",
++    "build",
++    "climax",
++    "solo",
++    "outro",
++}
++
+ NUMBER_WORDS = {
+     "one": "1",
+     "two": "2",
+@@ -106,36 +139,68 @@
+     return None
+ 
+ 
++def _primary_tag_clause(label: Any) -> str:
++    """Return the semantic section clause of a rich Suno tag.
++
++    Rich lyric tags use the first pipe/colon-separated clause as their section
++    identity and all following clauses as performance/arrangement descriptors.
++    Searching the complete tag caused false sections such as ``Rap Break`` in a
++    rapper descriptor or ``Chorus Reprise`` inside an ``Outro`` descriptor.
++    """
++
++    raw = str(label or "").strip().strip("[]")
++    raw = raw.replace("_", " ").replace("/", " ")
++    raw = re.sub(r"\s+", " ", raw).strip()
++    if not raw:
++        return ""
++    return re.split(r"\s*(?:\||:)\s*", raw, maxsplit=1)[0].strip()
++
++
+ def extract_structure_marker(label: Any) -> dict[str, str] | None:
+-    """Return a canonical arrangement marker from any tag text.
++    """Return a canonical marker from the leading section clause of a tag.
+ 
+-    The function intentionally accepts tags that include more text after the
+-    section word, so all of these become clean structure labels:
++    Examples:
+       [Verse: gritty male vocals, aggressive rap flow] -> Verse
+       [Verse 2 | high energy] -> Verse 2
+-      [Final Chorus: doubled vocals] -> Final Chorus
++      [Final Chorus x2 | doubled vocals] -> Final Chorus x2
++      [Outro | stripped chorus reprise] -> Outro
+ 
+-    Tags without a true arrangement section word never become waveform segments:
+-      [bass-heavy], [filter sweep], [Vocal FX]
++    Descriptor-only tags such as ``[Deep Male Rapper | Hard Rap Break]`` never
++    become arrangement sections.
+     """
+ 
+-    raw = str(label or "").strip().strip("[]")
+-    raw = raw.replace("_", " ").replace("|", " ").replace("/", " ")
+-    raw = re.sub(r"\s+", " ", raw).strip()
+-    if not raw:
++    primary = _primary_tag_clause(label)
++    if not primary:
+         return None
+     for pattern, display, kind in SECTION_PATTERNS:
+-        match = re.search(pattern, raw, re.IGNORECASE)
++        match = re.search(pattern, primary, re.IGNORECASE)
+         if not match:
+             continue
+         text = display
+         number = match.groupdict().get("number") if match.groupdict() else None
+         if kind in NUMBERED_SECTION_TYPES and number:
+             text = f"{display} {NUMBER_WORDS.get(str(number).lower(), str(number))}"
++        repeat = re.search(r"\bx\s*(\d{1,2})\b", primary, re.IGNORECASE)
++        if repeat and kind in {"chorus", "hook", "refrain"}:
++            text = f"{text} x{repeat.group(1)}"
+         return {"label": text, "type": kind}
+     return None
+ 
+ 
++def extract_waveform_structure_marker(label: Any) -> dict[str, str] | None:
++    """Return only real arrangement sections for compact waveform displays.
++
++    The general marker parser remains intentionally broader because SRT
++    alignment also supports performance tags such as Spoken Word or Fade Out.
++    Those tags are not separate visual song sections in Library/Player.
++    """
++
++    marker = extract_structure_marker(label)
++    if not marker or marker.get("type") not in WAVEFORM_SECTION_TYPES:
++        return None
++    return marker
++
++
+ def _same_section_family(left: dict[str, str], right: dict[str, str]) -> bool:
+     return left.get("type") == right.get("type")
+ 
+@@ -241,7 +306,7 @@
+ 
+ 
+ def build_structure_segments(asset: AudioAsset, duration_seconds: float | int | None) -> list[dict[str, Any]]:
+-    source = asset.prompt or asset.lyrics or ""
++    source = asset.lyrics or asset.prompt or ""
+     duration = float(duration_seconds or asset.duration_seconds or 0)
+     if not source or duration <= 0:
+         return []
+@@ -256,7 +321,7 @@
+             continue
+ 
+         if BRACKET_ONLY_LINE_RE.match(line):
+-            markers = [extract_structure_marker(match.group(1)) for match in BRACKET_TAG_RE.finditer(line)]
++            markers = [extract_waveform_structure_marker(match.group(1)) for match in BRACKET_TAG_RE.finditer(line)]
+             markers = [marker for marker in markers if marker]
+             if not markers:
+                 continue
+@@ -325,7 +390,7 @@
+     for raw in parsed:
+         if not isinstance(raw, dict):
+             continue
+-        marker = extract_structure_marker(_segment_label(raw)) or extract_structure_marker(_segment_type(raw))
++        marker = extract_waveform_structure_marker(_segment_label(raw)) or extract_waveform_structure_marker(_segment_type(raw))
+         if not marker:
+             continue
+         try:
+@@ -350,7 +415,7 @@
+         if not isinstance(segment, dict):
+             return True
+         label = _segment_label(segment)
+-        marker = extract_structure_marker(label) or extract_structure_marker(_segment_type(segment))
++        marker = extract_waveform_structure_marker(label) or extract_waveform_structure_marker(_segment_type(segment))
+         if not marker:
+             return True
+         if label.lower() != marker["label"].lower():
+@@ -389,16 +454,112 @@
+     return cleaned
+ 
+ 
+-def _normalize_waveform_segments(asset: AudioAsset, waveform: dict[str, Any]) -> tuple[dict[str, Any], bool]:
+-    changed = False
+-    duration = waveform.get("duration_seconds") or asset.duration_seconds
++def _segment_identity(segment: dict[str, Any]) -> tuple[str, bool]:
++    label = str(segment.get("label") or "").strip().lower()
++    return str(segment.get("type") or "").strip().lower(), bool(re.search(r"\b(?:final|last)\b", label))
++
++
++def _segment_signature(segment: dict[str, Any]) -> tuple[str, str]:
++    return (
++        str(segment.get("type") or "").strip().lower(),
++        re.sub(r"\s+", " ", str(segment.get("label") or "").strip().lower()),
++    )
++
++
++def _same_expected_identity(existing: dict[str, Any], expected: dict[str, Any]) -> bool:
++    existing_type, existing_final = _segment_identity(existing)
++    expected_type, expected_final = _segment_identity(expected)
++    if existing_type != expected_type:
++        return False
++    if expected_type == "chorus":
++        if expected_final:
++            return existing_final
++        return not existing_final
++    return True
++
++
++def _reconcile_aligned_segments_with_lyrics(
++    existing: list[dict[str, Any]],
++    expected: list[dict[str, Any]],
++    duration_seconds: float | int | None,
++) -> list[dict[str, Any]]:
++    """Repair stale labels while retaining SRT-derived section boundaries.
++
++    Older parsing searched the complete rich tag and therefore inserted false
++    Break sections from rapper descriptors and misread an Outro containing
++    ``Chorus Reprise`` as another chorus.  The current lyrics provide the
++    authoritative section order; matching existing starts keep the accurate SRT
++    timing wherever possible.
++    """
++
++    if not existing or not expected:
++        return expected or existing
++    expected_signature = [_segment_signature(item) for item in expected]
++    existing_signature = [_segment_signature(item) for item in existing]
++    if expected_signature == existing_signature:
++        return existing
++
++    matched: list[tuple[dict[str, Any], float]] = []
++    cursor = 0
++    for index, expected_segment in enumerate(expected):
++        match_index: int | None = None
++        for candidate_index in range(cursor, len(existing)):
++            if _same_expected_identity(existing[candidate_index], expected_segment):
++                match_index = candidate_index
++                break
++
++        # Historical Outro tags with descriptor text such as "Chorus Reprise"
++        # were stored as a final generic chorus.  For the final expected Outro,
++        # retain the start of the last unmatched stored segment as its boundary.
++        if match_index is None and index == len(expected) - 1 and expected_segment.get("type") == "outro" and cursor < len(existing):
++            match_index = len(existing) - 1
++
++        if match_index is None:
++            return expected
++        try:
++            start = float(existing[match_index].get("start") or 0.0)
++        except (TypeError, ValueError):
++            return expected
++        matched.append((expected_segment, start))
++        cursor = match_index + 1
++
++    duration = float(duration_seconds or 0.0)
++    if duration <= 0:
++        duration = max(float(item.get("end") or 0.0) for item in existing)
++    repaired: list[dict[str, Any]] = []
++    for index, (expected_segment, start) in enumerate(matched):
++        end = matched[index + 1][1] if index + 1 < len(matched) else duration
++        if end <= start:
++            return expected
++        repaired.append({
++            "label": expected_segment["label"],
++            "type": expected_segment["type"],
++            "start": round(max(0.0, start), 3),
++            "end": round(max(start + 0.05, end), 3),
++            **({"source": "lyrics_reconciled"} if any("source" in item for item in existing) else {}),
++        })
++    return repaired
++
++
++def _preferred_structure_segments(
++    asset: AudioAsset,
++    duration_seconds: float | int | None,
++    waveform_segments: Any = None,
++) -> list[dict[str, Any]]:
++    duration = float(duration_seconds or asset.duration_seconds or 0.0)
+     rebuilt = build_structure_segments(asset, duration)
+     existing_structure = _clean_existing_segments(asset.structure_segments_json, duration)
+-    existing_waveform = _clean_existing_segments(waveform.get("segments"), duration)
++    existing_waveform = _clean_existing_segments(waveform_segments, duration)
++    existing = existing_structure or existing_waveform
++    if rebuilt and existing:
++        return _reconcile_aligned_segments_with_lyrics(existing, rebuilt, duration)
++    return rebuilt or existing
+ 
+-    # Prefer explicitly stored structure over noisy waveform tags, but allow a
+-    # fresh prompt-derived rebuild to replace raw descriptor segments.
+-    preferred = existing_structure or rebuilt or existing_waveform
++
++def _normalize_waveform_segments(asset: AudioAsset, waveform: dict[str, Any]) -> tuple[dict[str, Any], bool]:
++    changed = False
++    duration = waveform.get("duration_seconds") or asset.duration_seconds
++    preferred = _preferred_structure_segments(asset, duration, waveform.get("segments"))
+     if not preferred:
+         return waveform, changed
+ 
+@@ -426,10 +587,7 @@
+         return None
+     payload = deepcopy(payload)
+     duration = duration_seconds or payload.get("duration_seconds") or asset.duration_seconds
+-    existing_structure = _clean_existing_segments(asset.structure_segments_json, duration)
+-    rebuilt = build_structure_segments(asset, duration)
+-    existing_waveform = _clean_existing_segments(payload.get("segments"), duration)
+-    segments = existing_structure or rebuilt or existing_waveform
++    segments = _preferred_structure_segments(asset, duration, payload.get("segments"))
+     if segments:
+         payload["segments"] = segments
+     payload["duration_seconds"] = duration or payload.get("duration_seconds") or asset.duration_seconds
+--- a/frontend-react/src/components/Waveform.jsx
++++ b/frontend-react/src/components/Waveform.jsx
+@@ -2,133 +2,38 @@
+ import { api } from '../api/client.js';
+ import { useI18n } from '../i18n/I18nContext.jsx';
+ 
+-const SECTION_PATTERNS = [
+-  [/\bpre\s*[- ]?chorus\b/i, 'Pre-Chorus', 'pre_chorus'],
+-  [/\bpost\s*[- ]?chorus\b/i, 'Post-Chorus', 'post_chorus'],
+-  [/\b(?:final|last)\s+(?:chorus|hook|refrain)\b/i, 'Final Chorus', 'chorus'],
+-  [/\b(?:chorus|hook|refrain)\b/i, 'Chorus', 'chorus'],
+-  [/\bverse\s*(\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten)?\b/i, 'Verse', 'verse'],
+-  [/\bpart\s*(\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten)?\b/i, 'Verse', 'verse'],
+-  [/\bbridge\b/i, 'Bridge', 'bridge'],
+-  [/\bintro\b/i, 'Intro', 'intro'],
+-  [/\boutro\b/i, 'Outro', 'outro'],
+-  [/\binterlude\b/i, 'Interlude', 'interlude'],
+-  [/\bbreak\s*[- ]?down\b|\bbreakdown\b/i, 'Breakdown', 'breakdown'],
+-  [/\bdrop\b/i, 'Drop', 'drop'],
+-];
+-
+-const NUMBER_WORDS = {
+-  one: '1',
+-  two: '2',
+-  three: '3',
+-  four: '4',
+-  five: '5',
+-  six: '6',
+-  seven: '7',
+-  eight: '8',
+-  nine: '9',
+-  ten: '10',
+-};
+-
+-function parseMaybeJson(value) {
+-  if (!value) return null;
+-  if (Array.isArray(value) || typeof value === 'object') return value;
+-  if (typeof value === 'string') {
+-    try { return JSON.parse(value); } catch { return null; }
+-  }
+-  return null;
+-}
+-
+-function structureMarker(label) {
+-  const raw = String(label || '')
+-    .replace(/^\s*\[/, '')
+-    .replace(/\]\s*$/, '')
+-    .replace(/[_|/]+/g, ' ')
+-    .replace(/\s+/g, ' ')
+-    .trim();
+-  if (!raw) return null;
+-  for (const [pattern, display, type] of SECTION_PATTERNS) {
+-    const match = raw.match(pattern);
+-    if (!match) continue;
+-    let text = display;
+-    if (type === 'verse' && match[1]) {
+-      text = `Verse ${NUMBER_WORDS[String(match[1]).toLowerCase()] || match[1]}`;
+-    }
+-    return { label: text, type };
+-  }
+-  return null;
+-}
+-
+-function normalizeSegments(segments) {
+-  const parsed = parseMaybeJson(segments);
+-  if (!Array.isArray(parsed)) return [];
+-  return parsed
+-    .map((segment) => {
+-      if (!segment || typeof segment !== 'object') return null;
+-      const marker = structureMarker(segment.label) || structureMarker(segment.type) || structureMarker(segment.name) || structureMarker(segment.title);
+-      if (!marker) return null;
+-      let start = Number(segment.start || 0);
+-      let end = Number(segment.end || start);
+-      if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return null;
+-      start = Math.max(0, start);
+-      end = Math.max(0, end);
+-      if (end <= start) return null;
+-      return { ...segment, label: marker.label, type: marker.type, start, end };
+-    })
+-    .filter(Boolean);
+-}
+-
+-function segmentMaxEnd(segments) {
+-  return Math.max(0, ...segments.map((segment) => Number(segment.end || 0)).filter(Number.isFinite));
+-}
+-
+-function scaleSegmentsForDisplay(segments, duration) {
+-  const maxDuration = Number(duration || 0);
+-  if (!segments.length || !(maxDuration > 0)) return segments;
+-  const sourceEnd = segmentMaxEnd(segments);
+-  if (!(sourceEnd > 0)) return segments;
+-  if (Math.abs(sourceEnd - maxDuration) <= Math.max(1, maxDuration * 0.02)) return segments;
+-  const ratio = maxDuration / sourceEnd;
+-  return segments.map((segment) => ({
+-    ...segment,
+-    start: Math.max(0, Number(segment.start || 0) * ratio),
+-    end: Math.max(0, Number(segment.end || 0) * ratio),
+-  }));
+-}
+-
+-function hasDescriptorNoise(segments) {
+-  const parsed = parseMaybeJson(segments);
+-  if (!Array.isArray(parsed) || !parsed.length) return true;
+-  return parsed.some((segment) => {
+-    if (!segment || typeof segment !== 'object') return true;
+-    const marker = structureMarker(segment.label) || structureMarker(segment.type) || structureMarker(segment.name) || structureMarker(segment.title);
+-    if (!marker) return true;
+-    return String(segment.label || '').trim().toLowerCase() !== marker.label.toLowerCase();
+-  });
+-}
+-
+-function assetStructureSegments(asset) {
+-  return (
+-    parseMaybeJson(asset?.structure_segments_json)
+-    || parseMaybeJson(asset?.structure_segments)
+-    || parseMaybeJson(asset?.waveform_json?.structure_segments_json)
+-    || parseMaybeJson(asset?.waveform_json?.structure_segments)
+-    || parseMaybeJson(asset?.metadata_json?.structure_segments_json)
+-    || parseMaybeJson(asset?.metadata_json?.structure_segments)
+-    || []
+-  );
+-}
+-
+-function waveformSegments(waveform) {
+-  const parsed = parseMaybeJson(waveform);
+-  if (!parsed || typeof parsed !== 'object') return [];
+-  return parseMaybeJson(parsed.segments) || [];
+-}
++import {
++  assetStructureSegments,
++  normalizeStructureSegments,
++  parseMaybeJson,
++  scaleStructureSegments,
++  segmentsHaveDescriptorNoise,
++  waveformSegments,
++} from '../utils/songStructure.js';
+ 
+ function segmentClass(type) {
+   return `wave-segment-${String(type || 'section').toLowerCase().replace(/[^a-z0-9_ -]/g, '').replace(/\s+/g, '_')}`;
+ }
+ 
++function compactSegmentLabel(segment) {
++  const type = String(segment?.type || '').toLowerCase();
++  const label = String(segment?.label || '').trim();
++  const number = label.match(/\b(\d{1,2})\b/)?.[1] || '';
++  if (type === 'verse') return `V${number || ''}`;
++  if (type === 'chorus') return /final/i.test(label) ? 'Final' : 'Ch';
++  if (type === 'pre_chorus') return 'Pre';
++  if (type === 'post_chorus') return 'Post';
++  if (type === 'build_up') return 'Build';
++  if (type === 'bridge') return 'Br';
++  if (type === 'intro') return 'Intro';
++  if (type === 'outro') return 'Outro';
++  if (type === 'interlude') return 'Inter';
++  if (type === 'instrumental') return 'Instr';
++  if (type === 'break') return 'Break';
++  if (type === 'drop') return 'Drop';
++  return label.slice(0, 5);
++}
++
+ function fallbackPeaks(count = 96) {
+   return Array.from({ length: count }, (_, index) => 0.18 + Math.abs(Math.sin(index / 6.5)) * 0.5 + Math.abs(Math.cos(index / 17)) * 0.18);
+ }
+@@ -180,7 +85,7 @@
+     const structureSegments = assetStructureSegments(asset);
+     const shouldRefresh = Boolean(
+       !embedded?.peaks?.length
+-      || hasDescriptorNoise(embeddedSegments)
++      || segmentsHaveDescriptorNoise(embeddedSegments)
+       || (!structureSegments.length && embeddedSegments.length)
+     );
+ 
+@@ -196,10 +101,14 @@
+     api.archive.waveform(asset.id)
+       .then((data) => {
+         if (cancelled) return;
+-        const apiStructure = parseMaybeJson(data?.structure_segments_json) || parseMaybeJson(data?.structure_segments) || [];
++        const apiStructure = normalizeStructureSegments(
++          data?.structure_segments_json || data?.structure_segments || [],
++          positiveDuration(data?.duration_seconds) || positiveDuration(asset?.duration_seconds),
++        );
++        const apiWaveformSegments = waveformSegments(data);
+         const segments = apiStructure.length
+           ? apiStructure
+-          : (Array.isArray(data?.segments) && data.segments.length ? data.segments : (structureSegments.length ? structureSegments : embeddedSegments));
++          : (apiWaveformSegments.length ? apiWaveformSegments : (structureSegments.length ? structureSegments : embeddedSegments));
+         setWaveform({ ...data, segments });
+       })
+       .catch(() => {
+@@ -242,10 +151,11 @@
+     ? Math.max(0, Math.min(duration, absoluteCurrentTime - sourceWindowStart))
+     : absoluteCurrentTime;
+   const segments = useMemo(() => {
++    const resolvedWaveformSegments = waveformSegments(waveform);
+     const preferred = assetStructureSegments(asset);
+-    const source = preferred.length ? preferred : waveformSegments(waveform);
+-    const normalized = scaleSegmentsForDisplay(normalizeSegments(source), sourceDuration || duration);
+-    if (!hasSourceWindow) return scaleSegmentsForDisplay(normalized, duration);
++    const source = resolvedWaveformSegments.length ? resolvedWaveformSegments : preferred;
++    const normalized = scaleStructureSegments(normalizeStructureSegments(source, sourceDuration || duration), sourceDuration || duration);
++    if (!hasSourceWindow) return scaleStructureSegments(normalized, duration);
+     return normalized
+       .map((segment) => {
+         const start = Number(segment.start || 0);
+@@ -295,7 +205,23 @@
+           const left = duration > 0 ? Math.max(0, Math.min(100, (start / duration) * 100)) : 0;
+           const width = duration > 0 ? Math.max(1.5, Math.min(100 - left, ((end - start) / duration) * 100)) : 0;
+           const absoluteStart = Number.isFinite(Number(segment.absoluteStart)) ? Number(segment.absoluteStart) : start;
+-          return <button key={`${segment.label}-${index}-${start}-${end}`} type="button" className={`react-waveform-segment ${segmentClass(segment.type)}`} style={{ left: `${left}%`, width: `${width}%` }} onClick={() => seekTo(absoluteStart)} title={segment.label || segment.type}>{segment.label}</button>;
++          const fullLabelThreshold = compact ? 7 : 4.5;
++          const compactLabelThreshold = compact ? 3 : 2.25;
++          const labelMode = width >= fullLabelThreshold ? 'full' : width >= compactLabelThreshold ? 'compact' : 'hidden';
++          const visibleLabel = labelMode === 'full' ? segment.label : labelMode === 'compact' ? compactSegmentLabel(segment) : '';
++          return (
++            <button
++              key={`${segment.label}-${index}-${start}-${end}`}
++              type="button"
++              className={`react-waveform-segment ${segmentClass(segment.type)} label-${labelMode}`}
++              style={{ left: `${left}%`, width: `${width}%` }}
++              onClick={() => seekTo(absoluteStart)}
++              title={segment.label || segment.type}
++              aria-label={segment.label || segment.type}
++            >
++              {visibleLabel}
++            </button>
++          );
+         })}
+       </div>}
+       <button type="button" className="react-waveform-bars" onClick={seekByClick} aria-label={t('waveform.navigation', 'Waveform Navigation')} disabled={!interactive || !audioRef?.current}>
+--- a/frontend-react/src/i18n/de.js
++++ b/frontend-react/src/i18n/de.js
+@@ -796,7 +796,7 @@
+     },
+     stems: {
+       title: 'Stem-Dateien',
+-      text: 'Vocals und Instrumental lokal erzeugen und einzeln oder als ZIP herunterladen.',
++      text: 'Vocals und Instrumental mit dem konfigurierten Demucs-Backend erzeugen und einzeln oder als ZIP herunterladen.',
+       playerTitle: 'Stem-Player: {{title}}',
+       playback: 'Stem-Wiedergabe',
+       previewText: 'Die normale Wiedergabe wurde pausiert. Spiele Vocals oder Instrumental direkt hier im Modal ab.',
+@@ -808,7 +808,10 @@
+       downloadStem: '{{label}} herunterladen',
+       downloadAllZip: 'Alle Stems als ZIP herunterladen',
+       generating: 'Erzeuge Stems…',
+-      needsDemucs: 'Benötigt lokal installiertes Demucs im FastAPI-Python-Environment.'
++      needsDemucs: 'Benötigt eine lokale Audiodatei sowie ein im Adminbereich konfiguriertes Demucs-Backend.',
++      backendLocal: 'Demucs lokal',
++      backendReplicate: 'Demucs über Replicate',
++      backendConfigured: 'Konfiguriertes Demucs-Backend'
+     },
+     srt: {
+       title: 'SRT-Untertitel',
+@@ -879,6 +882,7 @@
+       srtStarted: 'SRT gestartet (#{{task}})',
+       srtCreated: 'SRT erzeugt',
+       stemsCreated: 'Stems erzeugt',
++      stemsStarted: 'Stems gestartet (#{{task}})',
+       waveformRebuilt: 'Waveform neu berechnet',
+       captureOptions: {
+         timestampedLyrics: {
+@@ -1265,6 +1269,7 @@
+       workflowFailed: 'Wizard-Ausführung fehlgeschlagen.',
+       generateStemsConfirm: 'Stem-Dateien für „{{title}}“ erzeugen?\n\nDies kann je nach Songlänge und Hardware mehrere Minuten dauern.',
+       stemsCreated: 'Stem-Dateien wurden erzeugt.',
++      stemsStarted: 'Stem-Erzeugung gestartet: Task #{{task}} · {{backend}}.',
+       stemsDone: 'Stem-Erzeugung wurde abgeschlossen.',
+       stemsFailed: 'Stem-Erzeugung fehlgeschlagen.',
+       noProjectSrtRows: 'Keine Varianten für SRT-Erzeugung gefunden.',
+@@ -2625,11 +2630,26 @@
+         text: 'Diese Einstellungen liegen technisch im selben Einstellungsobjekt, werden aber nicht vollständig durch KI-Profile gesteuert.',
+         hint: 'Die vorhandene Prozesslogik bleibt unverändert; die Gruppierung dient nur der besseren Zuordnung.',
+         srtScope: 'Eigenständige Transkriptions-, Alignment- und SRT-Einstellungen.',
++        stemScope: 'Demucs lokal oder optional über Replicate.',
+         audioScope: 'Lokale Audioanalyse mit eigener Modell- und Laufzeitkonfiguration.',
+         libraryScope: 'Manuell gestartete KI-Suchbegriffe pro Audio-Variante.',
+         libraryProfileHint: 'Nur diese Funktion verwendet das hier ausgewählte Tagging-Profil.'
+       }
+     },
++    stems: {
++      title: 'Stem-Erzeugung',
++      backend: 'Ausführungs-Backend',
++      localBackend: 'Demucs lokal',
++      replicateBackend: 'Demucs über Replicate',
++      backendHint: 'Diese Auswahl gilt für Stem-Aktionen in der Library und für automatisch erzeugte Vocal-Stems vor einer SRT-Transkription.',
++      replicateModel: 'Replicate-Modellversion',
++      modelHint: 'Eine feste Version sorgt für reproduzierbare Ergebnisse. Sie wird nur beim Replicate-Backend verwendet.',
++      localRuntime: 'Lokales Demucs',
++      replicateRuntime: 'Replicate API-Token',
++      replicateMissing: 'Replicate ist ausgewählt, aber REPLICATE_API_TOKEN ist nicht konfiguriert. Neue Stem-Tasks würden kontrolliert fehlschlagen.',
++      localMissing: 'Lokales Demucs ist ausgewählt, aber das Python-Paket demucs ist nicht installiert. Neue Stem-Tasks würden kontrolliert fehlschlagen.',
++      storageHint: 'Unabhängig vom Backend werden Vocals und Instrumental anschließend im bestehenden lokalen Stem-Speicher abgelegt. Download-, Player- und SRT-Abläufe bleiben identisch.'
++    },
+     srt: {
+       title: '1-Click-SRT-Erzeugung',
+       text: 'Zentrale Auswahl für Library-Songs. Lyrics bleiben Source of Truth, Match Mode ist fest auf Lenient gesetzt.',
+--- a/frontend-react/src/i18n/en.js
++++ b/frontend-react/src/i18n/en.js
+@@ -796,7 +796,7 @@
+     },
+     stems: {
+       title: 'Stem files',
+-      text: 'Generate vocals and instrumental locally and download them individually or as ZIP.',
++      text: 'Generate vocals and instrumental with the configured Demucs backend and download them individually or as ZIP.',
+       playerTitle: 'Stem player: {{title}}',
+       playback: 'Stem playback',
+       previewText: 'Normal playback was paused. Play vocals or instrumental directly in this modal.',
+@@ -808,7 +808,10 @@
+       downloadStem: 'Download {{label}}',
+       downloadAllZip: 'Download all stems as ZIP',
+       generating: 'Generating stems…',
+-      needsDemucs: 'Requires locally installed Demucs in the FastAPI Python environment.'
++      needsDemucs: 'Requires a local audio file and a Demucs backend configured in the admin area.',
++      backendLocal: 'Demucs locally',
++      backendReplicate: 'Demucs through Replicate',
++      backendConfigured: 'Configured Demucs backend'
+     },
+     srt: {
+       title: 'SRT subtitles',
+@@ -879,6 +882,7 @@
+       srtStarted: 'SRT started (#{{task}})',
+       srtCreated: 'SRT created',
+       stemsCreated: 'Stems created',
++      stemsStarted: 'Stems started (#{{task}})',
+       waveformRebuilt: 'Waveform rebuilt',
+       captureOptions: {
+         timestampedLyrics: {
+@@ -1265,6 +1269,7 @@
+       workflowFailed: 'Wizard execution failed.',
+       generateStemsConfirm: 'Generate stem files for “{{title}}”?\n\nDepending on song length and hardware this can take several minutes.',
+       stemsCreated: 'Stem files were created.',
++      stemsStarted: 'Stem generation started: task #{{task}} · {{backend}}.',
+       stemsDone: 'Stem generation completed.',
+       stemsFailed: 'Stem generation failed.',
+       noProjectSrtRows: 'No variants found for SRT generation.',
+@@ -2625,11 +2630,26 @@
+         text: 'These settings are technically stored in the same settings object, but are not fully controlled by AI profiles.',
+         hint: 'Existing process logic remains unchanged; the grouping only improves transparency.',
+         srtScope: 'Independent transcription, alignment and SRT settings.',
++        stemScope: 'Demucs locally or optionally through Replicate.',
+         audioScope: 'Local audio analysis with its own model and runtime configuration.',
+         libraryScope: 'Manually started AI search terms per audio variant.',
+         libraryProfileHint: 'Only this function uses the tagging profile selected here.'
+       }
+     },
++    stems: {
++      title: 'Stem generation',
++      backend: 'Execution backend',
++      localBackend: 'Demucs locally',
++      replicateBackend: 'Demucs through Replicate',
++      backendHint: 'This selection applies to stem actions in the library and to vocal stems generated automatically before SRT transcription.',
++      replicateModel: 'Replicate model version',
++      modelHint: 'A pinned version provides reproducible results. It is used only by the Replicate backend.',
++      localRuntime: 'Local Demucs',
++      replicateRuntime: 'Replicate API token',
++      replicateMissing: 'Replicate is selected, but REPLICATE_API_TOKEN is not configured. New stem tasks would fail in a controlled way.',
++      localMissing: 'Local Demucs is selected, but the demucs Python package is not installed. New stem tasks would fail in a controlled way.',
++      storageHint: 'Regardless of the backend, vocals and instrumental are then stored in the existing local stem storage. Download, player and SRT flows stay identical.'
++    },
+     srt: {
+       title: '1-click SRT generation',
+       text: 'Central selection for library songs. Lyrics remain the source of truth, match mode is fixed to lenient.',
+--- a/frontend-react/src/pages/AdminPage.jsx
++++ b/frontend-react/src/pages/AdminPage.jsx
+@@ -135,6 +135,8 @@
+         srt_output_enabled: next.srt_output_enabled !== false,
+         srt_auto_regenerate: Boolean(next.srt_auto_regenerate),
+         srt_generate_vocal_stems_before_transcription: Boolean(next.srt_generate_vocal_stems_before_transcription),
++        stem_generation_backend: next.stem_generation_backend === 'replicate_demucs' ? 'replicate_demucs' : 'local_demucs',
++        stem_replicate_model: next.stem_replicate_model || 'cjwbw/demucs:25a173108cff36ef9f80f854c162d01df9e6528be175794b81158fa03836d953',
+         srt_alignment_engine: next.srt_alignment_engine === 'forced_alignment' ? 'forced_alignment' : 'heuristic',
+         srt_quality_gate_enabled: Boolean(next.srt_quality_gate_enabled),
+         srt_quality_gate_min_score: Math.max(0.3, Math.min(0.95, Number(next.srt_quality_gate_min_score || 0.7))),
+@@ -1106,6 +1108,29 @@
+                 </div>
+               </details>
+ 
++              <details className="assistant-related-details" id="assistant-stem-generation-settings">
++                <summary><Layers3 size={17} /> <strong>{t('admin.stems.title', 'Stem-Erzeugung')}</strong><span className="muted">{t('admin.assistant.related.stemScope', 'Demucs lokal oder optional über Replicate')}</span></summary>
++                <div className="form-grid compact-grid">
++                  <label>{t('admin.stems.backend', 'Ausführungs-Backend')}
++                    <select value={settings.stem_generation_backend === 'replicate_demucs' ? 'replicate_demucs' : 'local_demucs'} onChange={(event) => setSettings({ ...settings, stem_generation_backend: event.target.value })}>
++                      <option value="local_demucs">{t('admin.stems.localBackend', 'Demucs lokal')}</option>
++                      <option value="replicate_demucs">{t('admin.stems.replicateBackend', 'Demucs über Replicate')}</option>
++                    </select>
++                    <small>{t('admin.stems.backendHint', 'Diese Auswahl gilt für Stem-Aktionen in der Library und für automatisch erzeugte Vocal-Stems vor einer SRT-Transkription.')}</small>
++                  </label>
++                  <label>{t('admin.stems.replicateModel', 'Replicate-Modellversion')}
++                    <input value={settings.stem_replicate_model || 'cjwbw/demucs:25a173108cff36ef9f80f854c162d01df9e6528be175794b81158fa03836d953'} onChange={(event) => setSettings({ ...settings, stem_replicate_model: event.target.value })} />
++                    <small>{t('admin.stems.modelHint', 'Eine feste Version sorgt für reproduzierbare Ergebnisse. Sie wird nur beim Replicate-Backend verwendet.')}</small>
++                  </label>
++                  <div className="assistant-stem-runtime wide">
++                    <span className={`assistant-status-pill ${settings.stem_runtime?.local_demucs?.configured ? 'active' : 'warning'}`}>{t('admin.stems.localRuntime', 'Lokales Demucs')}: {settings.stem_runtime?.local_demucs?.configured ? t('admin.provider.ready', 'bereit') : t('admin.provider.notConfigured', 'nicht konfiguriert')}</span>
++                    <span className={`assistant-status-pill ${settings.stem_runtime?.replicate_demucs?.configured ? 'active' : 'warning'}`}>{t('admin.stems.replicateRuntime', 'Replicate API-Token')}: {settings.stem_runtime?.replicate_demucs?.configured ? t('admin.provider.ready', 'bereit') : t('admin.provider.notConfigured', 'nicht konfiguriert')}</span>
++                  </div>
++                  {!((settings.stem_generation_backend === 'replicate_demucs' ? settings.stem_runtime?.replicate_demucs?.configured : settings.stem_runtime?.local_demucs?.configured)) && <div className="assistant-inline-warning wide"><AlertTriangle size={15} /> {settings.stem_generation_backend === 'replicate_demucs' ? t('admin.stems.replicateMissing', 'Replicate ist ausgewählt, aber REPLICATE_API_TOKEN ist nicht konfiguriert. Neue Stem-Tasks würden kontrolliert fehlschlagen.') : t('admin.stems.localMissing', 'Lokales Demucs ist ausgewählt, aber das Python-Paket demucs ist nicht installiert. Neue Stem-Tasks würden kontrolliert fehlschlagen.')}</div>}
++                  <p className="muted wide">{t('admin.stems.storageHint', 'Unabhängig vom Backend werden Vocals und Instrumental anschließend im bestehenden lokalen Stem-Speicher abgelegt. Download-, Player- und SRT-Abläufe bleiben identisch.')}</p>
++                </div>
++              </details>
++
+               <details className="assistant-related-details">
+                 <summary><Cpu size={17} /> <strong>{t('admin.audioAi.title', 'Lokale Audioanalyse')}</strong><span className="muted">{t('admin.assistant.related.audioScope', 'Lokale Heuristiken und optionale Modellanalyse')}</span></summary>
+                 <div className="form-grid compact-grid">
+--- a/frontend-react/src/pages/LibraryPage.jsx
++++ b/frontend-react/src/pages/LibraryPage.jsx
+@@ -23,7 +23,7 @@
+ const wizardCaptureOptions = [
+   { key: 'timestampedLyrics', label: 'Timestamped Lyrics abrufen', description: 'Suno-synchronisierte Lyrics zur Audio-ID speichern.' },
+   { key: 'srt', label: 'SRT erzeugen', description: 'Lyrics-basiertes SRT erzeugen und speichern.' },
+-  { key: 'stems', label: 'Stems erzeugen', description: 'Vocals und Instrumental lokal trennen.' },
++  { key: 'stems', label: 'Stems erzeugen', description: 'Vocals und Instrumental mit dem konfigurierten Demucs-Backend trennen.' },
+   { key: 'waveform', label: 'Waveform neu berechnen', description: 'Wellenformdaten für Player/Timeline aktualisieren.' },
+ ];
+ 
+@@ -68,6 +68,13 @@
+ ];
+ const libraryFlatListScaleMax = libraryFlatListScaleOptions.length - 1;
+ 
++function stemBackendDisplayName(backend, t) {
++  const value = String(backend || '').trim().toLowerCase();
++  if (value === 'replicate_demucs' || value === 'replicate') return t('library.stems.backendReplicate', 'Demucs über Replicate');
++  if (value === 'local_demucs' || value === 'demucs' || value === 'local') return t('library.stems.backendLocal', 'Demucs lokal');
++  return value || t('library.stems.backendConfigured', 'Konfiguriertes Demucs-Backend');
++}
++
+ 
+ function translateFallback(translate, key, fallback, values) {
+   return typeof translate === 'function' ? translate(key, fallback, values) : fallback;
+@@ -1967,8 +1974,12 @@
+         }
+       }
+       if (workflowCaptureState.stems) {
+-        await api.archive.generateStems(asset.id);
+-        results.push(t('library.workflow.stemsCreated', 'Stems erzeugt'));
++        const stems = await api.archive.generateStems(asset.id);
++        if (stems?.queued || stems?.task_local_id) {
++          results.push(t('library.workflow.stemsStarted', 'Stems gestartet (#{{task}})', { task: stems.task_local_id || '—' }));
++        } else {
++          results.push(t('library.workflow.stemsCreated', 'Stems erzeugt'));
++        }
+       }
+       if (workflowCaptureState.waveform) {
+         await api.archive.rebuildWaveform(asset.id);
+@@ -1987,11 +1998,18 @@
+ 
+   async function generateAssetStems(asset) {
+     if (!asset?.id) return;
+-    if (!confirm(t('library.messages.generateStemsConfirm', 'Stem-Dateien für „{{title}}“ erzeugen?\n\nDies kann je nach Songlänge und Hardware mehrere Minuten dauern.', { title: pickTitle(asset) }))) return;
++    if (!confirm(t('library.messages.generateStemsConfirm', 'Stem-Dateien für „{{title}}“ erzeugen?\n\nDie Verarbeitung nutzt das im Adminbereich ausgewählte Demucs-Backend und kann je nach Songlänge mehrere Minuten dauern.', { title: pickTitle(asset) }))) return;
+     setStemLoadingIds((current) => new Set([...current, asset.id]));
+     try {
+       const result = await api.archive.generateStems(asset.id);
+-      notify(result?.exists ? t('library.messages.stemsCreated', 'Stem-Dateien wurden erzeugt.') : t('library.messages.stemsDone', 'Stem-Erzeugung wurde abgeschlossen.'), 'success');
++      if (result?.queued || result?.task_local_id) {
++        notify(t('library.messages.stemsStarted', 'Stem-Erzeugung gestartet: Task #{{task}} · {{backend}}.', {
++          task: result?.task_local_id || '—',
++          backend: stemBackendDisplayName(result?.backend, t),
++        }), 'success');
++      } else {
++        notify(result?.exists ? t('library.messages.stemsCreated', 'Stem-Dateien wurden erzeugt.') : t('library.messages.stemsDone', 'Stem-Erzeugung wurde abgeschlossen.'), 'success');
++      }
+       await onReload?.();
+     } catch (err) {
+       notify(err?.message || t('library.messages.stemsFailed', 'Stem-Erzeugung fehlgeschlagen.'), 'error');
+@@ -2131,7 +2149,7 @@
+       {
+         kind: 'stems',
+         label: t('library.content.stemFiles', 'Stem-Dateien'),
+-        detail: t('library.content.stemDetail', 'Vocals und Instrumental aus lokaler Stem-Erzeugung'),
++        detail: t('library.content.stemDetail', 'Vocals und Instrumental aus dem konfigurierten Demucs-Backend'),
+         available: readAssetStems(asset).available,
+       },
+       {
+@@ -2827,7 +2845,7 @@
+               <p className="eyebrow">{t('library.stems.playback', 'Stem-Wiedergabe')}</p>
+               <h3>{pickTitle(asset)}</h3>
+               <p className="muted">{t('library.stems.previewText', 'Die normale Wiedergabe wurde pausiert. Spiele Vocals oder Instrumental direkt hier im Modal ab.')}</p>
+-              <p className="muted">{stems.backend ? `Backend: ${stems.backend}` : t('library.stems.files', 'Stem-Dateien')}{stems.bpm ? ` · ${stems.bpm} BPM` : ''}</p>
++              <p className="muted">{stems.backend ? `Backend: ${stemBackendDisplayName(stems.backend, t)}` : t('library.stems.files', 'Stem-Dateien')}{stems.bpm ? ` · ${stems.bpm} BPM` : ''}</p>
+             </div>
+           </div>
+           {!playableStems.length && <p className="warning-text">{t('library.stems.noPlayableFiles', 'Für diese Variante sind noch keine abspielbaren Stem-Dateien vorhanden.')}</p>}
+@@ -2858,7 +2876,7 @@
+         <div className="row between align-start">
+           <div>
+             <h4>{t('library.stems.title', 'Stem-Dateien')}</h4>
+-            <p className="muted">{t('library.stems.text', 'Vocals und Instrumental lokal erzeugen und einzeln oder als ZIP herunterladen.')}</p>
++            <p className="muted">{t('library.stems.text', 'Vocals und Instrumental mit dem konfigurierten Demucs-Backend erzeugen und einzeln oder als ZIP herunterladen.')}</p>
+           </div>
+           <span className={`status ${stems.available ? 'cached' : String(stems.status || '').toLowerCase() === 'failed' ? 'error' : loading ? 'processing' : ''}`}>{loading ? t('library.status.running', 'läuft') : stems.available ? t('library.status.done', 'fertig') : String(stems.status || '').toLowerCase() === 'failed' ? t('status.stats.error', 'Fehler') : t('library.status.notGenerated', 'nicht erzeugt')}</span>
+         </div>
+@@ -2871,7 +2889,7 @@
+           {stems.files?.vocals && <a className="button" href={api.archive.stemDownloadUrl(asset.id, 'vocals')}><Download size={15} /> Vocals</a>}
+           {stems.files?.instrumental && <a className="button" href={api.archive.stemDownloadUrl(asset.id, 'instrumental')}><Download size={15} /> Instrumental</a>}
+         </div>
+-        <p className="muted">{stems.available ? `Backend: ${stems.backend || 'demucs'}${stems.bpm ? ` · ${stems.bpm} BPM` : ''}` : t('library.stems.needsDemucs', 'Benötigt lokal installiertes Demucs im FastAPI-Python-Environment.')}</p>
++        <p className="muted">{stems.available ? `Backend: ${stemBackendDisplayName(stems.backend, t)}${stems.bpm ? ` · ${stems.bpm} BPM` : ''}` : t('library.stems.needsDemucs', 'Benötigt eine lokale Audiodatei sowie ein im Adminbereich konfiguriertes Demucs-Backend.')}</p>
+       </div>
+     );
+   }
+--- a/frontend-react/src/styles/app.css
++++ b/frontend-react/src/styles/app.css
+@@ -15779,3 +15779,36 @@
+   .assistant-runtime-source-row { grid-template-columns: 1fr; gap: 8px; }
+   .assistant-runtime-source-value { justify-content: flex-start; text-align: left; }
+ }
++
++/* Songstruktur: schmale, aber gültige Abschnitte bleiben als Farbblock sichtbar,
++   ohne abgeschnittene Textfragmente über benachbarte Abschnittsnamen zu legen. */
++.react-waveform-segment.label-hidden {
++  padding-inline: 0;
++  min-width: 2px;
++}
++
++/* Einheitliche Songstruktur in Library, Songdetails und MiniPlayer */
++.react-waveform-segment.wave-segment-pre_chorus,
++.react-waveform-segment.wave-segment-post_chorus { background: rgba(245, 158, 11, .76); }
++.react-waveform-segment.wave-segment-build_up { background: rgba(249, 115, 22, .74); }
++.react-waveform-segment.wave-segment-break,
++.react-waveform-segment.wave-segment-drop { background: rgba(239, 68, 68, .7); }
++.react-waveform-segment.wave-segment-interlude,
++.react-waveform-segment.wave-segment-instrumental { background: rgba(20, 184, 166, .68); }
++.react-waveform-segment.label-hidden::after {
++  content: '';
++  position: absolute;
++  inset: 0;
++}
++
++.assistant-stem-runtime {
++  display: flex;
++  flex-wrap: wrap;
++  gap: 8px;
++  align-items: center;
++}
++.react-waveform-segment.label-compact {
++  padding-inline: 2px;
++  text-align: center;
++  font-size: 9px;
++}
+--- a/frontend-react/src/utils/songStructure.js
++++ b/frontend-react/src/utils/songStructure.js
+@@ -0,0 +1,301 @@
++const SECTION_PATTERNS = [
++  [/\bpre\s*[- ]?(?:chorus|hook|refrain)\b/i, 'Pre-Chorus', 'pre_chorus'],
++  [/\bpost\s*[- ]?(?:chorus|hook|refrain)\b/i, 'Post-Chorus', 'post_chorus'],
++  [/\b(?:final|last|letzte[rsn]?)\s+(?:chorus|hook|refrain)\b/i, 'Final Chorus', 'chorus'],
++  [/\b(?:chorus|hook|refrain)\b/i, 'Chorus', 'chorus'],
++  [/\b(?:verse|strophe|part)\s*(\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten)?\b/i, 'Verse', 'verse'],
++  [/\bbuild\s*[- ]?up\b/i, 'Build-Up', 'build_up'],
++  [/\bbridge\b|\bmiddle\s*8\b|\bmittelteil\b/i, 'Bridge', 'bridge'],
++  [/\bintro\b|\bopening\b|\banfang\b/i, 'Intro', 'intro'],
++  [/\boutro\b|\bending\b|\bende\b/i, 'Outro', 'outro'],
++  [/\binterlude\b|\bzwischen(?:spiel|teil)\b/i, 'Interlude', 'interlude'],
++  [/\bbreak\s*[- ]?down\b|\bbreakdown\b|\bbreak\b/i, 'Break', 'break'],
++  [/\bdrop\b|\bclimax\b/i, 'Drop', 'drop'],
++  [/\binstrumental\b|\bsolo\b/i, 'Instrumental', 'instrumental'],
++];
++
++const NUMBER_WORDS = {
++  one: '1',
++  two: '2',
++  three: '3',
++  four: '4',
++  five: '5',
++  six: '6',
++  seven: '7',
++  eight: '8',
++  nine: '9',
++  ten: '10',
++};
++
++export function parseMaybeJson(value) {
++  if (!value) return null;
++  if (Array.isArray(value) || typeof value === 'object') return value;
++  if (typeof value === 'string') {
++    try { return JSON.parse(value); } catch { return null; }
++  }
++  return null;
++}
++
++function extractSegmentArray(value) {
++  const parsed = parseMaybeJson(value);
++  if (Array.isArray(parsed)) return parsed;
++  if (!parsed || typeof parsed !== 'object') return [];
++  for (const key of ['segments', 'structure_segments', 'structureSegments', 'sections', 'items', 'data']) {
++    const candidate = parseMaybeJson(parsed[key]);
++    if (Array.isArray(candidate)) return candidate;
++    if (candidate && typeof candidate === 'object' && candidate !== parsed) {
++      const nested = extractSegmentArray(candidate);
++      if (nested.length) return nested;
++    }
++  }
++  return [];
++}
++
++function normalizedRawLabel(value) {
++  return String(value || '')
++    .replace(/^\s*\[/, '')
++    .replace(/\]\s*$/, '')
++    .replace(/[_/]+/g, ' ')
++    .replace(/\s+/g, ' ')
++    .trim();
++}
++
++function primaryTagClause(value) {
++  const raw = normalizedRawLabel(value);
++  if (!raw) return '';
++  return raw.split(/\s*(?:\||:)\s*/, 1)[0].trim();
++}
++
++export function structureMarker(label) {
++  const raw = normalizedRawLabel(label);
++  const primary = primaryTagClause(label);
++  if (!primary) return null;
++  for (const [pattern, display, type] of SECTION_PATTERNS) {
++    const match = primary.match(pattern);
++    if (!match) continue;
++    let text = display;
++    if (type === 'verse' && match[1]) {
++      text = `Verse ${NUMBER_WORDS[String(match[1]).toLowerCase()] || match[1]}`;
++    }
++    // Repeat instructions such as `x2` belong to the lyrics/instruction source,
++    // not to the compact visible arrangement label used by the waveforms.
++    // They remain available through rawLabel/primaryLabel for reconciliation.
++    return { label: text, type, rawLabel: raw, primaryLabel: primary };
++  }
++  return null;
++}
++
++function segmentMarker(segment) {
++  if (!segment || typeof segment !== 'object') return null;
++  return structureMarker(segment.label)
++    || structureMarker(segment.type)
++    || structureMarker(segment.name)
++    || structureMarker(segment.title)
++    || structureMarker(segment.section)
++    || structureMarker(segment.kind)
++    || structureMarker(segment.tag);
++}
++
++function numberFromKeys(segment, keys) {
++  for (const key of keys) {
++    if (!(key in segment)) continue;
++    let value = Number(segment[key]);
++    if (!Number.isFinite(value)) continue;
++    if (/ms$/i.test(key)) value /= 1000;
++    return value;
++  }
++  return Number.NaN;
++}
++
++function rawNormalizedSegments(value) {
++  const parsed = extractSegmentArray(value);
++  if (!parsed.length) return [];
++  return parsed
++    .map((segment, sourceIndex) => {
++      if (!segment || typeof segment !== 'object') return null;
++      const marker = segmentMarker(segment);
++      if (!marker) return null;
++      let start = numberFromKeys(segment, ['start_seconds', 'startSeconds', 'start_sec', 'startSec', 'start_ms', 'startMs', 'start', 'from', 'begin']);
++      let end = numberFromKeys(segment, ['end_seconds', 'endSeconds', 'end_sec', 'endSec', 'end_ms', 'endMs', 'end', 'to', 'until', 'finish']);
++      if (!Number.isFinite(start)) start = 0;
++      if (!Number.isFinite(end)) end = start;
++      start = Math.max(0, start);
++      end = Math.max(0, end);
++      if (end <= start) return null;
++      return {
++        ...segment,
++        label: marker.label,
++        type: marker.type,
++        rawLabel: marker.rawLabel,
++        start,
++        end,
++        sourceIndex,
++      };
++    })
++    .filter(Boolean);
++}
++
++function segmentSpecificity(segment) {
++  const raw = String(segment?.rawLabel || segment?.label || '');
++  let score = raw.length;
++  if (/final|last|letzte/i.test(raw)) score += 40;
++  if (/\bx\s*\d+/i.test(raw)) score += 25;
++  if (/\d+/.test(raw)) score += 12;
++  if (/pre|post|build/i.test(raw)) score += 10;
++  return score;
++}
++
++function chooseMoreSpecific(left, right) {
++  return segmentSpecificity(right) > segmentSpecificity(left) ? right : left;
++}
++
++function dedupeNearIdenticalSegments(segments) {
++  const result = [];
++  for (const segment of segments) {
++    const duplicateIndex = result.findIndex((existing) => (
++      existing.type === segment.type
++      && Math.abs(existing.start - segment.start) <= 0.45
++      && Math.abs(existing.end - segment.end) <= 0.75
++    ));
++    if (duplicateIndex >= 0) {
++      result[duplicateIndex] = chooseMoreSpecific(result[duplicateIndex], segment);
++      continue;
++    }
++    result.push(segment);
++  }
++  return result;
++}
++
++function dropContainedDuplicates(segments) {
++  return segments.filter((segment, index) => !segments.some((other, otherIndex) => {
++    if (index === otherIndex || other.type !== segment.type) return false;
++    const contained = segment.start >= other.start - 0.2 && segment.end <= other.end + 0.2;
++    const otherLonger = (other.end - other.start) >= (segment.end - segment.start) + 0.75;
++    return contained && otherLonger;
++  }));
++}
++
++function reconcileTimeline(segments, duration) {
++  const safeDuration = Number(duration) > 0 ? Number(duration) : Math.max(0, ...segments.map((segment) => segment.end));
++  const ordered = [...segments]
++    .sort((a, b) => (a.start - b.start) || (b.end - a.end) || (a.sourceIndex - b.sourceIndex));
++  const result = [];
++  const minimumDuration = Math.max(0.65, safeDuration * 0.0025);
++
++  for (const rawSegment of ordered) {
++    const segment = {
++      ...rawSegment,
++      start: Math.max(0, Math.min(safeDuration || rawSegment.start, rawSegment.start)),
++      end: Math.max(0, Math.min(safeDuration || rawSegment.end, rawSegment.end)),
++    };
++    if (segment.end - segment.start < minimumDuration) continue;
++
++    const previous = result[result.length - 1];
++    if (!previous) {
++      result.push(segment);
++      continue;
++    }
++
++    if (segment.start < previous.end) {
++      const overlap = previous.end - segment.start;
++      const shorterDuration = Math.min(previous.end - previous.start, segment.end - segment.start);
++      if (previous.type === segment.type && overlap >= shorterDuration * 0.55) {
++        result[result.length - 1] = chooseMoreSpecific(previous, {
++          ...segment,
++          start: Math.min(previous.start, segment.start),
++          end: Math.max(previous.end, segment.end),
++        });
++        continue;
++      }
++
++      const boundary = segment.start;
++      if (boundary - previous.start >= minimumDuration) {
++        previous.end = boundary;
++      } else {
++        result.pop();
++      }
++    } else {
++      const gap = segment.start - previous.end;
++      if (gap <= Math.max(1.25, safeDuration * 0.006)) previous.end = segment.start;
++    }
++
++    if (segment.end - segment.start >= minimumDuration) result.push(segment);
++  }
++
++  return result.filter((segment) => segment.end - segment.start >= minimumDuration);
++}
++
++function addOccurrenceLabels(segments) {
++  const counters = new Map();
++  const genericCounters = new Map();
++  const genericTotals = new Map();
++  segments.forEach((segment) => {
++    const explicit = /\d+|\bx\s*\d+|final|last|letzte/i.test(String(segment.rawLabel || segment.label || ''));
++    if (!explicit) genericTotals.set(segment.type, (genericTotals.get(segment.type) || 0) + 1);
++  });
++  return segments.map((segment) => {
++    const occurrence = (counters.get(segment.type) || 0) + 1;
++    counters.set(segment.type, occurrence);
++    const explicit = /\d+|\bx\s*\d+|final|last|letzte/i.test(String(segment.rawLabel || segment.label || ''));
++    const genericOccurrence = (genericCounters.get(segment.type) || 0) + 1;
++    if (!explicit) genericCounters.set(segment.type, genericOccurrence);
++    const repeatedGeneric = (genericTotals.get(segment.type) || 0) > 1 && !explicit && ['verse', 'chorus', 'bridge', 'break', 'instrumental'].includes(segment.type);
++    return {
++      ...segment,
++      label: repeatedGeneric ? `${segment.label} ${genericOccurrence}` : segment.label,
++      occurrence,
++    };
++  });
++}
++
++export function normalizeStructureSegments(value, duration = 0) {
++  const parsed = rawNormalizedSegments(value);
++  if (!parsed.length) return [];
++  const deduped = dedupeNearIdenticalSegments(parsed);
++  const containedCleaned = dropContainedDuplicates(deduped);
++  return addOccurrenceLabels(reconcileTimeline(containedCleaned, duration));
++}
++
++export function assetStructureSegments(asset) {
++  for (const candidate of [
++    asset?.structure_segments_json,
++    asset?.structure_segments,
++    asset?.waveform_json?.structure_segments_json,
++    asset?.waveform_json?.structure_segments,
++    asset?.metadata_json?.structure_segments_json,
++    asset?.metadata_json?.structure_segments,
++  ]) {
++    const segments = extractSegmentArray(candidate);
++    if (segments.length) return segments;
++  }
++  return [];
++}
++
++export function waveformSegments(waveform) {
++  return extractSegmentArray(waveform);
++}
++
++export function segmentsHaveDescriptorNoise(value) {
++  const parsed = extractSegmentArray(value);
++  if (!parsed.length) return true;
++  return parsed.some((segment) => {
++    const marker = segmentMarker(segment);
++    if (!marker) return true;
++    const label = normalizedRawLabel(segment?.label || segment?.type || segment?.name || segment?.title || '');
++    return label.toLowerCase() !== marker.label.toLowerCase();
++  });
++}
++
++export function scaleStructureSegments(segments, duration) {
++  const maxDuration = Number(duration || 0);
++  if (!segments.length || !(maxDuration > 0)) return segments;
++  const sourceEnd = Math.max(0, ...segments.map((segment) => Number(segment.end || 0)).filter(Number.isFinite));
++  if (!(sourceEnd > 0)) return segments;
++  if (Math.abs(sourceEnd - maxDuration) <= Math.max(1, maxDuration * 0.02)) return segments;
++  const ratio = maxDuration / sourceEnd;
++  return segments.map((segment) => ({
++    ...segment,
++    start: Math.max(0, Number(segment.start || 0) * ratio),
++    end: Math.max(0, Number(segment.end || 0) * ratio),
++  }));
++}
+--- a/requirements-stems.txt
++++ b/requirements-stems.txt
+@@ -1,4 +1,5 @@
+-# Optional für lokale Stem-Erzeugung im Songstudio
+-# Installation nur nötig, wenn im Detailbereich "Stems erzeugen" genutzt werden soll.
++# Optional ausschließlich für lokale Stem-Erzeugung im Songstudio.
++# Nicht nötig, wenn unter /admin → KI-Assistent → Stem-Erzeugung
++# das Replicate-Backend ausgewählt und REPLICATE_API_TOKEN konfiguriert ist.
+ demucs>=4.0.1,<5
+ librosa>=0.10.2,<0.12
+--- a/tests/test_song_structure_and_stem_backends.py
++++ b/tests/test_song_structure_and_stem_backends.py
+@@ -0,0 +1,249 @@
++from __future__ import annotations
++
++import json
++import subprocess
++from pathlib import Path
++
++import pytest
++
++from app.models import AppSetting, AudioAsset
++from app.services.stem_generation_service import (
++    DEFAULT_REPLICATE_DEMUCS_MODEL,
++    LOCAL_DEMUCS_BACKEND,
++    REPLICATE_DEMUCS_BACKEND,
++    find_replicate_stem_files,
++    load_stem_generation_settings,
++    materialize_replicate_output,
++    normalize_replicate_model,
++    normalize_stem_backend,
++)
++
++
++ROOT = Path(__file__).resolve().parents[1]
++
++
++class _FakeFileOutput:
++    def __init__(self, name: str, data: bytes):
++        self._name = name
++        self._data = data
++
++    def read(self) -> bytes:
++        return self._data
++
++    def url(self) -> str:
++        return f"https://replicate.delivery/example/{self._name}"
++
++
++def _wav_bytes(marker: bytes) -> bytes:
++    return b"RIFF" + (36 + len(marker)).to_bytes(4, "little") + b"WAVEfmt " + marker
++
++
++def test_stem_backend_normalization_is_backward_compatible():
++    assert normalize_stem_backend(None) == LOCAL_DEMUCS_BACKEND
++    assert normalize_stem_backend("demucs") == LOCAL_DEMUCS_BACKEND
++    assert normalize_stem_backend("local") == LOCAL_DEMUCS_BACKEND
++    assert normalize_stem_backend("replicate") == REPLICATE_DEMUCS_BACKEND
++    assert normalize_stem_backend("replicate_demucs") == REPLICATE_DEMUCS_BACKEND
++    assert normalize_stem_backend("unknown") == LOCAL_DEMUCS_BACKEND
++    assert normalize_replicate_model("invalid model id") == DEFAULT_REPLICATE_DEMUCS_MODEL
++
++
++
++def test_stem_settings_can_select_replicate_without_changing_the_default(isolated_db_session):
++    db = isolated_db_session
++    db.query(AppSetting).filter(AppSetting.key == "ai_chat_settings").delete(synchronize_session=False)
++    db.add(AppSetting(
++        key="ai_chat_settings",
++        value={
++            "stem_generation_backend": "replicate_demucs",
++            "stem_replicate_model": DEFAULT_REPLICATE_DEMUCS_MODEL,
++        },
++    ))
++    db.commit()
++    settings = load_stem_generation_settings(db)
++    assert settings["backend"] == REPLICATE_DEMUCS_BACKEND
++    assert settings["replicate_model"] == DEFAULT_REPLICATE_DEMUCS_MODEL
++    assert normalize_stem_backend(None) == LOCAL_DEMUCS_BACKEND
++
++def test_replicate_outputs_are_materialized_and_assigned_by_role(tmp_path: Path):
++    paths = materialize_replicate_output(
++        {
++            "vocals": _FakeFileOutput("vocals.wav", _wav_bytes(b"vocals")),
++            "no_vocals": _FakeFileOutput("no_vocals.wav", _wav_bytes(b"instrumental")),
++        },
++        tmp_path,
++    )
++    vocals, instrumental = find_replicate_stem_files(paths)
++    assert "vocals" in vocals.name.lower()
++    assert "no_vocals" in instrumental.name.lower()
++    assert vocals != instrumental
++
++
++def test_replicate_output_requires_both_stem_roles(tmp_path: Path):
++    paths = materialize_replicate_output(
++        {"vocals": _FakeFileOutput("vocals.wav", _wav_bytes(b"vocals"))},
++        tmp_path,
++    )
++    with pytest.raises(RuntimeError, match="Instrumental"):
++        find_replicate_stem_files(paths)
++
++
++def test_replicate_other_output_is_treated_as_no_vocals(tmp_path: Path):
++    paths = materialize_replicate_output(
++        {
++            "vocals": _FakeFileOutput("vocals.wav", _wav_bytes(b"vocals")),
++            "other": _FakeFileOutput("other.wav", _wav_bytes(b"instrumental")),
++        },
++        tmp_path,
++    )
++    vocals, instrumental = find_replicate_stem_files(paths)
++    assert "vocals" in vocals.name.lower()
++    assert "other" in instrumental.name.lower()
++
++
++def test_generate_stems_can_use_replicate_without_local_demucs(monkeypatch, isolated_db_session, tmp_path: Path):
++    from app.routers import audio_assets as audio_assets_router
++
++    db = isolated_db_session
++    source = tmp_path / "source.wav"
++    source.write_bytes(_wav_bytes(b"source-audio"))
++    remote_vocals = tmp_path / "remote_vocals.wav"
++    remote_instrumental = tmp_path / "remote_no_vocals.wav"
++    remote_vocals.write_bytes(_wav_bytes(b"remote-vocals"))
++    remote_instrumental.write_bytes(_wav_bytes(b"remote-instrumental"))
++    stem_root = tmp_path / "stems"
++
++    asset = AudioAsset(
++        source_url="https://example.test/source.wav",
++        local_path=str(source),
++        filename=source.name,
++        content_type="audio/wav",
++        status="cached",
++        title="Replicate Test",
++    )
++    db.add(asset)
++    db.commit()
++    db.refresh(asset)
++
++    monkeypatch.setattr(audio_assets_router, "_resolve_asset_audio_file", lambda _asset: source)
++    monkeypatch.setattr(audio_assets_router, "_stem_storage_path", lambda: stem_root)
++    monkeypatch.setattr(audio_assets_router, "to_portable_path", lambda value, storage_root=None: str(value))
++    monkeypatch.setattr(
++        audio_assets_router,
++        "get_settings",
++        lambda: type("Settings", (), {"replicate_api_token": "test-token"})(),
++    )
++    monkeypatch.setattr(
++        audio_assets_router,
++        "load_stem_generation_settings",
++        lambda _db: {
++            "backend": REPLICATE_DEMUCS_BACKEND,
++            "replicate_model": DEFAULT_REPLICATE_DEMUCS_MODEL,
++            "local_configured": False,
++            "replicate_configured": True,
++            "selected_configured": True,
++        },
++    )
++    calls = []
++
++    def fake_replicate(audio_path, output_root, *, model_id, api_token):
++        calls.append((audio_path, output_root, model_id, api_token))
++        return remote_vocals, remote_instrumental, {"model": model_id, "output_files": [remote_vocals.name, remote_instrumental.name]}
++
++    monkeypatch.setattr(audio_assets_router, "run_replicate_demucs", fake_replicate)
++
++    result = audio_assets_router.generate_stems_for_asset(
++        db,
++        asset.id,
++        backend_override=REPLICATE_DEMUCS_BACKEND,
++        replicate_model_override=DEFAULT_REPLICATE_DEMUCS_MODEL,
++    )
++
++    assert calls and calls[0][0] == source
++    assert result["backend"] == REPLICATE_DEMUCS_BACKEND
++    assert result["files"]["vocals"]["filename"].endswith("_vocals.wav")
++    assert result["files"]["instrumental"]["filename"].endswith("_instrumental.wav")
++    db.refresh(asset)
++    assert asset.metadata_json["stems"]["backend"] == REPLICATE_DEMUCS_BACKEND
++    assert asset.metadata_json["stems"]["execution"]["model"] == DEFAULT_REPLICATE_DEMUCS_MODEL
++
++def test_structure_normalization_handles_nested_duplicates_and_overlaps():
++    module_uri = (ROOT / "frontend-react/src/utils/songStructure.js").resolve().as_uri()
++    script = f"""
++      import {{ normalizeStructureSegments }} from {json.dumps(module_uri)};
++      const source = {{ segments: [
++        {{ label: '[Intro | atmospheric]', start: 0, end: 30 }},
++        {{ label: 'Verse 1 | deep rap', start: 30, end: 101 }},
++        {{ label: 'Verse 1', start: 30.1, end: 100.8 }},
++        {{ label: 'Chorus', start: 96, end: 125 }},
++        {{ label: 'Hook', start: 100, end: 124.8 }},
++        {{ label: 'Verse 2', start: 124, end: 204 }},
++        {{ label: 'Final Chorus x2', start: 202.5, end: 245 }}
++      ] }};
++      const result = normalizeStructureSegments(source, 245);
++      if (result.length !== 5) throw new Error(JSON.stringify(result));
++      if (result.map((row) => row.label).join('|') !== 'Intro|Verse 1|Chorus|Verse 2|Final Chorus') throw new Error(JSON.stringify(result));
++      for (let index = 1; index < result.length; index += 1) {{
++        if (result[index].start < result[index - 1].end - 0.001) throw new Error('overlap:' + JSON.stringify(result));
++      }}
++    """
++    completed = subprocess.run(
++        ["node", "--input-type=module"],
++        input=script,
++        text=True,
++        capture_output=True,
++        cwd=ROOT,
++        timeout=30,
++    )
++    assert completed.returncode == 0, completed.stderr or completed.stdout
++
++
++
++def test_frontend_structure_marker_uses_only_primary_tag_clause():
++    module_uri = (ROOT / "frontend-react/src/utils/songStructure.js").resolve().as_uri()
++    script = f"""
++      import {{ structureMarker }} from {json.dumps(module_uri)};
++      const cases = [
++        ['Deep Male Rapper | Hard Straight Rap Break | No Singing', null],
++        ['Outro | Stripped Chorus Reprise | Fade-Out', 'Outro'],
++        ['Intro | Build-Up | Clear Alternation', 'Intro'],
++        ['Final Chorus x2 | Maximum Climax', 'Final Chorus'],
++        ['Chorus x2 | Repeat Entire Hook Twice', 'Chorus'],
++      ];
++      for (const [input, expected] of cases) {{
++        const result = structureMarker(input);
++        const actual = result ? result.label : null;
++        if (actual !== expected) throw new Error(input + ':' + JSON.stringify(result));
++        if (/x\\s*2/i.test(input) && !/x\\s*2/i.test(result?.rawLabel || '')) throw new Error('repeat metadata lost:' + JSON.stringify(result));
++      }}
++    """
++    completed = subprocess.run(
++        ["node", "--input-type=module"],
++        input=script,
++        text=True,
++        capture_output=True,
++        cwd=ROOT,
++        timeout=30,
++    )
++    assert completed.returncode == 0, completed.stderr or completed.stdout
++
++def test_shared_waveform_and_stem_backend_are_wired_into_all_runtime_paths():
++    waveform = (ROOT / "frontend-react/src/components/Waveform.jsx").read_text(encoding="utf-8")
++    library = (ROOT / "frontend-react/src/pages/LibraryPage.jsx").read_text(encoding="utf-8")
++    mini_player = (ROOT / "frontend-react/src/components/MiniPlayer.jsx").read_text(encoding="utf-8")
++    admin = (ROOT / "frontend-react/src/pages/AdminPage.jsx").read_text(encoding="utf-8")
++    audio_router = (ROOT / "app/routers/audio_assets.py").read_text(encoding="utf-8")
++    srt_service = (ROOT / "app/services/srt_transcript_service.py").read_text(encoding="utf-8")
++
++    assert "normalizeStructureSegments" in waveform
++    assert "labelMode" in waveform
++    assert "compactSegmentLabel" in waveform
++    assert "<Waveform" in library
++    assert "<Waveform" in mini_player
++    assert "library.messages.stemsStarted" in library
++    assert "result?.queued || result?.task_local_id" in library
++    assert "stem_generation_backend" in admin
++    assert "replicate_demucs" in admin
++    assert "run_replicate_demucs" in audio_router
++    assert "backend_override=selected_backend" in audio_router
++    assert '"stem_backend": stems.get("backend") or "demucs"' in srt_service
+--- a/tests/test_srt_structure_segments.py
++++ b/tests/test_srt_structure_segments.py
+@@ -579,3 +579,58 @@
+     assert all(right["start"] >= left["start"] for left, right in zip(chorus, chorus[1:]))
+     assert chorus[0]["start"] <= 171.0
+     assert chorus[4]["start"] >= 189.0
++
++
++def test_srt_structure_mapping_ignores_local_vocal_and_rap_break_descriptors() -> None:
++    source_lyrics = """
++[Intro | Build-Up | Clear Singer-Rapper Alternation]
++[Male Singer | Airy Emotional Singing | No Rap]
++Intro singer
++[Deep Male Rapper | Confident Spoken Rap | No Singing]
++Intro rapper
++[Verse 1 | Deep Baritone Male Rap | No Singing]
++Verse one
++[Build-Up | Male Spoken Word | Tension Rising | No Singing]
++Build line
++[Chorus x2 | Repeat Entire Hook Twice]
++Singer hook
++[Deep Male Rapper | Hard Straight Rap Break | No Singing]
++Rapper hook
++[Verse 2 | Deep Male Rap | No Singing]
++Verse two
++[Final Chorus x2 | Maximum Anthemic Climax]
++Final singer
++[Deep Male Rapper | Aggressive Straight Rap Break | No Singing]
++Final rapper
++[Outro | Stripped Chorus Reprise | Fade-Out]
++Outro singer
++""".strip()
++    visible_lines = [
++        "Intro singer",
++        "Intro rapper",
++        "Verse one",
++        "Build line",
++        "Singer hook",
++        "Rapper hook",
++        "Verse two",
++        "Final singer",
++        "Final rapper",
++        "Outro singer",
++    ]
++    srt_segments = [
++        {"index": index + 1, "source_line": index + 1, "start": float(index * 20 + 2), "end": float(index * 20 + 5), "text": text}
++        for index, text in enumerate(visible_lines)
++    ]
++
++    result = build_structure_segments_from_srt_alignment(source_lyrics, srt_segments, 245, waveform_only=True)
++
++    assert [segment["label"] for segment in result] == [
++        "Intro",
++        "Verse 1",
++        "Build-Up",
++        "Chorus x2",
++        "Verse 2",
++        "Final Chorus x2",
++        "Outro",
++    ]
++    assert all(segment["type"] != "break" for segment in result)
+--- a/tests/test_waveform_structure_and_sanitizing.py
++++ b/tests/test_waveform_structure_and_sanitizing.py
+@@ -3,17 +3,17 @@
+     _clean_existing_segments,
+     _segments_have_descriptor_noise,
+     build_structure_segments,
+-    extract_structure_marker,
++    extract_waveform_structure_marker,
+     sanitize_waveform_payload_for_asset,
+     scale_segments_to_duration,
+ )
+ 
+ 
+ def test_extract_structure_marker_ignores_descriptor_tags():
+-    assert extract_structure_marker("Verse 2 | German Male Rap | High Energy") == {"label": "Verse 2", "type": "verse"}
+-    assert extract_structure_marker("Final Chorus: doubled vocals") == {"label": "Final Chorus", "type": "chorus"}
+-    assert extract_structure_marker("bass-heavy gritty mix") is None
+-    assert extract_structure_marker("spoken word") is None
++    assert extract_waveform_structure_marker("Verse 2 | German Male Rap | High Energy") == {"label": "Verse 2", "type": "verse"}
++    assert extract_waveform_structure_marker("Final Chorus: doubled vocals") == {"label": "Final Chorus", "type": "chorus"}
++    assert extract_waveform_structure_marker("bass-heavy gritty mix") is None
++    assert extract_waveform_structure_marker("spoken word") is None
+ 
+ 
+ def test_build_structure_segments_uses_only_real_sections_and_weighted_duration():
+@@ -69,3 +69,119 @@
+         {"label": "Verse", "type": "verse", "start": 20.0, "end": 100.0},
+     ]
+     assert _clean_existing_segments([{ "label": "FX sweep", "start": 0, "end": 5 }]) == []
++
++
++def test_rich_vocal_descriptors_do_not_become_false_sections():
++    assert extract_waveform_structure_marker("Deep Male Rapper | Hard Straight Rap Break | No Singing") is None
++    assert extract_waveform_structure_marker("Outro | Stripped Chorus Reprise | Fade-Out") == {"label": "Outro", "type": "outro"}
++    assert extract_waveform_structure_marker("Intro | Build-Up | Singer-Rapper Alternation") == {"label": "Intro", "type": "intro"}
++    assert extract_waveform_structure_marker("Final Chorus x2 | Maximum Anthemic Climax") == {"label": "Final Chorus x2", "type": "chorus"}
++
++
++def test_build_structure_segments_keeps_only_primary_arrangement_sections():
++    lyrics = """
++[Intro | Build-Up | Clear Singer-Rapper Alternation]
++[Male Singer | Airy Emotional Singing | No Rap]
++Intro singer line
++[Deep Male Rapper | Confident Spoken Rap | No Singing]
++Intro rapper line
++[Verse 1 | Deep Baritone Male Rap | No Singing]
++Verse one line
++[Build-Up | Male Spoken Word | Tension Rising | No Singing]
++Build line
++[Chorus x2 | Repeat Entire Hook Twice | Clear Vocal Role Switching]
++[Rough Male Singer | No Rap]
++Hook singer line
++[Deep Male Rapper | Hard Straight Rap Break | No Singing]
++Hook rapper line
++[Rough Male Singer | No Rap]
++Hook singer ending
++[Verse 2 | Deep Male Rap | No Singing]
++Verse two line
++[Final Chorus x2 | Repeat Entire Hook Twice | Maximum Anthemic Climax]
++[Rough Male Singer | No Rap]
++Final singer line
++[Deep Male Rapper | Aggressive Straight Rap Break | No Singing]
++Final rapper line
++[Outro | Stripped Chorus Reprise | Gradual Fade-Out]
++[Male Singer | Soft Emotional Singing | No Rap]
++Outro line
++[End]
++""".strip()
++    asset = AudioAsset(
++        id=2,
++        source_url="https://cdn.example.test/song.mp3",
++        status="remote",
++        duration_seconds=245,
++        metadata_json={"candidate": {"lyrics": lyrics}},
++    )
++
++    segments = build_structure_segments(asset, 245)
++
++    assert [segment["label"] for segment in segments] == [
++        "Intro",
++        "Verse 1",
++        "Build-Up",
++        "Chorus x2",
++        "Verse 2",
++        "Final Chorus x2",
++        "Outro",
++    ]
++    assert all(segment["type"] != "break" for segment in segments)
++
++
++def test_sanitize_repairs_old_false_breaks_and_outro_misclassification_using_lyrics_order():
++    lyrics = """
++[Intro | Build-Up]
++Intro line
++[Verse 1 | Deep Rap]
++Verse one line
++[Build-Up | Spoken Word]
++Build line
++[Chorus x2 | Repeat Entire Hook Twice]
++Singer line
++[Deep Male Rapper | Hard Straight Rap Break | No Singing]
++Rapper line
++[Verse 2 | Deep Rap]
++Verse two line
++[Final Chorus x2 | Maximum Climax]
++Final line
++[Deep Male Rapper | Aggressive Straight Rap Break | No Singing]
++Final rapper line
++[Outro | Stripped Chorus Reprise]
++Outro line
++""".strip()
++    stale = [
++        {"label": "Intro", "type": "intro", "start": 0, "end": 20},
++        {"label": "Verse 1", "type": "verse", "start": 20, "end": 90},
++        {"label": "Build-Up", "type": "build_up", "start": 90, "end": 110},
++        {"label": "Chorus", "type": "chorus", "start": 110, "end": 125},
++        {"label": "Break", "type": "break", "start": 125, "end": 145},
++        {"label": "Verse 2", "type": "verse", "start": 145, "end": 200},
++        {"label": "Final Chorus", "type": "chorus", "start": 200, "end": 215},
++        {"label": "Break", "type": "break", "start": 215, "end": 230},
++        {"label": "Chorus", "type": "chorus", "start": 230, "end": 245},
++    ]
++    asset = AudioAsset(
++        id=3,
++        source_url="https://cdn.example.test/song.mp3",
++        status="remote",
++        duration_seconds=245,
++        structure_segments_json=stale,
++        metadata_json={"candidate": {"lyrics": lyrics}},
++    )
++    waveform = {"duration_seconds": 245, "peaks": [0.1, 0.5], "segments": stale}
++
++    sanitized = sanitize_waveform_payload_for_asset(asset, waveform)
++
++    assert [segment["label"] for segment in sanitized["segments"]] == [
++        "Intro",
++        "Verse 1",
++        "Build-Up",
++        "Chorus x2",
++        "Verse 2",
++        "Final Chorus x2",
++        "Outro",
++    ]
++    assert [segment["start"] for segment in sanitized["segments"]] == [0.0, 20.0, 90.0, 110.0, 145.0, 200.0, 230.0]
++    assert sanitized["segments"][-1]["end"] == 245.0

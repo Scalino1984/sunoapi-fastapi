@@ -1,0 +1,150 @@
+--- /tmp/suno_patch_backup_20260713_click_label/songStructure.js	2026-07-13 04:25:28.385262090 +0000
++++ frontend-react/src/utils/songStructure.js	2026-07-13 04:26:06.668082089 +0000
+@@ -77,10 +77,9 @@
+     if (type === 'verse' && match[1]) {
+       text = `Verse ${NUMBER_WORDS[String(match[1]).toLowerCase()] || match[1]}`;
+     }
+-    if (type === 'chorus') {
+-      const repeat = primary.match(/\bx\s*(\d{1,2})\b/i);
+-      if (repeat) text = `${text} x${repeat[1]}`;
+-    }
++    // Repeat instructions such as `x2` belong to the lyrics/instruction source,
++    // not to the compact visible arrangement label used by the waveforms.
++    // They remain available through rawLabel/primaryLabel for reconciliation.
+     return { label: text, type, rawLabel: raw, primaryLabel: primary };
+   }
+   return null;
+--- /tmp/suno_patch_backup_20260713_click_label/LibraryPage.jsx	2026-07-13 04:25:28.394206158 +0000
++++ frontend-react/src/pages/LibraryPage.jsx	2026-07-13 04:26:06.672959489 +0000
+@@ -1186,6 +1186,20 @@
+     return preserveWindowScroll(action, { strong: true });
+   }
+ 
++  function isLibraryInteractiveClickTarget(target) {
++    return Boolean(target?.closest?.('button, a, input, select, textarea, summary, details, label, [role="button"], [data-library-no-open]'));
++  }
++
++  function openProjectFromLibraryClickArea(project, event) {
++    if (event?.target && event?.currentTarget && event.target !== event.currentTarget && isLibraryInteractiveClickTarget(event.target)) return;
++    openProjectDetails(project, event);
++  }
++
++  function openAssetFromLibraryClickArea(project, asset, event) {
++    if (event?.target && event?.currentTarget && event.target !== event.currentTarget && isLibraryInteractiveClickTarget(event.target)) return;
++    openGalleryAssetDetails(project, asset, event);
++  }
++
+   async function preserveWindowScrollAsync(action) {
+     const snapshot = windowScrollSnapshot();
+     try {
+@@ -4741,7 +4755,13 @@
+     const badges = assetContentBadges(asset, srtByAsset);
+     const advanced = libraryFlatListMode === 'advanced';
+     return (
+-      <article className={`asset-flat-row is-${libraryFlatListMode} ${active ? 'is-playing-row' : ''} ${selectedIds.has(asset.id) ? 'is-selected' : ''}`} key={`flat-asset-${asset.id}`} data-react-asset-row={asset.id}>
++      <article
++        className={`asset-flat-row is-${libraryFlatListMode} ${active ? 'is-playing-row' : ''} ${selectedIds.has(asset.id) ? 'is-selected' : ''}`}
++        key={`flat-asset-${asset.id}`}
++        data-react-asset-row={asset.id}
++        onClick={(event) => openAssetFromLibraryClickArea(project, asset, event)}
++        title={t('library.openSongDetails', 'Songdetails öffnen')}
++      >
+         <label className="asset-flat-select" title={t('library.selectAsset', '{{title}} auswählen', { title: pickTitle(asset) })} onPointerDown={(event) => event.stopPropagation()} onClick={(event) => event.stopPropagation()}>
+           <input type="checkbox" checked={selectedIds.has(asset.id)} onChange={() => toggleSelected(asset.id)} aria-label={t('library.selectAsset', '{{title}} auswählen', { title: pickTitle(asset) })} />
+         </label>
+@@ -5235,7 +5255,12 @@
+           const projectPlaying = isPlayingProject(project);
+           const projectQueue = (project.playable.length ? project.playable : project.assets.filter(isPlayable)).map((asset) => withVariantPlaybackMeta(asset, project)).filter(isPlayable);
+           return (
+-            <article className={`project-row suno-row ${projectActive ? 'is-playing-row' : ''}`} key={project.id}>
++            <article
++              className={`project-row suno-row ${projectActive ? 'is-playing-row' : ''}`}
++              key={project.id}
++              onClick={(event) => openProjectFromLibraryClickArea(project, event)}
++              title={t('library.openSongDetails', 'Songdetails öffnen')}
++            >
+               <button className={`cover-button ${projectActive ? 'is-active-cover' : ''}`} type="button" onClick={() => playProject(project)} title={projectPlaying ? t('player.pause', 'Pause') : t('library.playDirectly', 'Direkt abspielen')}>
+                 <img src={project.cover || '/static/favicon.ico'} alt="Cover" onError={handleCoverImageError} />
+                 <span className="cover-play">{projectPlaying ? <Pause size={18} /> : <Play size={18} fill="currentColor" />}</span>
+--- /tmp/suno_patch_backup_20260713_click_label/app.css	2026-07-13 04:25:28.406400249 +0000
++++ frontend-react/src/styles/app.css	2026-07-13 04:26:06.675426486 +0000
+@@ -15812,3 +15812,24 @@
+   text-align: center;
+   font-size: 9px;
+ }
++
++/* Library title/list views: the non-interactive area of the complete row opens details. */
++.library-project-list > .project-row.suno-row,
++.asset-flat-row {
++  cursor: pointer;
++}
++
++.library-project-list > .project-row.suno-row button,
++.library-project-list > .project-row.suno-row a,
++.library-project-list > .project-row.suno-row input,
++.library-project-list > .project-row.suno-row select,
++.library-project-list > .project-row.suno-row textarea,
++.library-project-list > .project-row.suno-row label,
++.asset-flat-row button,
++.asset-flat-row a,
++.asset-flat-row input,
++.asset-flat-row select,
++.asset-flat-row textarea,
++.asset-flat-row label {
++  cursor: pointer;
++}
+--- /tmp/suno_patch_backup_20260713_click_label/test_song_structure_and_stem_backends.py	2026-07-13 04:25:28.415220653 +0000
++++ tests/test_song_structure_and_stem_backends.py	2026-07-13 04:26:55.647836259 +0000
+@@ -182,7 +182,7 @@
+       ] }};
+       const result = normalizeStructureSegments(source, 245);
+       if (result.length !== 5) throw new Error(JSON.stringify(result));
+-      if (result.map((row) => row.label).join('|') !== 'Intro|Verse 1|Chorus|Verse 2|Final Chorus x2') throw new Error(JSON.stringify(result));
++      if (result.map((row) => row.label).join('|') !== 'Intro|Verse 1|Chorus|Verse 2|Final Chorus') throw new Error(JSON.stringify(result));
+       for (let index = 1; index < result.length; index += 1) {{
+         if (result[index].start < result[index - 1].end - 0.001) throw new Error('overlap:' + JSON.stringify(result));
+       }}
+@@ -207,12 +207,14 @@
+         ['Deep Male Rapper | Hard Straight Rap Break | No Singing', null],
+         ['Outro | Stripped Chorus Reprise | Fade-Out', 'Outro'],
+         ['Intro | Build-Up | Clear Alternation', 'Intro'],
+-        ['Final Chorus x2 | Maximum Climax', 'Final Chorus x2'],
++        ['Final Chorus x2 | Maximum Climax', 'Final Chorus'],
++        ['Chorus x2 | Repeat Entire Hook Twice', 'Chorus'],
+       ];
+       for (const [input, expected] of cases) {{
+         const result = structureMarker(input);
+         const actual = result ? result.label : null;
+         if (actual !== expected) throw new Error(input + ':' + JSON.stringify(result));
++        if (/x\\s*2/i.test(input) && !/x\\s*2/i.test(result?.rawLabel || '')) throw new Error('repeat metadata lost:' + JSON.stringify(result));
+       }}
+     """
+     completed = subprocess.run(
+--- /tmp/suno_patch_backup_20260713_click_label/test_frontend_source_regressions.py	2026-07-13 04:25:28.422528835 +0000
++++ tests/test_frontend_source_regressions.py	2026-07-13 04:26:06.676074384 +0000
+@@ -424,3 +424,25 @@
+     assert "setPollingUntil(Date.now() + POLLING_AFTER_CREATE_MS)" in source
+     assert "onTaskStarted={handleBackgroundTaskStarted}" in source
+ 
++
++
++def test_library_title_and_flat_views_restore_complete_safe_click_areas():
++    library = _read("frontend-react/src/pages/LibraryPage.jsx")
++    styles = _read("frontend-react/src/styles/app.css")
++
++    assert "function isLibraryInteractiveClickTarget" in library
++    assert "button, a, input, select, textarea, summary, details, label" in library
++    assert "function openProjectFromLibraryClickArea" in library
++    assert "function openAssetFromLibraryClickArea" in library
++    assert "onClick={(event) => openProjectFromLibraryClickArea(project, event)}" in library
++    assert "onClick={(event) => openAssetFromLibraryClickArea(project, asset, event)}" in library
++    assert ".library-project-list > .project-row.suno-row" in styles
++    assert ".asset-flat-row" in styles
++
++
++def test_waveform_visible_labels_hide_repeat_instructions_but_keep_raw_source():
++    structure = _read("frontend-react/src/utils/songStructure.js")
++
++    assert "Repeat instructions such as `x2`" in structure
++    assert "if (type === 'chorus')" not in structure
++    assert "rawLabel: raw" in structure

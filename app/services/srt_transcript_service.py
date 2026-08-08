@@ -24,6 +24,7 @@ from __future__ import annotations
 
 
 import asyncio
+import contextvars
 import difflib
 import json
 import logging
@@ -53,7 +54,7 @@ from app.services.audio_metadata_service import read_audio_duration_seconds
 from app.services.audio_asset_repair_service import is_audio_url, repair_local_file_metadata
 from app.services.audio_cache_service import AudioCacheService, AudioCandidate
 from app.services.ai_chat_service import AiChatService, AiProviderError
-from app.services.waveform_service import extract_structure_marker
+from app.services.waveform_service import extract_structure_marker, extract_waveform_structure_marker
 from app.utils.time_utils import utc_now_naive
 
 TRANSCRIPTION_SETTINGS_KEY = "ai_chat_settings"
@@ -78,6 +79,25 @@ PATOIS_LANGUAGE_HINTS = {
     "mi", "yuh", "nuh", "inna", "fi", "deh", "weh", "pon", "dem", "di", "cyaan", "cyaa", "cah",
     "gwaan", "ting", "seh", "wah", "mek", "dung", "col", "weh", "nah", "dehdeh", "yaad", "bwoy",
     "gyal", "riddim", "toasting", "patois", "jamaican", "jamaica", "dancehall",
+    # Erweiterung 2026-07-26: haeufige Patois-Funktionswoerter/-Kontraktionen, die in der
+    # bisherigen Liste fehlten und dadurch als "unbekannt/ambiguous" klassifiziert wurden.
+    "haffi", "wanna", "unu", "unnu", "dweet", "dis", "dat", "gwan", "waan", "bredrin", "sistren",
+    "irie", "zeen", "wid", "widout", "chatty", "badmind", "vex", "rahtid", "wagwan", "chune",
+}
+
+# Bekannte Patois-Orthografievarianten -> normalisierte Vergleichsform. Wird ausschliesslich beim
+# Fuzzy-Matching (nicht in der Anzeige/SRT-Ausgabe!) angewendet, damit ASR-Fehlhoerungen bzw.
+# abweichende Schreibweisen (z. B. "gwaan" vs. "gwan", "yuh" vs. "you") nicht als Nicht-Match
+# gewertet werden. Nur additive, konservative Eintraege -- keine Ueberschneidung mit Deutsch/Englisch.
+PATOIS_MATCH_NORMALIZATION = {
+    # Zielform ist bewusst die Schreibweise, die Standard-Englisch-ASR (Groq/Whisper)
+    # fuer diese haeufigen Patois-Woerter typischerweise ausgibt (phonetische
+    # Naeherung), NICHT die semantische Uebersetzung -- fuer den Fuzzy-Vergleich
+    # gegen ASR-Output zaehlt nur, was das Modell wahrscheinlich transkribiert.
+    "di": "the", "dem": "them", "nuh": "no", "inna": "in", "pon": "on", "wid": "with",
+    "widout": "without", "fi": "for", "yuh": "you", "gwan": "gwaan", "dis": "this", "dat": "that",
+    "cyaan": "can", "cyaa": "can", "mek": "make", "seh": "say", "unu": "you", "unnu": "you",
+    "chune": "tune", "deh": "there", "riddim": "rhythm",
 }
 
 GERMAN_LANGUAGE_HINTS = {
@@ -87,6 +107,40 @@ GERMAN_LANGUAGE_HINTS = {
     "wenn", "weil", "doch", "nur", "noch", "schon", "mich", "dich", "uns", "euch", "mir", "dir",
     "ein", "eine", "einen", "einem", "einer", "dem", "den", "des", "zum", "zur", "aus", "bei",
 }
+
+# ---------------------------------------------------------------------------
+# Sprachbewusstes Matching (Fixes 2026-07-26)
+# ---------------------------------------------------------------------------
+# Ursache fuer beobachtete SRT-Zeitdrifts bei EN/Patois-Passagen: Die Fuzzy-
+# Wortaehnlichkeit boostete bislang JEDES Wortpaar ueber die Koelner Phonetik
+# (ein rein deutsches Lautschema), unabhaengig von der erkannten Sprache. Bei
+# Englisch/Patois griff der Bonus nicht, wodurch dort seltener Anker entstanden
+# und laengere Strecken linear interpoliert wurden ("driftet und faengt sich
+# am naechsten Anker wieder"). Zusaetzlich ist Patois ASR-seitig Out-of-
+# Vocabulary fuer Standard-Englisch-Modelle, was die ASR-Worterkennung dort
+# zusaetzlich verschlechtert -- der Matcher muss dort toleranter sein.
+#
+# _CURRENT_MATCH_LANGUAGE_CTX traegt die fuer den aktuellen Alignment-Lauf
+# aufgeloeste Sprache ("de"/"en"/"auto"), _CURRENT_MATCH_PATOIS_CTX signalisiert
+# zusaetzlich, ob die Lyrics ueberwiegend als Patois erkannt wurden (impliziert
+# "en" als ASR-Sprache, aber mit ASR-tolerantem Matching). Ueber contextvars
+# statt eines Moduls-Globals gesetzt, damit parallele Alignment-Laeufe in
+# unterschiedlichen Threads sich nicht gegenseitig ueberschreiben.
+_CURRENT_MATCH_LANGUAGE_CTX: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "_CURRENT_MATCH_LANGUAGE_CTX", default="de"
+)
+_CURRENT_MATCH_PATOIS_CTX: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "_CURRENT_MATCH_PATOIS_CTX", default=False
+)
+
+
+def _normalize_patois_variant(token: str) -> str:
+    """Bildet bekannte Patois-Schreibvarianten auf eine Vergleichsform ab.
+
+    Nur fuer den Fuzzy-Vergleich gedacht -- veraendert niemals angezeigten Text.
+    """
+
+    return PATOIS_MATCH_NORMALIZATION.get(token, token)
 
 
 def _language_tokens(text: str) -> list[str]:
@@ -246,6 +300,8 @@ class LyricLine:
     section_label: str | None = None
     section_type: str | None = None
     starts_section: bool = False
+    # Interner Marker fuer einen als Intro-Wiederholung verworfenen Fruehanker.
+    timing_suppressed_until: float | None = None
 
 
 @dataclass
@@ -360,9 +416,13 @@ def _cologne_phonetics(word: str) -> str:
 def _script_word_similarity(a: str, b: str) -> float:
     """Generische Token-Ähnlichkeit für ASR-Fehlhörungen.
 
-    Kombiniert String-Ratio, Präfix-Beziehung und Kölner Phonetik. Damit werden
-    Fälle wie gehn/gehen, Flut/Blut oder leicht abweichende Endungen generisch
-    behandelt, ohne wortspezifische Sonderfälle im Code zu pflegen.
+    Kombiniert String-Ratio, Präfix-Beziehung, Kölner Phonetik (nur bei
+    aufgelöster Sprache "de") und eine Patois-Schreibvarianten-Normalisierung
+    (nur bei erkanntem Patois). Ohne Sprachbezug boostete die Kölner Phonetik
+    -- ein rein deutsches Lautschema -- bislang JEDES Wortpaar unabhängig von
+    der Sprache; für Englisch/Patois griff der Bonus faktisch nie, wodurch dort
+    seltener Anker entstanden und SRT-Zeiten sichtbar wegdrifteten, bis der
+    nächste Anker sie wieder einfing. Fix 2026-07-26.
     """
     left = str(a or "")
     right = str(b or "")
@@ -370,17 +430,44 @@ def _script_word_similarity(a: str, b: str) -> float:
         return 0.0
     if left == right:
         return 1.0
-    if min(len(left), len(right)) < 3:
+
+    is_german = _CURRENT_MATCH_LANGUAGE_CTX.get() == "de"
+    is_patois = _CURRENT_MATCH_PATOIS_CTX.get()
+
+    if is_patois:
+        left_cmp = _normalize_patois_variant(left)
+        right_cmp = _normalize_patois_variant(right)
+    else:
+        left_cmp, right_cmp = left, right
+
+    if left_cmp == right_cmp:
+        return 1.0
+    # Laengengate NACH der Normalisierung: kurze Patois-Funktionswoerter wie
+    # "di"/"nuh"/"pon" wuerden sonst nie geprueft, obwohl ihre normalisierte
+    # ASR-Zielform ("the"/"no"/"on") laenger ist und ein sicherer Treffer waere.
+    if min(len(left_cmp), len(right_cmp)) < 2:
         return 0.0
-    ratio = difflib.SequenceMatcher(a=left, b=right, autojunk=False).ratio()
-    if left.startswith(right) or right.startswith(left):
-        ratio = max(ratio, min(len(left), len(right)) / max(len(left), len(right)) + 0.12)
-    if len(left) >= 4 and len(right) >= 4 and _cologne_phonetics(left) == _cologne_phonetics(right):
+
+    ratio = difflib.SequenceMatcher(a=left_cmp, b=right_cmp, autojunk=False).ratio()
+    if left_cmp.startswith(right_cmp) or right_cmp.startswith(left_cmp):
+        ratio = max(ratio, min(len(left_cmp), len(right_cmp)) / max(len(left_cmp), len(right_cmp)) + 0.12)
+    if is_german and len(left) >= 4 and len(right) >= 4 and _cologne_phonetics(left) == _cologne_phonetics(right):
         ratio = max(ratio, 0.86)
     return min(ratio, 1.0)
 
 
 SCRIPT_FUZZY_WORD_THRESHOLD = 0.72
+# Bei erkanntem Patois ist die ASR-Worterkennung strukturell schlechter (Out-of-
+# Vocabulary fuer Standard-Englisch-Modelle) -- ein etwas toleranterer Schwellwert
+# verhindert, dass korrekt erkannte, aber leicht verzerrte Patois-Woerter am
+# Standard-Threshold scheitern und dadurch als Anker verlorengehen.
+SCRIPT_FUZZY_WORD_THRESHOLD_PATOIS = 0.62
+
+
+def _current_fuzzy_threshold() -> float:
+    """Liefert den fuer den aktuellen Alignment-Lauf gueltigen Fuzzy-Schwellwert."""
+
+    return SCRIPT_FUZZY_WORD_THRESHOLD_PATOIS if _CURRENT_MATCH_PATOIS_CTX.get() else SCRIPT_FUZZY_WORD_THRESHOLD
 
 
 def _script_is_skippable(raw: str, skip_prefixes: tuple[str, ...] = ("#", "/", ";"), skip_parens: bool = False) -> bool:
@@ -1414,7 +1501,28 @@ def _build_effective_srt_lyrics_from_asr(
     return effective_lyrics or lyrics, effective_source_lyrics or source_lyrics, report, info
 
 
+def _line_alignment_language(line: LyricLine) -> tuple[str, bool]:
+    """Klassifiziert eine einzelne Lyrics-Zeile fuer sprachbewusstes Fuzzy-Matching.
+
+    Nutzt dieselbe Heuristik wie `detect_lyrics_language`, aber auf Zeilenebene,
+    damit code-switchte Songs (z. B. deutsche Strophe + englischer/Patois-Hook im
+    selben Song) nicht ueber eine einzige, song-globale Sprache hinweg gematcht
+    werden -- das war die Hauptursache dafuer, dass der Kölner-Phonetik-Bonus in
+    nicht-deutschen Abschnitten nie griff, obwohl der Song insgesamt als "de"
+    aufgeloest wurde (und umgekehrt). Bei zu kurzen/mehrdeutigen Zeilen faellt die
+    Klassifikation auf die aktuelle Song-Sprache zurueck. Fix 2026-07-26.
+    """
+    text = " ".join(line.match_tokens) if line.match_tokens else line.display
+    detected = detect_lyrics_language(text)
+    language = str(detected.get("language") or "auto")
+    is_patois = bool(detected.get("reason") == "patois_or_english_lyrics")
+    if language not in {"de", "en"}:
+        language = _CURRENT_MATCH_LANGUAGE_CTX.get()
+    return language, is_patois
+
+
 def _script_align_lines(lines: list[LyricLine], hyp: list[HypWord], warn_factor: float = 0.6) -> list[str]:
+    line_language_ctx = [_line_alignment_language(line) for line in lines]
     target: list[str] = []
     tok_line: list[int] = []
     line_token_offsets: list[int] = []
@@ -1448,19 +1556,33 @@ def _script_align_lines(lines: list[LyricLine], hyp: list[HypWord], warn_factor:
                 if token_starts[j] is not None:
                     continue
                 candidate = hyp[i1 + offset]
-                if _script_word_similarity(candidate.norm, target[j]) >= SCRIPT_FUZZY_WORD_THRESHOLD:
-                    token_starts[j] = candidate.start
-                    token_ends[j] = candidate.end
-                    fuzzy_rescued += 1
+                line_lang, line_patois = line_language_ctx[tok_line[j]]
+                lang_token = _CURRENT_MATCH_LANGUAGE_CTX.set(line_lang)
+                patois_token = _CURRENT_MATCH_PATOIS_CTX.set(line_patois)
+                try:
+                    if _script_word_similarity(candidate.norm, target[j]) >= _current_fuzzy_threshold():
+                        token_starts[j] = candidate.start
+                        token_ends[j] = candidate.end
+                        fuzzy_rescued += 1
+                finally:
+                    _CURRENT_MATCH_LANGUAGE_CTX.reset(lang_token)
+                    _CURRENT_MATCH_PATOIS_CTX.reset(patois_token)
             for offset in range(1, span + 1):
                 j = j2 - offset
                 if token_starts[j] is not None:
                     continue
                 candidate = hyp[i2 - offset]
-                if _script_word_similarity(candidate.norm, target[j]) >= SCRIPT_FUZZY_WORD_THRESHOLD:
-                    token_starts[j] = candidate.start
-                    token_ends[j] = candidate.end
-                    fuzzy_rescued += 1
+                line_lang, line_patois = line_language_ctx[tok_line[j]]
+                lang_token = _CURRENT_MATCH_LANGUAGE_CTX.set(line_lang)
+                patois_token = _CURRENT_MATCH_PATOIS_CTX.set(line_patois)
+                try:
+                    if _script_word_similarity(candidate.norm, target[j]) >= _current_fuzzy_threshold():
+                        token_starts[j] = candidate.start
+                        token_ends[j] = candidate.end
+                        fuzzy_rescued += 1
+                finally:
+                    _CURRENT_MATCH_LANGUAGE_CTX.reset(lang_token)
+                    _CURRENT_MATCH_PATOIS_CTX.reset(patois_token)
 
     last = -1.0
     tolerance = 0.30
@@ -1621,6 +1743,7 @@ def _script_demote_false_early_section_anchors(lines: list[LyricLine], seconds_p
             line.end = None
             line.wstart = []
             line.wend = []
+            line.timing_suppressed_until = end
             report.append(
                 f"INFO: Früher Abschnitts-Anker Zeile {idx + 1} ({line.section_label or line.section_type}) "
                 f"bei {start:.1f}s als Intro-Wiederholung ignoriert; Zeile wird vor Anker {next_anchor + 1} neu verteilt."
@@ -1685,7 +1808,15 @@ def _script_tail_spread_section_transition(
     if window < max(9.0, required + 4.5):
         return None, None
 
-    onset = _script_first_hyp_onset_in_window(hyp, window_start, window_end)
+    # Ein zuvor verworfener Fruehanker gehoert oft zu einer Intro-Wiederholung.
+    # Der erste ASR-Onset im Gap waere dann genau der falsche Treffer und wuerde
+    # den korrigierten Abschnittsstart wieder auf 8-9 Sekunden zurueckziehen.
+    suppressed_until = max(
+        (float(line.timing_suppressed_until or 0.0) for line in lines[anchor_a + 1:anchor_b]),
+        default=0.0,
+    )
+    onset_start = max(window_start, suppressed_until + 0.30) if suppressed_until > window_start else window_start
+    onset = _script_first_hyp_onset_in_window(hyp, onset_start, window_end)
     if onset is not None and onset < window_end - 1.0:
         return onset, (
             f"INFO: Abschnitt {first.section_label or first.section_type} nach Intro-Lücke am "
@@ -2336,7 +2467,7 @@ def _script_candidate_line_score(candidate_tokens: list[str], line: LyricLine) -
                     best_index = candidate_index
                 if similarity >= 0.92:
                     break
-            if best_index is None or best_similarity < SCRIPT_FUZZY_WORD_THRESHOLD:
+            if best_index is None or best_similarity < _current_fuzzy_threshold():
                 continue
             if first_match_at is None:
                 first_match_at = best_index
@@ -2521,12 +2652,12 @@ def _script_refine_review_anchor(
             span = min(i2 - i1, j2 - j1)
             for offset in range(span):
                 j = j1 + offset
-                if starts[j] is None and _script_word_similarity(block_words[i1 + offset].norm, tokens[j]) >= SCRIPT_FUZZY_WORD_THRESHOLD:
+                if starts[j] is None and _script_word_similarity(block_words[i1 + offset].norm, tokens[j]) >= _current_fuzzy_threshold():
                     starts[j] = float(block_words[i1 + offset].start)
                     ends[j] = float(block_words[i1 + offset].end)
             for offset in range(1, span + 1):
                 j = j2 - offset
-                if starts[j] is None and _script_word_similarity(block_words[i2 - offset].norm, tokens[j]) >= SCRIPT_FUZZY_WORD_THRESHOLD:
+                if starts[j] is None and _script_word_similarity(block_words[i2 - offset].norm, tokens[j]) >= _current_fuzzy_threshold():
                     starts[j] = float(block_words[i2 - offset].start)
                     ends[j] = float(block_words[i2 - offset].end)
 
@@ -3486,16 +3617,24 @@ def deterministic_prepare_lyrics_for_srt(lyrics: str) -> tuple[str, dict[str, An
     }
 
 
-def _structure_markers_from_line(line: str) -> list[dict[str, str]]:
+def _structure_markers_from_line(line: str, *, waveform_only: bool = False) -> list[dict[str, str]]:
+    """Return structure markers from a tagged lyric line.
+
+    The broader SRT alignment path keeps its established support for performance
+    markers such as Fade Out.  Waveform storage can opt into arrangement-only
+    markers so local vocal tags never split the visible song timeline.
+    """
+
+    parser = extract_waveform_structure_marker if waveform_only else extract_structure_marker
     markers: list[dict[str, str]] = []
     for match in re.finditer(r"\[([^\]\n]{1,260})\]", str(line or "")):
-        marker = extract_structure_marker(match.group(1))
+        marker = parser(match.group(1))
         if marker:
             markers.append(marker)
     return markers
 
 
-def _source_structure_lyrics_lines(source_lyrics: str) -> list[dict[str, Any]]:
+def _source_structure_lyrics_lines(source_lyrics: str, *, waveform_only: bool = False) -> list[dict[str, Any]]:
     """Map original tagged lyrics to the visible lines used by SRT alignment.
 
     The SRT pipeline intentionally removes prompt/structure tags before alignment.
@@ -3513,7 +3652,7 @@ def _source_structure_lyrics_lines(source_lyrics: str) -> list[dict[str, Any]]:
         if not line:
             continue
 
-        markers = _structure_markers_from_line(line)
+        markers = _structure_markers_from_line(line, waveform_only=waveform_only)
         if markers:
             current_marker = markers[0]
             saw_explicit_marker = True
@@ -3607,8 +3746,10 @@ def build_structure_segments_from_srt_alignment(
     source_lyrics: str,
     srt_segments: list[dict[str, Any]],
     duration_seconds: float | int | None,
+    *,
+    waveform_only: bool = False,
 ) -> list[dict[str, Any]]:
-    source_lines = _source_structure_lyrics_lines(source_lyrics)
+    source_lines = _source_structure_lyrics_lines(source_lyrics, waveform_only=waveform_only)
     if not source_lines or not srt_segments:
         return []
 
@@ -3717,7 +3858,7 @@ def _store_structure_segments_from_srt_alignment(
     duration_seconds: float | int | None,
 ) -> list[dict[str, Any]]:
     effective_duration = duration_seconds or asset.duration_seconds
-    structure_segments = build_structure_segments_from_srt_alignment(source_lyrics, srt_segments, effective_duration)
+    structure_segments = build_structure_segments_from_srt_alignment(source_lyrics, srt_segments, effective_duration, waveform_only=True)
     if not structure_segments:
         return []
 
@@ -4168,7 +4309,9 @@ def load_transcription_admin_settings(db: Session) -> dict[str, Any]:
 
     backend = str(value.get("transcription_backend") or settings.transcript_backend_default or "voxtral").strip().lower()
     if backend not in SUPPORTED_BACKENDS:
-        backend = "voxtral"
+        backend = str(settings.transcript_backend_default or "groq").strip().lower()
+        if backend not in SUPPORTED_BACKENDS:
+            backend = sorted(SUPPORTED_BACKENDS)[0]
 
     language = str(value.get("transcription_language") or settings.transcript_language_default or "de").strip().lower()
     if language not in SUPPORTED_LANGUAGES:
@@ -4314,18 +4457,18 @@ def _existing_vocal_stem_path(asset: AudioAsset) -> Path | None:
 
 
 def select_audio_path_for_transcription(asset: AudioAsset, original_audio_path: Path, prefer_existing_vocal_stem: bool = True) -> tuple[Path, dict[str, Any]]:
+    metadata = asset.metadata_json if isinstance(asset.metadata_json, dict) else {}
+    stems = metadata.get("stems") if isinstance(metadata.get("stems"), dict) else {}
     if prefer_existing_vocal_stem:
         vocal_stem = _existing_vocal_stem_path(asset)
         if vocal_stem:
             return vocal_stem, {
                 "source": "existing_vocal_stem",
-                "stem_backend": "demucs",
+                "stem_backend": stems.get("backend") or "demucs",
                 "stem_kind": "vocals",
                 "path": str(vocal_stem),
             }
 
-    metadata = asset.metadata_json if isinstance(asset.metadata_json, dict) else {}
-    stems = metadata.get("stems") if isinstance(metadata.get("stems"), dict) else {}
     return original_audio_path, {
         "source": "original_audio",
         "stem_status": stems.get("status") or "missing",
@@ -4466,31 +4609,37 @@ def _seconds(value: Any, fallback: float = 0.0) -> float:
 
 
 def _extract_words(raw: Any) -> list[WordTiming]:
-    words: list[WordTiming] = []
+    def collect(items: Any) -> list[WordTiming]:
+        collected: list[WordTiming] = []
+        if not isinstance(items, list):
+            return collected
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            text = item.get("word") or item.get("text") or item.get("token")
+            if not text:
+                continue
+            start = item.get("start", item.get("start_time", item.get("startTime")))
+            end = item.get("end", item.get("end_time", item.get("endTime")))
+            start_f = _seconds(start, -1.0)
+            end_f = _seconds(end, -1.0)
+            if start_f < 0 or end_f < 0 or end_f <= start_f:
+                continue
+            collected.append(WordTiming(word=str(text).strip(), start=start_f, end=end_f))
+        return collected
 
-    def add_word(item: Any) -> None:
-        if not isinstance(item, dict):
-            return
-        text = item.get("word") or item.get("text") or item.get("token")
-        if not text:
-            return
-        start = item.get("start", item.get("start_time", item.get("startTime")))
-        end = item.get("end", item.get("end_time", item.get("endTime")))
-        start_f = _seconds(start, -1.0)
-        end_f = _seconds(end, -1.0)
-        if start_f < 0 or end_f < 0 or end_f <= start_f:
-            return
-        words.append(WordTiming(word=str(text).strip(), start=start_f, end=end_f))
+    if not isinstance(raw, dict):
+        return []
 
-    if isinstance(raw, dict):
-        direct_words = raw.get("words")
-        if isinstance(direct_words, list):
-            for item in direct_words:
-                add_word(item)
+    # OpenAI-kompatible Provider liefern je nach Modell sowohl eine Top-Level-
+    # Wortliste als auch dieselben Worte noch einmal in den Segmenten. Beides
+    # zu konkatenieren verdoppelt die Hypothese und kann SequenceMatcher auf
+    # einen falschen fruehen Abschnitt springen lassen.
+    words = collect(raw.get("words"))
+    if not words:
         for segment in raw.get("segments", []) if isinstance(raw.get("segments"), list) else []:
-            if isinstance(segment, dict) and isinstance(segment.get("words"), list):
-                for item in segment.get("words") or []:
-                    add_word(item)
+            if isinstance(segment, dict):
+                words.extend(collect(segment.get("words")))
     return sorted(words, key=lambda item: (item.start, item.end))
 
 
@@ -5315,13 +5464,44 @@ def _spread_lines_inside_time_window(assigned_lines: list[dict[str, Any]], assig
     return result
 
 
-def align_lyrics_to_timeline_bundle(lyrics: str, asr: AsrResult, duration_seconds: float, source_lyrics: str | None = None) -> dict[str, Any]:
+def align_lyrics_to_timeline_bundle(
+    lyrics: str,
+    asr: AsrResult,
+    duration_seconds: float,
+    source_lyrics: str | None = None,
+    resolved_language: str | None = None,
+) -> dict[str, Any]:
     """Exaktes Lyrics-Alignment nach dem funktionierenden Referenzskript.
 
     Liefert zusätzlich eine `*.half.srt`-Variante für mobile Geräte.
     Die normale SRT nutzt Lyrics-Zeilen als Source of Truth; die Half-SRT splittet
     dieselben Zeilen wortbasiert mit Zeitinterpolation wie im CLI-Skript.
+
+    `resolved_language` ist optional die bereits von `resolve_transcription_language()`
+    ermittelte Sprache ("de"/"en"/"auto") des Aufrufers (Produktionspfad). Wird sie
+    nicht übergeben (z. B. in bestehenden Tests/Golden-Set), wird sie intern per
+    `detect_lyrics_language()` aus den Lyrics selbst abgeleitet -- Rückwärtskompatibel.
+    Steuert sprachabhängiges Fuzzy-Matching (Kölner-Phonetik-Bonus nur bei "de",
+    tolerantere Schwellwerte bei erkanntem Patois). Fix 2026-07-26.
     """
+    detected_for_matching = detect_lyrics_language(lyrics)
+    effective_language = str(resolved_language or detected_for_matching.get("language") or "auto")
+    if effective_language not in {"de", "en"}:
+        # "auto"/unbekannt: konservativ wie bisher behandeln (deutscher Standardpfad),
+        # aber Patois-Flag bleibt unabhaengig davon ueber die Wortliste bestimmt.
+        effective_language = "de"
+    is_patois_lyrics = bool(detected_for_matching.get("reason") == "patois_or_english_lyrics")
+
+    language_token = _CURRENT_MATCH_LANGUAGE_CTX.set(effective_language)
+    patois_token = _CURRENT_MATCH_PATOIS_CTX.set(is_patois_lyrics)
+    try:
+        return _align_lyrics_to_timeline_bundle_impl(lyrics, asr, duration_seconds, source_lyrics=source_lyrics)
+    finally:
+        _CURRENT_MATCH_LANGUAGE_CTX.reset(language_token)
+        _CURRENT_MATCH_PATOIS_CTX.reset(patois_token)
+
+
+def _align_lyrics_to_timeline_bundle_impl(lyrics: str, asr: AsrResult, duration_seconds: float, source_lyrics: str | None = None) -> dict[str, Any]:
     # Einheitlicher Hyp-Aufbau für ALLE Backends: Groq/WhisperX liefern bereits
     # expandierte Einzel-Tokens, OpenAI/Voxtral rohe Wörter. Das frühere
     # `tokenize(word)[0]` hat bei rohen Mehrfach-Token-Wörtern (Bindestriche,
@@ -5345,7 +5525,12 @@ def align_lyrics_to_timeline_bundle(lyrics: str, asr: AsrResult, duration_second
 
     report = list(effective_report)
     word_source = str(asr.raw.get("songstudio_word_source") or "") if isinstance(asr.raw, dict) else ""
-    if word_source == "segment_text_distributed":
+    if word_source in {"word_timestamps_interpolated", "segment_word_timestamps_interpolated"}:
+        report.append(
+            "WARN: Provider lieferte teilweise fehlende Wort-Timestamps; fehlende Wortzeiten "
+            "wurden innerhalb der Segmentfenster interpoliert. Bestehende Wortzeiten bleiben exakt."
+        )
+    elif word_source == "segment_text_distributed":
         report.append(
             "WARN: Provider lieferte KEINE Wort-Timestamps (Datenschema-Abweichung); "
             "Wortzeiten wurden gleichmaessig ueber Segmentfenster verteilt. "
@@ -5444,12 +5629,15 @@ def compute_alignment_quality(bundle: dict[str, Any]) -> dict[str, Any]:
     warn_lines = [line for line in report if str(line).startswith("WARN")]
     squeeze_warns = sum(1 for line in warn_lines if "gequetscht" in str(line))
     word_source_degraded = any("KEINE Wort-Timestamps" in str(line) for line in warn_lines)
+    word_source_interpolated = any("interpoliert" in str(line).lower() for line in warn_lines)
 
     score = matched_ratio
     score -= 0.06 * min(len(warn_lines), 5)
     score -= 0.05 * min(squeeze_warns, 4)
     if word_source_degraded:
         score -= 0.25
+    if word_source_interpolated:
+        score -= 0.08
     score = max(0.0, min(1.0, round(score, 3)))
     return {
         "score": score,
@@ -5460,6 +5648,7 @@ def compute_alignment_quality(bundle: dict[str, Any]) -> dict[str, Any]:
         "warn_count": len(warn_lines),
         "squeeze_warn_count": squeeze_warns,
         "word_source_degraded": word_source_degraded,
+        "word_source_interpolated": word_source_interpolated,
     }
 
 
@@ -5824,6 +6013,19 @@ def _half_transcript_path_from_srt_path(srt_path: str | None) -> Path | None:
     path = Path(srt_path).resolve()
     return path.with_name(f"{path.stem}.half.srt")
 
+
+def _provider_json_payload(response: Any, provider: str) -> dict[str, Any]:
+    """Liest Provider-JSON mit einer einheitlichen, kontrollierten Fehlermeldung."""
+    try:
+        payload = response.json()
+    except (TypeError, ValueError) as exc:
+        raise TranscriptionBackendError(
+            f"{provider} API lieferte keine gueltige JSON-Transkriptionsantwort."
+        ) from exc
+    if not isinstance(payload, dict):
+        raise TranscriptionBackendError(f"{provider} API lieferte ein unerwartetes Antwortformat.")
+    return payload
+
 def _transcribe_openai_sync(audio_path: Path, language: str) -> AsrResult:
     settings = get_settings()
     if not settings.openai_api_key:
@@ -5856,7 +6058,8 @@ def _transcribe_openai_sync(audio_path: Path, language: str) -> AsrResult:
 
     if response.status_code >= 400:
         raise TranscriptionBackendError(f"OpenAI Whisper API Fehler {response.status_code}: {response.text[:500]}")
-    raw = response.json()
+    raw = _provider_json_payload(response, "OpenAI Whisper")
+    raw = _interpolate_whisperx_words(raw)
     raw["songstudio_word_source"] = _detect_asr_word_source(raw)
     return AsrResult(text=str(raw.get("text") or ""), words=_extract_words(raw), segments=_extract_segments(raw), raw=raw)
 
@@ -5893,7 +6096,8 @@ def _transcribe_voxtral_sync(audio_path: Path, language: str) -> AsrResult:
 
     if response.status_code >= 400:
         raise TranscriptionBackendError(f"Voxtral API Fehler {response.status_code}: {response.text[:700]}")
-    raw = response.json()
+    raw = _provider_json_payload(response, "Voxtral")
+    raw = _interpolate_whisperx_words(raw)
     raw["songstudio_word_source"] = _detect_asr_word_source(raw)
     return AsrResult(text=str(raw.get("text") or ""), words=_extract_words(raw), segments=_extract_segments(raw), raw=raw)
 
@@ -6004,11 +6208,18 @@ def _detect_asr_word_source(payload: Any) -> str:
     """
     if not isinstance(payload, dict):
         return "none"
+
+    def has_timing(word: Any) -> bool:
+        if not isinstance(word, dict):
+            return False
+        start = _seconds(word.get("start", word.get("start_time", word.get("startTime"))), -1.0)
+        end = _seconds(word.get("end", word.get("end_time", word.get("endTime"))), -1.0)
+        return start >= 0 and end > start
+
     direct_words = payload.get("words")
-    if isinstance(direct_words, list) and any(
-        isinstance(word, dict) and word.get("start") is not None and word.get("end") is not None
-        for word in direct_words
-    ):
+    if isinstance(direct_words, list) and any(has_timing(word) for word in direct_words):
+        if any(isinstance(word, dict) and word.get("interpolated") for word in direct_words):
+            return "word_timestamps_interpolated"
         return "word_timestamps"
     segments = payload.get("segments")
     if isinstance(segments, list):
@@ -6016,10 +6227,9 @@ def _detect_asr_word_source(payload: Any) -> str:
             if not isinstance(segment, dict):
                 continue
             words = segment.get("words")
-            if isinstance(words, list) and any(
-                isinstance(word, dict) and word.get("start") is not None and word.get("end") is not None
-                for word in words
-            ):
+            if isinstance(words, list) and any(has_timing(word) for word in words):
+                if any(isinstance(word, dict) and word.get("interpolated") for word in words):
+                    return "segment_word_timestamps_interpolated"
                 return "segment_word_timestamps"
         if any(isinstance(segment, dict) and str(segment.get("text") or "").strip() for segment in segments):
             return "segment_text_distributed"
@@ -6170,7 +6380,8 @@ def _transcribe_groq_sync(audio_path: Path, language: str, progress_callback: Gr
     if response is None or response.status_code != 200:
         raise TranscriptionBackendError(last_error or "Groq API lieferte keine gültige Antwort.")
 
-    raw = response.json()
+    raw = _provider_json_payload(response, "Groq")
+    raw = _interpolate_whisperx_words(raw)
     hyp = _script_flatten_words_from_payload(raw)
     raw["songstudio_word_source"] = _detect_asr_word_source(raw)
     raw["backend"] = "groq"
@@ -6260,32 +6471,56 @@ def _interpolate_whisperx_words(raw: dict[str, Any]) -> dict[str, Any]:
         if seg_start < 0 or seg_end <= seg_start:
             continue
 
-        timed_count = 0
-        for word in words:
-            if not isinstance(word, dict):
-                continue
-            start = _seconds(word.get("start"), -1.0)
-            end = _seconds(word.get("end"), -1.0)
-            if start >= 0 and end > start:
-                timed_count += 1
-        if timed_count == len([w for w in words if isinstance(w, dict)]):
-            continue
-
-        step = max(0.05, (seg_end - seg_start) / max(1, len(words)))
+        valid_indices: list[int] = []
         for idx, word in enumerate(words):
             if not isinstance(word, dict):
                 continue
             start = _seconds(word.get("start"), -1.0)
             end = _seconds(word.get("end"), -1.0)
             if start >= 0 and end > start:
+                valid_indices.append(idx)
+        dict_count = len([word for word in words if isinstance(word, dict)])
+        if len(valid_indices) == dict_count:
+            continue
+
+        # Fehlende Wörter werden in die jeweilige Lücke zwischen den nächsten
+        # echten Nachbarn gelegt. Die alte Variante verteilte jedes fehlende
+        # Wort über das gesamte Segment und konnte dadurch vorhandene Wortzeiten
+        # überlappen oder bei Deutsch/Patois ganze Enden deutlich verschieben.
+        for position, idx in enumerate(range(len(words))):
+            word = words[idx]
+            if not isinstance(word, dict) or idx in valid_indices:
                 continue
-            interpolated_start = seg_start + (idx * step)
-            interpolated_end = min(seg_end, interpolated_start + max(0.05, step * 0.85))
+            previous_index = max((item for item in valid_indices if item < idx), default=None)
+            next_index = min((item for item in valid_indices if item > idx), default=None)
+            left = seg_start
+            right = seg_end
+            if previous_index is not None:
+                left = max(left, _seconds(words[previous_index].get("end"), left))
+            if next_index is not None:
+                right = min(right, _seconds(words[next_index].get("start"), right))
+            missing_run = 1
+            probe = idx + 1
+            while probe < len(words) and probe not in valid_indices:
+                if isinstance(words[probe], dict):
+                    missing_run += 1
+                probe += 1
+            run_offset = 0
+            probe = idx - 1
+            while probe >= 0 and probe not in valid_indices:
+                if isinstance(words[probe], dict):
+                    run_offset += 1
+                probe -= 1
+            available = max(0.05 * missing_run, right - left)
+            step = available / missing_run
+            interpolated_start = left + (run_offset * step)
+            interpolated_end = min(right, interpolated_start + max(0.05, step * 0.85))
             if interpolated_end <= interpolated_start:
-                interpolated_end = min(seg_end, interpolated_start + 0.05)
+                interpolated_end = interpolated_start + 0.05
             word["start"] = round(interpolated_start, 3)
-            word["end"] = round(interpolated_end, 3)
+            word["end"] = round(min(seg_end, interpolated_end), 3)
             word["interpolated"] = True
+            raw["songstudio_interpolated_word_count"] = int(raw.get("songstudio_interpolated_word_count") or 0) + 1
     return raw
 
 
@@ -6360,6 +6595,11 @@ def _run_whisperx_sync(audio_path: Path, language: str) -> AsrResult:
         raw["compute_type"] = compute_type
         raw["batch_size"] = batch_size
         raw["text"] = str(raw.get("text") or "\n".join(str(seg.get("text") or "").strip() for seg in raw.get("segments", []) if isinstance(seg, dict))).strip()
+        # WhisperX kann nach dem Alignment einzelne Worte ohne Start/Ende
+        # zurueckgeben. Die Interpolation ist bewusst erst nach dem echten
+        # Alignment und vor dem gemeinsamen Flattening aktiv, damit keine
+        # fehlenden Worte still aus der Hypothese verschwinden.
+        raw = _interpolate_whisperx_words(raw)
     except Exception as exc:
         if isinstance(exc, TranscriptionBackendError):
             raise
@@ -6697,6 +6937,18 @@ def _transcription_timeout_seconds(backend: str) -> float:
     backend_key = str(backend or "").strip().lower()
     if backend_key == "whisperx":
         return float(getattr(settings, "transcript_whisperx_timeout_seconds", 1800) or 1800)
+    if backend_key == "groq":
+        # Groq laeuft synchron in einem Thread und kann Request-Timeouts,
+        # Exponential-Backoff sowie die optionale ffmpeg-Vorverarbeitung
+        # enthalten. Der bisherige 240s-Watchdog war kuerzer als diese Kette;
+        # asyncio markierte den Task dann als fehlgeschlagen, waehrend der
+        # Provider-Thread noch weiterlief.
+        request_budget = _groq_request_timeout_seconds() * (_groq_max_retries() + 1)
+        retry_budget = sum(min(60.0, 2.0 * (2 ** attempt)) for attempt in range(_groq_max_retries()))
+        preprocess_budget = 305.0 if _groq_preprocess_audio_enabled(settings) else 0.0
+        provider_budget = request_budget + retry_budget + preprocess_budget + 15.0
+        configured = float(getattr(settings, "srt_transcription_timeout_seconds", 240.0) or 240.0)
+        return max(configured, provider_budget)
     return float(getattr(settings, "srt_transcription_timeout_seconds", 240.0) or 240.0)
 
 
@@ -7105,13 +7357,17 @@ def save_manual_srt_for_audio_asset(db: Session, audio_asset_id: int, srt_text: 
             status="completed",
             generated_at=now,
         )
-    transcript.backend = transcript.backend or "manual_editor"
-    transcript.language = transcript.language or "manual"
+    # Ein manueller Editor-Lauf besitzt keine gueltigen Provider-Wortzeiten.
+    # Alte words_json/backend-Werte wuerden sonst bei der naechsten Anzeige wie
+    # aktuelle ASR-Daten aussehen und die manuell gesetzten Zeilen ueberlagern.
+    transcript.backend = "manual_editor"
+    transcript.language = "manual"
     transcript.mode = TRANSCRIPTION_MODE
     transcript.match_mode = TRANSCRIPTION_MATCH_MODE
     transcript.srt_text = normalized_srt
     transcript.srt_path = str(target_path)
     transcript.segments_json = normalized_segments
+    transcript.words_json = []
     transcript.status = "completed"
     transcript.error_message = None
     transcript.generated_at = transcript.generated_at or now
@@ -7448,7 +7704,11 @@ async def generate_srt_for_audio_asset(
                     data={"error": str(forced_exc)[:400]},
                 )
         if alignment_bundle is None:
-            alignment_bundle = align_lyrics_to_timeline_bundle(lyrics, asr, duration, source_lyrics=source_lyrics) if has_alignment_lyrics else build_transcription_only_srt_bundle(asr, duration)
+            alignment_bundle = (
+                align_lyrics_to_timeline_bundle(lyrics, asr, duration, source_lyrics=source_lyrics, resolved_language=language)
+                if has_alignment_lyrics
+                else build_transcription_only_srt_bundle(asr, duration)
+            )
             if has_alignment_lyrics and alignment_engine == "forced_alignment":
                 alignment_bundle.setdefault("alignment_report", []).append(
                     "WARN: Forced-Alignment-Engine nicht verfuegbar/fehlgeschlagen; Heuristik-Engine verwendet."

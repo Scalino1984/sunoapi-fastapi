@@ -11,8 +11,8 @@ import pytest
 import json
 
 from app.config import get_settings
-from app.models import AudioAsset, AudioProject, Song, SunoTask
-from app.services.library_content_cache_service import _known_cover_urls, _repair_generation_options_from_tasks, cache_missing_library_content_once
+from app.models import AudioAsset, AudioProject, Song, StatusNotification, SunoTask
+from app.services.library_content_cache_service import _known_cover_urls, _repair_generation_options_from_tasks, _repair_misclassified_local_provider_checks, cache_missing_library_content_once
 from app.services.library_ai_tagging_service import normalize_ai_tags
 from app.services.music_service import MusicService
 
@@ -218,6 +218,198 @@ async def test_provider_generation_option_backfill_retries_old_checked_marker(is
     assert task.request_payload["audioWeight"] == 0.51
     assert task.request_payload["personaId"] == "persona_provider"
     assert task.request_payload["personaModel"] == "style_persona"
-    assert task.request_payload["generation_options_provider_check_version"] == "sunoapi-options-v3"
+    assert task.request_payload["generation_options_provider_check_version"] == "sunoapi-options-v4"
     assert asset.metadata_json["request_payload"]["negativeTags"] == "no noise"
     assert asset.metadata_json["request_payload"]["personaId"] == "persona_provider"
+
+
+@pytest.mark.asyncio
+async def test_provider_backfill_never_calls_local_library_content_task(isolated_db_session):
+    db = isolated_db_session
+    task = SunoTask(
+        task_id="local-library-content-cache-20260713174326944870",
+        task_type="library_content_cache",
+        status="SUCCESS",
+        request_payload={"limit": 500, "background": True},
+        response_payload={"background": True},
+        result_payload={"audio_cached": 0, "cover_cached": 0},
+    )
+    db.add(task)
+    db.commit()
+
+    class RejectingClient:
+        async def get_details(self, task_id):
+            raise AssertionError(f"Local task was sent to provider: {task_id}")
+
+    repaired = await MusicService(db, client=RejectingClient()).repair_imported_task_generation_options_from_provider(limit=20)
+
+    db.refresh(task)
+    assert repaired == 0
+    assert task.result_payload == {"audio_cached": 0, "cover_cached": 0}
+    assert "generation_options_provider_checked" not in task.request_payload
+
+
+@pytest.mark.asyncio
+async def test_provider_backfill_requires_confirmed_manual_import(isolated_db_session):
+    db = isolated_db_session
+    task = SunoTask(
+        task_id="provider-generated-by-local-app",
+        task_type="generate_music",
+        status="SUCCESS",
+        request_payload={
+            "task_type": "generate_music",
+            "callback_url": "http://localhost/api/webhooks/suno",
+        },
+        response_payload={"code": 200, "data": {"taskId": "provider-generated-by-local-app"}},
+        result_payload={"original": "must-stay"},
+    )
+    db.add(task)
+    db.commit()
+
+    class RejectingClient:
+        async def get_details(self, task_id):
+            raise AssertionError(f"Non-import task was sent to provider backfill: {task_id}")
+
+    repaired = await MusicService(db, client=RejectingClient()).repair_imported_task_generation_options_from_provider(limit=20)
+
+    db.refresh(task)
+    assert repaired == 0
+    assert task.result_payload == {"original": "must-stay"}
+
+
+@pytest.mark.asyncio
+async def test_provider_backfill_preserves_task_result_status_and_type(isolated_db_session):
+    db = isolated_db_session
+    original_result = {"data": {"status": "SUCCESS", "audio": "stored-result"}}
+    task = SunoTask(
+        task_id="manual-provider-preserve",
+        task_type="generate_music",
+        status="SUCCESS",
+        request_payload={
+            "source": "manual_sunoapi_import",
+            "task_id": "manual-provider-preserve",
+            "task_type": "generate_music",
+        },
+        response_payload={
+            "source": "manual_sunoapi_import",
+            "taskId": "manual-provider-preserve",
+            "taskType": "generate_music",
+        },
+        result_payload=original_result,
+    )
+    db.add(task)
+    db.commit()
+
+    class FakeClient:
+        async def get_details(self, task_id):
+            return {
+                "code": 200,
+                "data": {
+                    "taskId": task_id,
+                    "param": json.dumps({"negativeTags": "no noise", "styleWeight": 0.8}),
+                },
+            }
+
+    repaired = await MusicService(db, client=FakeClient()).repair_imported_task_generation_options_from_provider(limit=20)
+
+    db.refresh(task)
+    assert repaired == 1
+    assert task.task_type == "generate_music"
+    assert task.status == "SUCCESS"
+    assert task.result_payload == original_result
+    assert task.request_payload["negativeTags"] == "no noise"
+    assert task.request_payload["styleWeight"] == 0.8
+
+
+@pytest.mark.asyncio
+async def test_provider_backfill_rejects_empty_or_gateway_placeholder_response(isolated_db_session):
+    db = isolated_db_session
+    task = SunoTask(
+        task_id="manual-provider-empty",
+        task_type="generate_music",
+        status="SUCCESS",
+        request_payload={
+            "source": "manual_sunoapi_import",
+            "task_id": "manual-provider-empty",
+            "task_type": "generate_music",
+        },
+        response_payload={
+            "source": "manual_sunoapi_import",
+            "taskId": "manual-provider-empty",
+            "taskType": "generate_music",
+        },
+        result_payload={"original": True},
+    )
+    db.add(task)
+    db.commit()
+
+    class EmptyClient:
+        async def get_details(self, task_id):
+            return {"code": 200, "msg": "success", "data": None}
+
+    repaired = await MusicService(db, client=EmptyClient()).repair_imported_task_generation_options_from_provider(limit=20)
+
+    db.refresh(task)
+    assert repaired == 0
+    assert task.result_payload == {"original": True}
+    assert "generation_options_provider_checked" not in task.request_payload
+
+
+@pytest.mark.asyncio
+async def test_unknown_task_type_has_no_default_music_record_info_fallback(isolated_db_session):
+    class RejectingClient:
+        async def get_details(self, task_id):
+            raise AssertionError("Unknown task type must not fall back to generate/record-info")
+
+    service = MusicService(isolated_db_session, client=RejectingClient())
+    with pytest.raises(ValueError, match="Kein freigegebener SunoAPI-Record-Info-Endpunkt"):
+        await service._fetch_external_task_details("external-id", "library_content_cache")
+
+
+def test_content_check_repairs_previous_local_provider_pollution(isolated_db_session):
+    db = isolated_db_session
+    task = SunoTask(
+        task_id="local-library-content-cache-20260713174326944870",
+        task_type="library_content_cache",
+        status="success",
+        request_payload={
+            "limit": 500,
+            "background": True,
+            "generation_options_provider_checked": True,
+            "generation_options_provider_checked_at": "2026-07-13T17:58:29",
+            "generation_options_provider_check_version": "sunoapi-options-v3",
+        },
+        response_payload={
+            "last_debug_event": {
+                "event": "library_content_cache_finished",
+                "data": {"audio_cached": 0, "cover_cached": 0, "stale_metadata_fixed": 1},
+            }
+        },
+        result_payload={"code": 200, "msg": "success", "data": None},
+    )
+    db.add(task)
+    db.flush()
+    db.add(StatusNotification(
+        event_type="library_content_background_loaded",
+        title="Neue Inhalte wurden geladen",
+        message="Neue Inhalte wurden geladen",
+        severity="success",
+        status="unread",
+        task_local_id=task.id,
+        suno_task_id=task.task_id,
+        content_type="system",
+        content_id=task.id,
+        target_tab="library",
+        target_payload={"audio_cached": 0, "cover_cached": 0, "stale_metadata_fixed": 1},
+    ))
+    db.commit()
+
+    repaired = _repair_misclassified_local_provider_checks(db)
+
+    db.refresh(task)
+    assert repaired == 1
+    assert task.status == "SUCCESS"
+    assert task.result_payload == {"audio_cached": 0, "cover_cached": 0, "stale_metadata_fixed": 1}
+    assert "generation_options_provider_checked" not in task.request_payload
+    assert "generation_options_provider_checked_at" not in task.request_payload
+    assert "generation_options_provider_check_version" not in task.request_payload

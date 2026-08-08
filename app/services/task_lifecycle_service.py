@@ -80,6 +80,22 @@ LOCAL_APP_TASK_TYPES = {
     "maintenance_repair",
 }
 
+LOCAL_TASK_ID_PREFIXES = (
+    "local-",
+    "local_",
+    "opencli-",
+    "opencli_",
+    "background-",
+    "background_",
+    "maintenance-",
+    "maintenance_",
+)
+
+
+def is_local_task_identifier(task_id: Any) -> bool:
+    normalized = str(task_id or "").strip().lower()
+    return bool(normalized) and normalized.startswith(LOCAL_TASK_ID_PREFIXES)
+
 
 def utcnow() -> datetime:
     return utc_now_naive()
@@ -101,6 +117,7 @@ def is_local_app_task(task: SunoTask | None) -> bool:
     response_payload = task.response_payload if isinstance(task.response_payload, dict) else {}
     return (
         task_type in LOCAL_APP_TASK_TYPES
+        or is_local_task_identifier(task.task_id)
         or bool(request_payload.get("local_task"))
         or bool(request_payload.get("background"))
         or bool(response_payload.get("background"))

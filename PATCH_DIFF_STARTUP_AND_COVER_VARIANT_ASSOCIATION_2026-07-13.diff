@@ -1,0 +1,404 @@
+--- /tmp/tmp.gT3EZNqOPD/stem/app/schemas.py	2026-07-13 02:53:02.000000000 +0000
++++ app/schemas.py	2026-07-13 03:46:59.612275470 +0000
+@@ -329,6 +329,7 @@
+     task_ids: str = Field(min_length=1)
+     task_type: str = Field(default="auto", max_length=100)
+     cache_audio: bool = True
++    cache_video: bool = True
+     title_prefix: str | None = Field(default=None, max_length=120)
+     generate_srt: bool = False
+     generate_stems: bool = False
+@@ -1887,6 +1888,14 @@
+     library_ai_tagging_max_tags_per_asset: int = Field(default=5, ge=2, le=8)
+ 
+ 
++class LibrarySearchIndexUpdate(BaseModel):
++    tags: list[str] = Field(default_factory=list, max_length=50)
++    moods: list[str] = Field(default_factory=list, max_length=20)
++    genres: list[str] = Field(default_factory=list, max_length=20)
++    language: str = Field(default="unknown", max_length=16)
++    reason: str | None = Field(default=None, max_length=240)
++
++
+ class AiProviderTestRequest(BaseModel):
+     provider: str
+     model: str
+@@ -1950,3 +1959,13 @@
+ class DuplicateAssetVersionRequest(BaseModel):
+     label: str | None = Field(default="Neue Version", max_length=120)
+     notes: str | None = None
++
++
++class AuditRunRequest(BaseModel):
++    check_ids: list[str] = Field(default_factory=list, max_length=50)
++    parameters: dict[str, Any] = Field(default_factory=dict)
++
++
++class AuditApplyRequest(BaseModel):
++    confirm: str = Field(min_length=1, max_length=80)
++    repair_actions: list[str] = Field(default_factory=list, max_length=50)
+--- /tmp/tmp.gT3EZNqOPD/prev/app/services/library_content_cache_service.py	2026-07-13 02:25:10.000000000 +0000
++++ app/services/library_content_cache_service.py	2026-07-13 03:48:01.558127481 +0000
+@@ -270,13 +270,101 @@
+     return f"https://cdn2.suno.ai/image_{media_id}.jpeg"
+ 
+ 
+-def _repair_malformed_cover_reference(target: Any, attribute: str) -> bool:
+-    current = getattr(target, attribute, None)
+-    canonical = _canonical_suno_cover_from_removeai(current)
+-    if not canonical or canonical == current:
++def _normalized_uuid(value: Any) -> str | None:
++    if value is None:
++        return None
++    try:
++        return str(UUID(str(value).strip()))
++    except Exception:
++        return None
++
++
++def _cover_media_id(value: Any) -> str | None:
++    """Extrahiert eine eindeutig erkennbare Suno-Medien-ID aus Cover-URLs.
++
++    Die Zuordnung wird ausschließlich zur Variantenabgrenzung verwendet. Eine
++    URL ohne erkennbare UUID bleibt zulässig, wird aber nicht als Beweis für
++    die Zugehörigkeit zu einer bestimmten Suno-Variante behandelt.
++    """
++    if not isinstance(value, str):
++        return None
++    text = value.strip()
++    if not text:
++        return None
++    canonical = _canonical_suno_cover_from_removeai(text)
++    parsed = urlparse(canonical or text)
++    name = Path(parsed.path).stem.strip()
++    if name.lower().startswith("image_"):
++        name = name[6:]
++    return _normalized_uuid(name)
++
++
++def _cover_url_matches_asset(value: Any, asset: AudioAsset) -> bool:
++    """Verhindert, dass Cover einer Geschwistervariante versucht werden."""
++    expected = _normalized_uuid(getattr(asset, "audio_id", None))
++    detected = _cover_media_id(value)
++    return detected is None or expected is None or detected == expected
++
++
++def _payload_targets_audio_asset(payload: Any, asset_id: int | None, *, max_items: int = 3000) -> bool:
++    if not asset_id:
+         return False
+-    setattr(target, attribute, canonical)
+-    return True
++    stack: list[Any] = [payload]
++    seen = 0
++    while stack and seen < max_items:
++        item = stack.pop()
++        seen += 1
++        if isinstance(item, dict):
++            for key in ("audio_asset_id", "audioAssetId"):
++                value = item.get(key)
++                try:
++                    if value is not None and int(value) == int(asset_id):
++                        return True
++                except Exception:
++                    pass
++            stack.extend(item.values())
++        elif isinstance(item, (list, tuple)):
++            stack.extend(item)
++    return False
++
++
++def _matching_media_nodes(payload: Any, audio_id: str | None, *, max_items: int = 5000) -> list[dict[str, Any]]:
++    """Liefert nur Payload-Knoten der angefragten Suno-Variante.
++
++    Generate-Antworten enthalten häufig zwei oder mehr ``sunoData``-Einträge.
++    Ein ungezieltes rekursives URL-Sammeln mischt sonst Cover verschiedener
++    Varianten und meldet beim Asset 282 beispielsweise die URL von Asset 281.
++    """
++    expected = _normalized_uuid(audio_id)
++    if not expected:
++        return []
++    result: list[dict[str, Any]] = []
++    stack: list[Any] = [payload]
++    seen = 0
++    while stack and seen < max_items:
++        item = stack.pop()
++        seen += 1
++        if isinstance(item, dict):
++            identifiers = []
++            for key in ("id", "audio_id", "audioId", "music_id", "musicId", "clip_id", "clipId"):
++                normalized = _normalized_uuid(item.get(key))
++                if normalized:
++                    identifiers.append(normalized)
++            if expected in identifiers:
++                result.append(item)
++            stack.extend(item.values())
++        elif isinstance(item, (list, tuple)):
++            stack.extend(item)
++    return result
++
++
++def _repair_malformed_cover_reference(target: Any, attribute: str) -> bool:
++    """Legacy-Helfer ohne automatische DB-Umschreibung.
++
++    Eine aus Base64 abgeleitete CDN-Adresse ist nur ein Downloadkandidat und
++    darf nicht ungeprüft als neue persistente Quelle gespeichert werden.
++    """
++    return False
+ 
+ 
+ def _add_cover_url_candidates(target: list[str], seen: set[str], value: Any) -> None:
+@@ -427,19 +515,72 @@
+ 
+ 
+ def _known_cover_urls(db: Session, asset: AudioAsset, song: Song | None = None, project: AudioProject | None = None) -> list[str]:
++    """Sammelt Coverquellen strikt für die angefragte Audio-Variante.
++
++    Ein Song/Projekt kann mehrere AudioAssets enthalten. Deshalb dürfen
++    generische Song-/Projekt-Cover und vollständige Task-Payloads nicht blind
++    rekursiv ausgewertet werden: sonst landet die URL der ersten Variante als
++    Fehlerbeispiel bei der zweiten Variante.
++    """
+     urls: list[str] = []
+     seen: set[str] = set()
++    expected_audio_id = _normalized_uuid(asset.audio_id)
+ 
+-    for value in (asset.image_url, song.cover_image_url if song else None, project.cover_image_url if project else None):
++    def add_associated(value: Any, *, allow_unidentified: bool = True) -> None:
++        if not isinstance(value, str) or not value.strip():
++            return
++        detected = _cover_media_id(value)
++        if detected and expected_audio_id and detected != expected_audio_id:
++            return
++        if detected is None and not allow_unidentified:
++            return
+         _add_cover_url_candidates(urls, seen, value)
+-    for payload in _context_payloads_for_asset(db, asset, song=song, project=project):
+-        direct = _metadata_source_url(payload, *IMAGE_URL_KEYS)
+-        _add_cover_url_candidates(urls, seen, direct)
+-        for value in _walk_payload_values(payload):
+-            if isinstance(value, str):
+-                lowered = value.lower().split("?", 1)[0]
+-                if lowered.endswith((".jpg", ".jpeg", ".png", ".webp", ".gif", ".avif")) or _media_route_reference(value, get_settings().suno_cover_public_route):
+-                    _add_cover_url_candidates(urls, seen, value)
++
++    # 1. Die am AudioAsset selbst gespeicherten Quellen haben höchste Priorität.
++    add_associated(asset.image_url)
++    asset_meta = _metadata_dict(asset.metadata_json)
++    candidate = asset_meta.get("candidate") if isinstance(asset_meta.get("candidate"), dict) else {}
++    candidate_id = _normalized_uuid(candidate.get("id") or candidate.get("audioId") or candidate.get("audio_id"))
++    if not candidate_id or not expected_audio_id or candidate_id == expected_audio_id:
++        for key in ("sourceImageUrl", "source_image_url", "imageUrl", "image_url", "coverImageUrl", "cover_image_url"):
++            add_associated(candidate.get(key))
++    add_associated(_metadata_source_url(asset_meta, *IMAGE_URL_KEYS))
++
++    # 2. Aus verknüpften Tasks nur den Knoten derselben Suno-Audio-ID lesen.
++    for payload in _related_task_payloads(db, asset, song=song):
++        for node in _matching_media_nodes(payload, asset.audio_id):
++            for key in IMAGE_URL_KEYS:
++                add_associated(node.get(key))
++        # Asset-spezifische Cover-Tasks dürfen auch nicht-Suno-URLs liefern.
++        if _payload_targets_audio_asset(payload, asset.id):
++            direct = _metadata_source_url(payload, *IMAGE_URL_KEYS)
++            add_associated(direct)
++            for value in _walk_payload_values(payload):
++                if isinstance(value, str):
++                    lowered = value.lower().split("?", 1)[0]
++                    if lowered.endswith((".jpg", ".jpeg", ".png", ".webp", ".gif", ".avif")) or _media_route_reference(value, get_settings().suno_cover_public_route):
++                        add_associated(value)
++
++    # 3. Song-/Projekt-Cover nur verwenden, wenn sie eindeutig dieselbe
++    # Variante benennen. Nicht identifizierbare Gruppen-Cover sind nur bei
++    # einem einzigen AudioAsset sicher zuordenbar.
++    sibling_count = 1
++    if asset.song_id:
++        sibling_count = (
++            db.query(AudioAsset.id)
++            .filter(AudioAsset.song_id == asset.song_id, AudioAsset.is_deleted.is_(False))
++            .limit(2)
++            .count()
++        )
++    allow_shared_unidentified = sibling_count <= 1
++    for value in (song.cover_image_url if song else None, project.cover_image_url if project else None):
++        add_associated(value, allow_unidentified=allow_shared_unidentified)
++
++    # Lokale Serverpfade dürfen weiterhin über konfigurierte Remote-Mirrors
++    # aufgelöst werden.
++    for value in (asset.image_url, song.cover_image_url if song else None, project.cover_image_url if project else None):
++        for remote_url in _remote_media_candidate_urls(value, route=get_settings().suno_cover_public_route):
++            add_associated(remote_url, allow_unidentified=allow_shared_unidentified)
+     return urls
+ 
+ def _is_external_cover_url(value: str | None) -> bool:
+@@ -878,11 +1019,6 @@
+     for asset in assets:
+         assets_checked += 1
+         try:
+-            if _repair_malformed_cover_reference(asset, "image_url"):
+-                db.add(asset)
+-                cover_source_urls_fixed += 1
+-                stale_metadata_fixed += 1
+-
+             audio_exists, metadata_changed = ensure_audio_asset_local_metadata(asset)
+             if audio_exists:
+                 if metadata_changed:
+@@ -931,11 +1067,6 @@
+             if not _local_cover_exists(asset.cover_local_url or asset.image_url):
+                 song_for_cover = db.query(Song).filter(Song.id == asset.song_id).first() if asset.song_id else None
+                 project_for_cover = db.query(AudioProject).filter(AudioProject.id == asset.project_id).first() if asset.project_id else None
+-                for target, attribute in ((song_for_cover, "cover_image_url"), (project_for_cover, "cover_image_url")):
+-                    if target is not None and _repair_malformed_cover_reference(target, attribute):
+-                        db.add(target)
+-                        cover_source_urls_fixed += 1
+-                        stale_metadata_fixed += 1
+                 cover_errors: list[str] = []
+                 for cover_source in _known_cover_urls(db, asset, song=song_for_cover, project=project_for_cover):
+                     cover_attempted += 1
+@@ -968,10 +1099,6 @@
+     for song in songs:
+         songs_checked += 1
+         try:
+-            if _repair_malformed_cover_reference(song, "cover_image_url"):
+-                db.add(song)
+-                cover_source_urls_fixed += 1
+-                stale_metadata_fixed += 1
+             if _local_cover_exists(song.cover_local_url or song.cover_image_url):
+                 continue
+             cover_sources: list[str] = []
+--- /tmp/tmp.gT3EZNqOPD/prev/tests/test_library_content_cache_service.py	2026-07-13 02:25:10.000000000 +0000
++++ tests/test_library_content_cache_service.py	2026-07-13 03:48:33.512149683 +0000
+@@ -132,15 +132,16 @@
+ 
+ 
+ @pytest.mark.asyncio
+-async def test_content_check_repairs_removeai_cover_reference_before_download(monkeypatch, isolated_db_session):
++async def test_content_check_uses_removeai_derivation_only_as_candidate_without_rewriting_source(monkeypatch, isolated_db_session):
+     db = isolated_db_session
+     broken = "https://musicfile.removeai.ai/ZjlmODQ4MWMtMDk2ZS00Zjg1LWI3YmQtYjc2YzNiOGRhN2Q5.jpeg"
+     canonical = "https://cdn2.suno.ai/image_f9f8481c-096e-4f85-b7bd-b76c3b8da7d9.jpeg"
+     asset = AudioAsset(
++        audio_id="f9f8481c-096e-4f85-b7bd-b76c3b8da7d9",
+         source_url="manual://cover-only",
+         image_url=broken,
+         status="remote",
+-        metadata_json={"candidate": {"imageUrl": broken, "sourceImageUrl": canonical}},
++        metadata_json={"candidate": {"id": "f9f8481c-096e-4f85-b7bd-b76c3b8da7d9", "imageUrl": broken, "sourceImageUrl": canonical}},
+     )
+     db.add(asset)
+     db.commit()
+@@ -160,8 +161,8 @@
+     result = await cache_missing_library_content_once(db, limit=20, notify_always=False)
+ 
+     db.refresh(asset)
+-    assert asset.image_url == canonical
+-    assert result["cover_source_urls_fixed"] >= 1
++    assert asset.image_url == broken
++    assert result["cover_source_urls_fixed"] == 0
+     assert canonical in attempted
+     assert broken not in attempted
+     assert all(broken not in str(item) for item in result["unavailable_examples"])
+@@ -355,3 +356,80 @@
+     assert captured["args"] == (task.id, 321)
+     assert captured["kwargs"]["finalize_task_id"] == task.id
+ 
++
++
++def test_known_cover_urls_do_not_mix_sibling_variant_covers(isolated_db_session):
++    db = isolated_db_session
++    first_id = "e0b3e60f-e7f6-4fe6-b03d-919065cf80ba"
++    second_id = "f9f8481c-096e-4f85-b7bd-b76c3b8da7d9"
++    first_cover = f"https://cdn2.suno.ai/image_{first_id}.jpeg"
++    second_cover = f"https://cdn2.suno.ai/image_{second_id}.jpeg"
++
++    project = AudioProject(title="Varianten", cover_image_url=first_cover)
++    db.add(project)
++    db.flush()
++    song = Song(
++        title="Varianten",
++        project_id=project.id,
++        cover_image_url=first_cover,
++        metadata_json={
++            "result_payload": {
++                "data": {
++                    "response": {
++                        "sunoData": [
++                            {"id": first_id, "sourceImageUrl": first_cover},
++                            {"id": second_id, "sourceImageUrl": second_cover},
++                        ]
++                    }
++                }
++            }
++        },
++    )
++    db.add(song)
++    db.flush()
++    first = AudioAsset(
++        song_id=song.id,
++        project_id=project.id,
++        audio_id=first_id,
++        source_url=f"https://cdn1.suno.ai/{first_id}.mp3",
++        image_url=first_cover,
++        status="remote",
++        metadata_json={"candidate": {"id": first_id, "sourceImageUrl": first_cover}},
++    )
++    second = AudioAsset(
++        song_id=song.id,
++        project_id=project.id,
++        audio_id=second_id,
++        source_url=f"https://cdn1.suno.ai/{second_id}.mp3",
++        image_url=second_cover,
++        status="remote",
++        metadata_json={"candidate": {"id": second_id, "sourceImageUrl": second_cover}},
++    )
++    db.add_all([first, second])
++    db.flush()
++    task = SunoTask(
++        task_id="variant-task",
++        task_type="generate_music",
++        status="SUCCESS",
++        result_payload={
++            "data": {
++                "response": {
++                    "sunoData": [
++                        {"id": first_id, "sourceImageUrl": first_cover},
++                        {"id": second_id, "sourceImageUrl": second_cover},
++                    ]
++                }
++            }
++        },
++    )
++    db.add(task)
++    db.flush()
++    second.task_local_id = task.id
++    second.suno_task_id = "variant-task"
++    db.commit()
++
++    urls = _known_cover_urls(db, second, song=song, project=project)
++
++    assert second_cover in urls
++    assert first_cover not in urls
++    assert all(second_id in url or "media/covers/" in url for url in urls)
+--- /dev/null	2026-07-13 01:51:11.543569037 +0000
++++ tests/test_schema_patch_compatibility.py	2026-07-13 03:48:33.638801270 +0000
+@@ -0,0 +1,22 @@
++"""Protect additive schema compatibility across independent patch archives."""
++
++from app.schemas import (
++    AiAdminSettingsRead,
++    AuditApplyRequest,
++    AuditRunRequest,
++    BatchImportSunoTaskRequest,
++    LibrarySearchIndexUpdate,
++)
++
++
++def test_audit_and_library_schema_models_survive_stem_backend_extension():
++    audit = AuditApplyRequest(confirm="REPARATUR ANWENDEN", repair_actions=["backfill_task_completed_at"])
++    run = AuditRunRequest(check_ids=["workflow.tasks"])
++    index = LibrarySearchIndexUpdate(tags=["rap"], language="de")
++    batch = BatchImportSunoTaskRequest(task_ids="abc")
++
++    assert audit.confirm == "REPARATUR ANWENDEN"
++    assert run.check_ids == ["workflow.tasks"]
++    assert index.tags == ["rap"]
++    assert batch.cache_video is True
++    assert AiAdminSettingsRead.model_fields["stem_generation_backend"].default == "local_demucs"

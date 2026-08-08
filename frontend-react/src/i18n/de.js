@@ -48,6 +48,7 @@ export const de = {
   },
   nav: {
     home: 'Home',
+    search: 'Suche',
     library: 'Library',
     imports: 'Import',
     music: 'Musik',
@@ -74,6 +75,7 @@ export const de = {
     }
   },
   topbar: {
+    search: 'Suche',
     sidebarMode: 'Sidebar offen / kompakt / aus',
     directLink: 'Direktlink: {{url}}',
     searchPlaceholder: 'Song, Task, Bereich oder Befehl suchen …',
@@ -101,6 +103,29 @@ export const de = {
   messages: {
     opened: '{{label}} geöffnet.',
     songWizardOpened: 'Song-Wizard geöffnet.'
+  },
+  search: {
+    title: 'Suche',
+    resultsFor: 'Treffer für „{{query}}“',
+    total: '{{count}} direkte Treffer',
+    emptyQueryTitle: 'Suchbegriff eingeben',
+    emptyQueryText: 'Die Header-Suche durchsucht Songs, Songtexte, Styles und Playlists.',
+    emptyTitle: 'Keine passenden Inhalte',
+    emptyText: 'Probiere einzelne Begriffe oder entferne Filterwörter.',
+    serverFallback: 'Server-Suche nicht verfügbar; es werden die bereits geladenen Inhalte durchsucht.',
+    songs: 'Songs',
+    songsEmpty: 'Keine Songs gefunden.',
+    songFallback: 'Audio-Variante',
+    lyrics: 'Songtexte',
+    lyricsEmpty: 'Keine Songtexte gefunden.',
+    untitledLyric: 'Ohne Titel',
+    styles: 'Styles',
+    stylesEmpty: 'Keine Styles gefunden.',
+    untitledStyle: 'Ohne Namen',
+    playlists: 'Playlists',
+    playlistsEmpty: 'Keine Playlists gefunden.',
+    untitledPlaylist: 'Ohne Namen',
+    tracks: '{{count}} Tracks'
   },
   player: {
     openDetails: 'Songdetails öffnen',
@@ -796,7 +821,7 @@ export const de = {
     },
     stems: {
       title: 'Stem-Dateien',
-      text: 'Vocals und Instrumental lokal erzeugen und einzeln oder als ZIP herunterladen.',
+      text: 'Vocals und Instrumental mit dem in Admin gewählten Demucs-Backend erzeugen und einzeln oder als ZIP herunterladen.',
       playerTitle: 'Stem-Player: {{title}}',
       playback: 'Stem-Wiedergabe',
       previewText: 'Die normale Wiedergabe wurde pausiert. Spiele Vocals oder Instrumental direkt hier im Modal ab.',
@@ -808,7 +833,7 @@ export const de = {
       downloadStem: '{{label}} herunterladen',
       downloadAllZip: 'Alle Stems als ZIP herunterladen',
       generating: 'Erzeuge Stems…',
-      needsDemucs: 'Benötigt lokal installiertes Demucs im FastAPI-Python-Environment.'
+      needsDemucs: 'Verwendet das in Admin konfigurierte Stem-Backend: lokales Demucs oder optional Replicate Demucs.'
     },
     srt: {
       title: 'SRT-Untertitel',
@@ -2625,6 +2650,7 @@ export const de = {
         text: 'Diese Einstellungen liegen technisch im selben Einstellungsobjekt, werden aber nicht vollständig durch KI-Profile gesteuert.',
         hint: 'Die vorhandene Prozesslogik bleibt unverändert; die Gruppierung dient nur der besseren Zuordnung.',
         srtScope: 'Eigenständige Transkriptions-, Alignment- und SRT-Einstellungen.',
+        stemScope: 'Lokales Demucs oder optional Replicate Demucs.',
         audioScope: 'Lokale Audioanalyse mit eigener Modell- und Laufzeitkonfiguration.',
         libraryScope: 'Manuell gestartete KI-Suchbegriffe pro Audio-Variante.',
         libraryProfileHint: 'Nur diese Funktion verwendet das hier ausgewählte Tagging-Profil.'
@@ -2647,6 +2673,18 @@ export const de = {
       vocalThreshold: 'Vocal-Schwelle',
       fallbackBeforeEnd: 'Fallback vor Ende Sekunden',
       analysisTimeout: 'Analyse-Timeout Sekunden'
+    },
+    stems: {
+      title: 'Stem-Separation',
+      backend: 'Standard-Backend',
+      local: 'Lokales Demucs',
+      replicate: 'Replicate Demucs',
+      backendHint: 'Die Auswahl gilt für Einzel-, Sammel- und optionale SRT-Vorab-Stem-Erzeugung. Lokales Demucs bleibt der Standard.',
+      replicateModel: 'Replicate-Modell',
+      localRuntime: 'Lokales Demucs installiert',
+      replicateToken: 'Replicate API-Token konfiguriert',
+      replicateRuntime: 'Replicate-Laufzeit bereit',
+      hint: 'Replicate wird nur bei expliziter Auswahl verwendet. Die erzeugten Stems werden sofort im lokalen App-Storage gespeichert.'
     },
     audioAi: {
       title: 'Lokale Audioanalyse',

@@ -1,0 +1,687 @@
+diff --git a/.env.example b/.env.example
+index 50516ca..4317f93 100644
+--- a/.env.example
++++ b/.env.example
+@@ -360,6 +360,16 @@ REPLICATE_DEMUCS_MODEL_NAME=htdemucs
+ # Backend: Maximum local input size uploaded through the Replicate Python client.
+ REPLICATE_DEMUCS_MAX_INPUT_MB=100
+ 
++# Backend: Maximum total runtime for one Replicate Demucs prediction.
++# The prediction is created asynchronously and polled until completion.
++REPLICATE_DEMUCS_TIMEOUT_SECONDS=1200
++
++# Backend: Poll interval for Replicate prediction status checks.
++REPLICATE_DEMUCS_POLL_INTERVAL_SECONDS=2
++
++# Backend: HTTP timeout for Replicate upload/status requests and stem downloads.
++REPLICATE_DEMUCS_HTTP_TIMEOUT_SECONDS=300
++
+ 
+ # -----------------------------------------------------------------------------
+ # Local audio AI analysis
+diff --git a/app/config.py b/app/config.py
+index f7ef6ed..2a6d450 100644
+--- a/app/config.py
++++ b/app/config.py
+@@ -152,6 +152,11 @@ class Settings(BaseSettings):
+     replicate_demucs_model: str = "cjwbw/demucs:25a173108cff36ef9f80f854c162d01df9e6528be175794b81158fa03836d953"
+     replicate_demucs_model_name: str = "htdemucs"
+     replicate_demucs_max_input_mb: int = 100
++    # Replicate-Demucs läuft asynchron und wird gepollt. Das Gesamtlimit liegt
++    # bewusst deutlich über dem früheren 60-Sekunden-Sync-Wait des SDK.
++    replicate_demucs_timeout_seconds: int = 1200
++    replicate_demucs_poll_interval_seconds: float = 2.0
++    replicate_demucs_http_timeout_seconds: float = 300.0
+ 
+     # Lokale Audio-KI-Analyse:
+     # Speichert Reports isoliert unter storage/analysis und im AudioAsset.metadata_json.
+diff --git a/app/routers/admin.py b/app/routers/admin.py
+index 706839b..f9a50c6 100644
+--- a/app/routers/admin.py
++++ b/app/routers/admin.py
+@@ -175,6 +175,9 @@ def get_ai_admin_settings(db: Session) -> dict[str, Any]:
+             "replicate_demucs": {
+                 "configured": stem_settings.replicate_available,
+                 "token_configured": stem_settings.replicate_token_configured,
++                "timeout_seconds": stem_settings.replicate_timeout_seconds,
++                "poll_interval_seconds": stem_settings.replicate_poll_interval_seconds,
++                "http_timeout_seconds": stem_settings.replicate_http_timeout_seconds,
+             },
+         },
+         "replicate_demucs_model": stem_settings.replicate_model,
+diff --git a/app/routers/audio_assets.py b/app/routers/audio_assets.py
+index b95e3de..cfd90ff 100644
+--- a/app/routers/audio_assets.py
++++ b/app/routers/audio_assets.py
+@@ -568,6 +568,9 @@ def _stem_download_payload(asset: AudioAsset) -> dict[str, Any]:
+         "provider": stems.get("provider"),
+         "model": stems.get("model"),
+         "demucs_model": stems.get("demucs_model"),
++        "provider_prediction_id": stems.get("provider_prediction_id"),
++        "provider_prediction_url": stems.get("provider_prediction_url"),
++        "provider_status": stems.get("provider_status"),
+         "bpm": stems.get("bpm"),
+         "generated_at": stems.get("generated_at"),
+         "error_message": stems.get("error_message"),
+@@ -1089,6 +1092,62 @@ def generate_stems_for_asset(
+         with tempfile.TemporaryDirectory(prefix=f"songstudio_stems_{asset.id}_") as tmp:
+             out_root = Path(tmp).resolve()
+             if selected_backend == REPLICATE_DEMUCS_BACKEND:
++                last_provider_status: dict[str, str] = {"value": ""}
++
++                def _replicate_progress(event: dict[str, Any]) -> None:
++                    provider_status = str(event.get("status") or "unknown")
++                    prediction_id = str(event.get("prediction_id") or "").strip() or None
++                    prediction_url = str(event.get("prediction_url") or "").strip() or None
++                    progress_payload = {
++                        "current": 1,
++                        "total": 1,
++                        "audio_asset_id": asset.id,
++                        "phase": str(event.get("phase") or "replicate_demucs"),
++                        "detail": f"Replicate Demucs: {provider_status}",
++                        "provider_status": provider_status,
++                        "provider_prediction_id": prediction_id,
++                        "provider_prediction_url": prediction_url,
++                        "elapsed_seconds": event.get("elapsed_seconds"),
++                        "timeout_seconds": event.get("timeout_seconds"),
++                    }
++                    if event.get("poll_error_count"):
++                        progress_payload["poll_error_count"] = event.get("poll_error_count")
++                        progress_payload["poll_error"] = event.get("poll_error")
++
++                    heartbeat_task(db, stem_task.id, progress=progress_payload, commit=False)
++
++                    current_metadata = _safe_metadata(asset.metadata_json)
++                    current_stems = current_metadata.get("stems") if isinstance(current_metadata.get("stems"), dict) else {}
++                    current_stems.update({
++                        "provider": "replicate",
++                        "provider_status": provider_status,
++                        "provider_prediction_id": prediction_id,
++                        "provider_prediction_url": prediction_url,
++                        "provider_elapsed_seconds": event.get("elapsed_seconds"),
++                        "updated_at": utc_now_naive().isoformat(),
++                    })
++                    current_metadata["stems"] = current_stems
++                    asset.metadata_json = current_metadata
++                    db.add(asset)
++
++                    status_changed = provider_status != last_provider_status["value"]
++                    if status_changed or str(event.get("phase") or "") == "prediction_poll_retry":
++                        append_task_debug_event(
++                            db,
++                            stem_task,
++                            event="replicate_demucs_prediction_status",
++                            detail=f"Replicate-Prediction: {provider_status}",
++                            level="warning" if str(event.get("phase") or "") == "prediction_poll_retry" else "info",
++                            data=progress_payload,
++                            commit=False,
++                        )
++                        last_provider_status["value"] = provider_status
++                    db.commit()
++
++                def _replicate_cancel_requested() -> bool:
++                    db.expire_all()
++                    return is_cancel_requested(db, stem_task.id)
++
+                 try:
+                     replicate_details = run_replicate_demucs(
+                         audio_path,
+@@ -1097,6 +1156,11 @@ def generate_stems_for_asset(
+                         model_id=stem_settings.replicate_model,
+                         model_name=stem_settings.replicate_model_name,
+                         max_input_mb=stem_settings.replicate_max_input_mb,
++                        timeout_seconds=stem_settings.replicate_timeout_seconds,
++                        poll_interval_seconds=stem_settings.replicate_poll_interval_seconds,
++                        http_timeout_seconds=stem_settings.replicate_http_timeout_seconds,
++                        progress_callback=_replicate_progress,
++                        cancel_requested=_replicate_cancel_requested,
+                     )
+                 except ReplicateDemucsError as exc:
+                     raise HTTPException(status_code=502, detail=str(exc)) from exc
+@@ -1145,6 +1209,10 @@ def generate_stems_for_asset(
+                 "provider": "replicate",
+                 "model": replicate_details.get("model") or stem_settings.replicate_model,
+                 "demucs_model": replicate_details.get("demucs_model") or stem_settings.replicate_model_name,
++                "provider_prediction_id": replicate_details.get("prediction_id"),
++                "provider_prediction_url": replicate_details.get("prediction_url"),
++                "provider_status": replicate_details.get("prediction_status") or "succeeded",
++                "provider_elapsed_seconds": replicate_details.get("elapsed_seconds"),
+             })
+ 
+         metadata = _safe_metadata(asset.metadata_json)
+diff --git a/app/services/stem_separation_service.py b/app/services/stem_separation_service.py
+index a664740..0301a95 100644
+--- a/app/services/stem_separation_service.py
++++ b/app/services/stem_separation_service.py
+@@ -2,10 +2,13 @@ from __future__ import annotations
+ 
+ from dataclasses import dataclass
+ from pathlib import Path
+-from typing import Any
++from typing import Any, Callable
+ import importlib.util
++import time
+ import urllib.request
+ 
++import httpx
++
+ from sqlalchemy.orm import Session
+ 
+ from app.config import get_settings
+@@ -30,6 +33,9 @@ class StemSeparationSettings:
+     local_demucs_available: bool
+     replicate_available: bool
+     replicate_token_configured: bool
++    replicate_timeout_seconds: int = 1200
++    replicate_poll_interval_seconds: float = 2.0
++    replicate_http_timeout_seconds: float = 300.0
+ 
+ 
+ _STEM_BACKEND_ALIASES = {
+@@ -80,6 +86,9 @@ def load_stem_separation_settings(db: Session | None = None) -> StemSeparationSe
+         local_demucs_available=importlib.util.find_spec("demucs") is not None,
+         replicate_available=bool(token and replicate_package_available),
+         replicate_token_configured=bool(token),
++        replicate_timeout_seconds=max(60, min(1800, int(getattr(settings, "replicate_demucs_timeout_seconds", 1200) or 1200))),
++        replicate_poll_interval_seconds=max(0.5, min(30.0, float(getattr(settings, "replicate_demucs_poll_interval_seconds", 2.0) or 2.0))),
++        replicate_http_timeout_seconds=max(30.0, min(900.0, float(getattr(settings, "replicate_demucs_http_timeout_seconds", 300.0) or 300.0))),
+     )
+ 
+ 
+@@ -106,7 +115,7 @@ def _source_url(item: Any) -> str | None:
+     return None
+ 
+ 
+-def _save_output_file(item: Any, target: Path) -> str | None:
++def _save_output_file(item: Any, target: Path, *, timeout_seconds: float = 300.0) -> str | None:
+     if item is None:
+         raise ReplicateDemucsError("Replicate hat keine verwertbare Stem-Datei geliefert.")
+ 
+@@ -122,7 +131,7 @@ def _save_output_file(item: Any, target: Path) -> str | None:
+                 raise ReplicateDemucsError("Replicate FileOutput enthält keine Binärdaten.")
+             temporary.write_bytes(bytes(data))
+         elif source_url:
+-            with urllib.request.urlopen(source_url, timeout=120) as response, temporary.open("wb") as output_handle:
++            with urllib.request.urlopen(source_url, timeout=max(30.0, float(timeout_seconds))) as response, temporary.open("wb") as output_handle:
+                 while True:
+                     chunk = response.read(1024 * 1024)
+                     if not chunk:
+@@ -140,6 +149,58 @@ def _save_output_file(item: Any, target: Path) -> str | None:
+         raise
+ 
+ 
++def _prediction_value(prediction: Any, key: str, default: Any = None) -> Any:
++    if isinstance(prediction, dict):
++        return prediction.get(key, default)
++    return getattr(prediction, key, default)
++
++
++def _prediction_url(prediction: Any, key: str) -> str | None:
++    urls = _prediction_value(prediction, "urls", {})
++    if isinstance(urls, dict):
++        value = urls.get(key)
++    else:
++        value = getattr(urls, key, None)
++    return str(value) if value else None
++
++
++def _emit_progress(callback: Callable[[dict[str, Any]], None] | None, payload: dict[str, Any]) -> None:
++    if callback is None:
++        return
++    try:
++        callback(payload)
++    except Exception:
++        # Statusfortschreibung darf den bereits laufenden Provider-Job nicht abbrechen.
++        return
++
++
++def _cancel_prediction(client: Any, prediction_id: str | None) -> None:
++    if not prediction_id:
++        return
++    try:
++        client.predictions.cancel(prediction_id)
++    except Exception:
++        # Best-Effort: der eigentliche Timeout-/Abbruchfehler bleibt maßgeblich.
++        return
++
++
++def _create_async_prediction(client: Any, model_id: str, input_payload: dict[str, Any]) -> Any:
++    model_ref = str(model_id or "").strip()
++    if not model_ref:
++        raise ReplicateDemucsError("REPLICATE_DEMUCS_MODEL ist nicht konfiguriert.")
++
++    model_name, separator, version_id = model_ref.rpartition(":")
++    if separator and version_id and "/" in model_name:
++        return client.predictions.create(version=version_id, input=input_payload, wait=False)
++
++    if "/" in model_ref:
++        owner, name = model_ref.split("/", 1)
++        return client.models.predictions.create(model=(owner, name), input=input_payload, wait=False)
++
++    # Erlaubt zusätzlich eine reine Replicate-Version-ID.
++    return client.predictions.create(version=model_ref, input=input_payload, wait=False)
++
++
+ def run_replicate_demucs(
+     audio_path: Path,
+     output_dir: Path,
+@@ -148,6 +209,11 @@ def run_replicate_demucs(
+     model_id: str,
+     model_name: str = "htdemucs",
+     max_input_mb: int = 100,
++    timeout_seconds: int = 1200,
++    poll_interval_seconds: float = 2.0,
++    http_timeout_seconds: float = 300.0,
++    progress_callback: Callable[[dict[str, Any]], None] | None = None,
++    cancel_requested: Callable[[], bool] | None = None,
+ ) -> dict[str, Any]:
+     audio_path = Path(audio_path).expanduser().resolve()
+     if not audio_path.is_file():
+@@ -174,18 +240,129 @@ def run_replicate_demucs(
+     vocals_path = output_dir / "vocals.wav"
+     instrumental_path = output_dir / "instrumental.wav"
+ 
++    timeout_seconds = max(60, min(1800, int(timeout_seconds or 1200)))
++    poll_interval_seconds = max(0.5, min(30.0, float(poll_interval_seconds or 2.0)))
++    http_timeout_seconds = max(30.0, min(900.0, float(http_timeout_seconds or 300.0)))
++    prediction: Any = None
++    prediction_id: str | None = None
++    prediction_web_url: str | None = None
++    started_at = time.monotonic()
++    deadline = started_at + timeout_seconds
++    last_status = ""
++    last_progress_at = 0.0
++    consecutive_poll_errors = 0
++
+     try:
+-        client = replicate.Client(api_token=token.strip())
++        client = replicate.Client(
++            api_token=token.strip(),
++            timeout=httpx.Timeout(
++                connect=min(30.0, http_timeout_seconds),
++                read=http_timeout_seconds,
++                write=http_timeout_seconds,
++                pool=min(30.0, http_timeout_seconds),
++            ),
++        )
+         with audio_path.open("rb") as audio_handle:
+-            output = client.run(
+-                model_id.strip(),
+-                input={
++            prediction = _create_async_prediction(
++                client,
++                model_id,
++                {
+                     "audio": audio_handle,
+                     "model": model_name.strip() or "htdemucs",
+                     "stem": "vocals",
+                     "output_format": "wav",
+                 },
+             )
++
++        prediction_id = str(_prediction_value(prediction, "id", "") or "").strip() or None
++        prediction_web_url = _prediction_url(prediction, "web")
++        if not prediction_id:
++            raise ReplicateDemucsError("Replicate hat keine Prediction-ID zurückgegeben.")
++
++        while True:
++            status = str(_prediction_value(prediction, "status", "") or "").strip().lower()
++            elapsed = max(0.0, time.monotonic() - started_at)
++            now = time.monotonic()
++            status_changed = status != last_status
++            if status_changed or now - last_progress_at >= 10.0:
++                _emit_progress(
++                    progress_callback,
++                    {
++                        "phase": "prediction_created" if not last_status else "prediction_polling",
++                        "prediction_id": prediction_id,
++                        "prediction_url": prediction_web_url,
++                        "status": status or "unknown",
++                        "status_changed": status_changed,
++                        "elapsed_seconds": round(elapsed, 1),
++                        "timeout_seconds": timeout_seconds,
++                    },
++                )
++                last_progress_at = now
++                last_status = status
++
++            if status in {"succeeded", "successful", "failed", "canceled", "cancelled", "aborted"}:
++                break
++
++            if cancel_requested is not None and cancel_requested():
++                _cancel_prediction(client, prediction_id)
++                raise ReplicateDemucsError("Replicate-Demucs-Aufruf wurde abgebrochen.")
++
++            remaining = deadline - time.monotonic()
++            if remaining <= 0:
++                _cancel_prediction(client, prediction_id)
++                raise ReplicateDemucsError(
++                    f"Replicate-Demucs-Aufruf hat das Gesamtzeitlimit von {timeout_seconds} Sekunden überschritten und wurde abgebrochen."
++                )
++
++            time.sleep(min(poll_interval_seconds, remaining))
++            try:
++                prediction = client.predictions.get(prediction_id)
++                prediction_web_url = _prediction_url(prediction, "web") or prediction_web_url
++                consecutive_poll_errors = 0
++            except Exception as exc:
++                consecutive_poll_errors += 1
++                _emit_progress(
++                    progress_callback,
++                    {
++                        "phase": "prediction_poll_retry",
++                        "prediction_id": prediction_id,
++                        "prediction_url": prediction_web_url,
++                        "status": last_status or "unknown",
++                        "status_changed": False,
++                        "elapsed_seconds": round(max(0.0, time.monotonic() - started_at), 1),
++                        "timeout_seconds": timeout_seconds,
++                        "poll_error_count": consecutive_poll_errors,
++                        "poll_error": str(exc),
++                    },
++                )
++                if consecutive_poll_errors >= 5:
++                    raise ReplicateDemucsError(
++                        f"Replicate-Prediction konnte nach {consecutive_poll_errors} Versuchen nicht mehr abgefragt werden: {exc}"
++                    ) from exc
++                time.sleep(min(10.0, poll_interval_seconds * consecutive_poll_errors))
++
++        final_status = str(_prediction_value(prediction, "status", "") or "").strip().lower()
++        if final_status not in {"succeeded", "successful"}:
++            provider_error = str(_prediction_value(prediction, "error", "") or "").strip()
++            provider_logs = str(_prediction_value(prediction, "logs", "") or "").strip()
++            detail = provider_error or provider_logs[-1200:] or f"Prediction-Status: {final_status or 'unbekannt'}"
++            raise ReplicateDemucsError(f"Replicate Demucs wurde nicht erfolgreich abgeschlossen: {detail}")
++
++        output = _prediction_value(prediction, "output")
++        _emit_progress(
++            progress_callback,
++            {
++                "phase": "prediction_completed",
++                "prediction_id": prediction_id,
++                "prediction_url": prediction_web_url,
++                "status": final_status,
++                "status_changed": final_status != last_status,
++                "elapsed_seconds": round(max(0.0, time.monotonic() - started_at), 1),
++                "timeout_seconds": timeout_seconds,
++            },
++        )
++    except ReplicateDemucsError:
++        raise
+     except Exception as exc:
+         raise ReplicateDemucsError(f"Replicate-Demucs-Aufruf fehlgeschlagen: {exc}") from exc
+ 
+@@ -195,13 +372,17 @@ def run_replicate_demucs(
+         keys = ", ".join(sorted(str(key) for key in output.keys())) if isinstance(output, dict) else type(output).__name__
+         raise ReplicateDemucsError(f"Replicate-Ausgabe enthält nicht beide benötigten Stems (Ausgabe: {keys}).")
+ 
+-    vocals_url = _save_output_file(vocals_output, vocals_path)
+-    instrumental_url = _save_output_file(instrumental_output, instrumental_path)
++    vocals_url = _save_output_file(vocals_output, vocals_path, timeout_seconds=http_timeout_seconds)
++    instrumental_url = _save_output_file(instrumental_output, instrumental_path, timeout_seconds=http_timeout_seconds)
+     return {
+         "vocals_path": vocals_path,
+         "instrumental_path": instrumental_path,
+         "model": model_id.strip(),
+         "demucs_model": model_name.strip() or "htdemucs",
++        "prediction_id": prediction_id,
++        "prediction_url": prediction_web_url,
++        "prediction_status": str(_prediction_value(prediction, "status", "succeeded") or "succeeded"),
++        "elapsed_seconds": round(max(0.0, time.monotonic() - started_at), 1),
+         "source_urls": {
+             "vocals": vocals_url,
+             "instrumental": instrumental_url,
+diff --git a/tests/test_optional_replicate_demucs_backend.py b/tests/test_optional_replicate_demucs_backend.py
+index a17a0bb..0de2559 100644
+--- a/tests/test_optional_replicate_demucs_backend.py
++++ b/tests/test_optional_replicate_demucs_backend.py
+@@ -54,7 +54,9 @@ def test_admin_setting_selects_optional_replicate_backend(monkeypatch, isolated_
+     assert settings.replicate_model.startswith("cjwbw/demucs:")
+ 
+ 
+-def test_replicate_demucs_saves_vocals_and_instrumental(monkeypatch, tmp_path: Path):
++def test_replicate_demucs_uses_async_prediction_polling_and_saves_outputs(monkeypatch, tmp_path: Path):
++    import app.services.stem_separation_service as service
++
+     audio_path = tmp_path / "song.mp3"
+     audio_path.write_bytes(b"ID3" + b"audio" * 64)
+ 
+@@ -66,23 +68,58 @@ def test_replicate_demucs_saves_vocals_and_instrumental(monkeypatch, tmp_path: P
+         def read(self) -> bytes:
+             return self.payload
+ 
++    class FakePrediction:
++        def __init__(self, status: str, output=None):
++            self.id = "prediction-123"
++            self.status = status
++            self.output = output
++            self.error = None
++            self.logs = ""
++            self.urls = {
++                "web": "https://replicate.com/p/prediction-123",
++                "get": "https://api.replicate.com/v1/predictions/prediction-123",
++            }
++
+     calls: list[dict] = []
++    progress: list[dict] = []
+ 
+-    class FakeClient:
+-        def __init__(self, api_token: str):
+-            assert api_token == "r8_test"
++    class FakePredictions:
++        def __init__(self):
++            self.get_calls = 0
+ 
+-        def run(self, model_id: str, *, input: dict):
+-            calls.append({"model_id": model_id, "input": dict(input)})
++        def create(self, *, version: str, input: dict, wait: bool):
++            calls.append({"version": version, "input": dict(input), "wait": wait})
+             assert input["audio"].read(3) == b"ID3"
+-            return {
+-                "vocals": FakeFileOutput(b"RIFF-vocals", "https://replicate.delivery/vocals.wav"),
+-                "other": FakeFileOutput(b"RIFF-instrumental", "https://replicate.delivery/instrumental.wav"),
+-            }
++            assert wait is False
++            return FakePrediction("starting")
++
++        def get(self, prediction_id: str):
++            assert prediction_id == "prediction-123"
++            self.get_calls += 1
++            if self.get_calls == 1:
++                return FakePrediction("processing")
++            return FakePrediction(
++                "succeeded",
++                {
++                    "vocals": FakeFileOutput(b"RIFF-vocals", "https://replicate.delivery/vocals.wav"),
++                    "other": FakeFileOutput(b"RIFF-instrumental", "https://replicate.delivery/instrumental.wav"),
++                },
++            )
++
++        def cancel(self, prediction_id: str):
++            raise AssertionError("Prediction darf bei Erfolg nicht abgebrochen werden")
++
++    class FakeClient:
++        def __init__(self, api_token: str, timeout):
++            assert api_token == "r8_test"
++            assert timeout.read == 300.0
++            self.predictions = FakePredictions()
++            self.models = types.SimpleNamespace(predictions=self.predictions)
+ 
+     fake_module = types.ModuleType("replicate")
+     fake_module.Client = FakeClient
+     monkeypatch.setitem(sys.modules, "replicate", fake_module)
++    monkeypatch.setattr(service.time, "sleep", lambda _seconds: None)
+ 
+     result = run_replicate_demucs(
+         audio_path,
+@@ -91,14 +128,135 @@ def test_replicate_demucs_saves_vocals_and_instrumental(monkeypatch, tmp_path: P
+         model_id="cjwbw/demucs:test-version",
+         model_name="htdemucs",
+         max_input_mb=100,
++        progress_callback=progress.append,
+     )
+ 
+     assert Path(result["vocals_path"]).read_bytes() == b"RIFF-vocals"
+     assert Path(result["instrumental_path"]).read_bytes() == b"RIFF-instrumental"
+     assert result["source_urls"]["vocals"].startswith("https://replicate.delivery/")
++    assert result["prediction_id"] == "prediction-123"
++    assert result["prediction_status"] == "succeeded"
++    assert calls[0]["version"] == "test-version"
+     assert calls[0]["input"]["stem"] == "vocals"
+     assert calls[0]["input"]["output_format"] == "wav"
++    assert calls[0]["wait"] is False
++    assert {entry["status"] for entry in progress} >= {"starting", "processing", "succeeded"}
++
++
++def test_replicate_demucs_retries_transient_poll_errors(monkeypatch, tmp_path: Path):
++    import app.services.stem_separation_service as service
++
++    audio_path = tmp_path / "song.mp3"
++    audio_path.write_bytes(b"ID3-audio")
++
++    class FakePrediction:
++        id = "prediction-retry"
++        status = "starting"
++        output = None
++        error = None
++        logs = ""
++        urls = {"web": "https://replicate.com/p/prediction-retry"}
++
++    class FakePredictions:
++        def __init__(self):
++            self.get_calls = 0
++
++        def create(self, **_kwargs):
++            return FakePrediction()
++
++        def get(self, _prediction_id: str):
++            self.get_calls += 1
++            if self.get_calls == 1:
++                raise TimeoutError("temporary read timeout")
++            prediction = FakePrediction()
++            prediction.status = "succeeded"
++            prediction.output = {
++                "vocals": "https://replicate.delivery/vocals.wav",
++                "other": "https://replicate.delivery/other.wav",
++            }
++            return prediction
++
++        def cancel(self, _prediction_id: str):
++            return None
++
++    predictions = FakePredictions()
++
++    class FakeClient:
++        def __init__(self, **_kwargs):
++            self.predictions = predictions
++            self.models = types.SimpleNamespace(predictions=predictions)
++
++    fake_module = types.ModuleType("replicate")
++    fake_module.Client = FakeClient
++    monkeypatch.setitem(sys.modules, "replicate", fake_module)
++    monkeypatch.setattr(service.time, "sleep", lambda _seconds: None)
++    monkeypatch.setattr(service, "_save_output_file", lambda item, target, **_kwargs: str(item))
++
++    events: list[dict] = []
++    result = run_replicate_demucs(
++        audio_path,
++        tmp_path / "output",
++        token="r8_test",
++        model_id="cjwbw/demucs:test-version",
++        progress_callback=events.append,
++    )
++
++    assert result["prediction_id"] == "prediction-retry"
++    assert predictions.get_calls == 2
++    assert any(event.get("phase") == "prediction_poll_retry" for event in events)
++
++
++def test_replicate_demucs_cancels_prediction_after_total_timeout(monkeypatch, tmp_path: Path):
++    import app.services.stem_separation_service as service
++
++    audio_path = tmp_path / "song.mp3"
++    audio_path.write_bytes(b"ID3-audio")
++
++    class FakePrediction:
++        id = "prediction-timeout"
++        status = "processing"
++        output = None
++        error = None
++        logs = ""
++        urls = {"web": "https://replicate.com/p/prediction-timeout"}
++
++    cancelled: list[str] = []
++
++    class FakePredictions:
++        def create(self, **_kwargs):
++            return FakePrediction()
++
++        def get(self, _prediction_id: str):
++            return FakePrediction()
++
++        def cancel(self, prediction_id: str):
++            cancelled.append(prediction_id)
++            return FakePrediction()
++
++    predictions = FakePredictions()
++
++    class FakeClient:
++        def __init__(self, **_kwargs):
++            self.predictions = predictions
++            self.models = types.SimpleNamespace(predictions=predictions)
++
++    clock = iter([0.0, 0.0, 0.0, 61.0, 61.0])
++    fake_module = types.ModuleType("replicate")
++    fake_module.Client = FakeClient
++    monkeypatch.setitem(sys.modules, "replicate", fake_module)
++    monkeypatch.setattr(service.time, "monotonic", lambda: next(clock, 61.0))
++    monkeypatch.setattr(service.time, "sleep", lambda _seconds: None)
++
++    with pytest.raises(ReplicateDemucsError, match="Gesamtzeitlimit"):
++        run_replicate_demucs(
++            audio_path,
++            tmp_path / "output",
++            token="r8_test",
++            model_id="cjwbw/demucs:test-version",
++            timeout_seconds=60,
++        )
+ 
++    assert cancelled == ["prediction-timeout"]
+ 
+ def test_replicate_demucs_rejects_oversized_input(tmp_path: Path):
+     audio_path = tmp_path / "large.mp3"
+@@ -154,6 +312,14 @@ def test_audio_asset_generation_uses_replicate_without_changing_local_default(
+     )
+ 
+     def fake_run(audio_path_arg, output_dir, **kwargs):
++        kwargs["progress_callback"]({
++            "phase": "prediction_created",
++            "prediction_id": "prediction-router-test",
++            "prediction_url": "https://replicate.com/p/prediction-router-test",
++            "status": "starting",
++            "elapsed_seconds": 0.1,
++            "timeout_seconds": kwargs["timeout_seconds"],
++        })
+         output_dir = Path(output_dir)
+         output_dir.mkdir(parents=True, exist_ok=True)
+         vocals = output_dir / "vocals.wav"
+@@ -165,6 +331,10 @@ def test_audio_asset_generation_uses_replicate_without_changing_local_default(
+             "instrumental_path": instrumental,
+             "model": kwargs["model_id"],
+             "demucs_model": kwargs["model_name"],
++            "prediction_id": "prediction-router-test",
++            "prediction_url": "https://replicate.com/p/prediction-router-test",
++            "prediction_status": "succeeded",
++            "elapsed_seconds": 83.4,
+             "source_urls": {},
+         }
+ 
+@@ -182,6 +352,8 @@ def test_audio_asset_generation_uses_replicate_without_changing_local_default(
+     assert result["backend"] == "replicate_demucs"
+     assert stems["stem_separation_backend"] == REPLICATE_DEMUCS_BACKEND
+     assert stems["provider"] == "replicate"
++    assert stems["provider_prediction_id"] == "prediction-router-test"
++    assert stems["provider_status"] == "succeeded"
+     assert stems["files"]["vocals"]["filename"].endswith("_vocals.wav")
+     assert stems["files"]["instrumental"]["filename"].endswith("_instrumental.wav")
+ 

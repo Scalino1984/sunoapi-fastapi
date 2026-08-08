@@ -36,6 +36,11 @@ from app.services.library_search_index_service import (
     list_library_search_index,
     update_library_search_index,
 )
+from app.services.stem_separation_service import (
+    ALLOWED_STEM_BACKENDS,
+    load_stem_separation_settings,
+    parse_stem_backend,
+)
 from app.utils.time_utils import utc_now_naive
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
@@ -79,6 +84,9 @@ def _settings_row(db: Session) -> AppSetting:
             "srt_auto_regenerate": False,
             "srt_generate_vocal_stems_before_transcription": False,
             "srt_ai_cleanup_enabled": True,
+            "srt_alignment_engine": "heuristic",
+            "srt_quality_gate_enabled": False,
+            "srt_quality_gate_min_score": 0.7,
             "library_content_polling_enabled": False,
             "library_content_polling_interval_minutes": 15,
             "library_content_polling_limit": 500,
@@ -96,6 +104,7 @@ def _settings_row(db: Session) -> AppSetting:
             "library_ai_tagging_enabled": False,
             "library_ai_tagging_profile_id": None,
             "library_ai_tagging_max_tags_per_asset": 5,
+            "stem_separation_backend": settings.stem_separation_backend,
         },
         description="Admin-Konfiguration für KI-Canvas-Chat und 1-Click-SRT",
     )
@@ -117,10 +126,13 @@ def get_ai_admin_settings(db: Session) -> dict[str, Any]:
         model = settings.ai_default_model if settings.ai_default_model in allowed.get(provider, []) else (allowed.get(provider, [""])[0] or "")
     transcription_backend = str(value.get("transcription_backend") or settings.transcript_backend_default or "voxtral").strip().lower()
     if transcription_backend not in settings.transcript_backends:
-        transcription_backend = "voxtral"
+        transcription_backend = str(settings.transcript_backend_default or "groq").strip().lower()
+        if transcription_backend not in settings.transcript_backends:
+            transcription_backend = settings.transcript_backends[0]
     transcription_language = str(value.get("transcription_language") or settings.transcript_language_default or "de").strip().lower()
     if transcription_language not in {"auto", "de", "en"}:
         transcription_language = "auto"
+    stem_settings = load_stem_separation_settings(db)
 
     return {
         "default_provider": provider,
@@ -142,6 +154,13 @@ def get_ai_admin_settings(db: Session) -> dict[str, Any]:
         "srt_auto_regenerate": bool(value.get("srt_auto_regenerate", False)),
         "srt_generate_vocal_stems_before_transcription": bool(value.get("srt_generate_vocal_stems_before_transcription", False)),
         "srt_ai_cleanup_enabled": bool(value.get("srt_ai_cleanup_enabled", True)),
+        "srt_alignment_engine": (
+            str(value.get("srt_alignment_engine") or "heuristic").strip().lower()
+            if str(value.get("srt_alignment_engine") or "heuristic").strip().lower() in {"heuristic", "forced_alignment"}
+            else "heuristic"
+        ),
+        "srt_quality_gate_enabled": bool(value.get("srt_quality_gate_enabled", False)),
+        "srt_quality_gate_min_score": _bounded_float(value.get("srt_quality_gate_min_score"), 0.7, 0.3, 0.95),
         "library_content_polling_enabled": bool(value.get("library_content_polling_enabled", False)),
         "library_content_polling_interval_minutes": _bounded_int(value.get("library_content_polling_interval_minutes"), 15, 1, 1440),
         "library_content_polling_limit": _bounded_int(value.get("library_content_polling_limit"), 500, 10, 5000),
@@ -161,6 +180,19 @@ def get_ai_admin_settings(db: Session) -> dict[str, Any]:
         "library_ai_tagging_enabled": bool(value.get("library_ai_tagging_enabled", False)),
         "library_ai_tagging_profile_id": value.get("library_ai_tagging_profile_id"),
         "library_ai_tagging_max_tags_per_asset": _bounded_int(value.get("library_ai_tagging_max_tags_per_asset"), 5, 2, 8),
+        "stem_separation_backend": stem_settings.backend,
+        "stem_separation_backends": list(ALLOWED_STEM_BACKENDS),
+        "stem_separation_runtime": {
+            "local_demucs": {"configured": stem_settings.local_demucs_available},
+            "replicate_demucs": {
+                "configured": stem_settings.replicate_available,
+                "token_configured": stem_settings.replicate_token_configured,
+                "timeout_seconds": stem_settings.replicate_timeout_seconds,
+                "poll_interval_seconds": stem_settings.replicate_poll_interval_seconds,
+                "http_timeout_seconds": stem_settings.replicate_http_timeout_seconds,
+            },
+        },
+        "replicate_demucs_model": stem_settings.replicate_model,
         "transcription_backends": settings.transcript_backends,
         "transcription_languages": ["auto", "de", "en"],
         "transcription_runtime": {
@@ -226,6 +258,16 @@ def update_ai_settings(payload: AiAdminSettingsUpdate, db: Session = Depends(get
     transcription_language = str(payload.transcription_language or settings.transcript_language_default or "de").strip().lower()
     if transcription_language not in {"auto", "de", "en"}:
         raise HTTPException(status_code=400, detail="Transkriptionssprache ist nicht freigegeben.")
+    srt_alignment_engine = str(payload.srt_alignment_engine or "heuristic").strip().lower()
+    if srt_alignment_engine not in {"heuristic", "forced_alignment"}:
+        raise HTTPException(status_code=400, detail="SRT-Alignment-Engine ist nicht freigegeben.")
+    try:
+        stem_separation_backend = parse_stem_backend(payload.stem_separation_backend)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Stem-Separation-Backend ist nicht freigegeben.") from exc
+    stem_runtime = load_stem_separation_settings(db)
+    if stem_separation_backend == "replicate_demucs" and not stem_runtime.replicate_available:
+        raise HTTPException(status_code=400, detail="Replicate Demucs ist nicht verfügbar. Prüfe REPLICATE_API_TOKEN und das Python-Paket 'replicate'.")
 
     row.value = {
         "default_provider": provider,
@@ -240,6 +282,9 @@ def update_ai_settings(payload: AiAdminSettingsUpdate, db: Session = Depends(get
         "srt_auto_regenerate": bool(payload.srt_auto_regenerate),
         "srt_generate_vocal_stems_before_transcription": bool(payload.srt_generate_vocal_stems_before_transcription),
         "srt_ai_cleanup_enabled": bool(payload.srt_ai_cleanup_enabled),
+        "srt_alignment_engine": srt_alignment_engine,
+        "srt_quality_gate_enabled": bool(payload.srt_quality_gate_enabled),
+        "srt_quality_gate_min_score": _bounded_float(payload.srt_quality_gate_min_score, 0.7, 0.3, 0.95),
         "library_content_polling_enabled": bool(payload.library_content_polling_enabled),
         "library_content_polling_interval_minutes": _bounded_int(payload.library_content_polling_interval_minutes, 15, 1, 1440),
         "library_content_polling_limit": _bounded_int(payload.library_content_polling_limit, 500, 10, 5000),
@@ -257,6 +302,7 @@ def update_ai_settings(payload: AiAdminSettingsUpdate, db: Session = Depends(get
         "library_ai_tagging_enabled": bool(payload.library_ai_tagging_enabled),
         "library_ai_tagging_profile_id": tagging_profile_id,
         "library_ai_tagging_max_tags_per_asset": _bounded_int(payload.library_ai_tagging_max_tags_per_asset, 5, 2, 8),
+        "stem_separation_backend": stem_separation_backend,
     }
     row.updated_at = utc_now_naive()
     db.commit()

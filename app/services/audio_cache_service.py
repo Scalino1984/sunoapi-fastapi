@@ -1030,6 +1030,16 @@ class CoverCacheService:
             file_size_bytes=total_size,
         )
 
+    def _cover_request_headers(self, url: str) -> dict[str, str]:
+        headers = {
+            "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
+            "User-Agent": self.settings.suno_clip_user_agent,
+        }
+        host = (urlparse(url).hostname or "").lower()
+        if host == "suno.ai" or host.endswith(".suno.ai") or host.endswith(".removeai.ai"):
+            headers["Referer"] = "https://suno.com/"
+        return headers
+
     async def _open_validated_image_response(self, url: str) -> tuple[httpx.Response, httpx.AsyncClient]:
         current_url = url
         redirects = 0
@@ -1037,7 +1047,7 @@ class CoverCacheService:
         try:
             while True:
                 self._validate_public_url(current_url)
-                request = client.build_request("GET", current_url, headers={"Accept": "image/*,*/*"})
+                request = client.build_request("GET", current_url, headers=self._cover_request_headers(current_url))
                 response = await client.send(request, stream=True)
                 if response.status_code in {301, 302, 303, 307, 308}:
                     location = response.headers.get("location")

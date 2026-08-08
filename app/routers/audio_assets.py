@@ -6,7 +6,6 @@ from pathlib import Path
 from typing import Any
 from zipfile import ZIP_DEFLATED, ZipFile
 import hashlib
-import importlib.util
 import asyncio
 import json
 import mimetypes
@@ -49,6 +48,16 @@ from app.services.library_ai_tagging_service import (
 )
 from app.services.library_search_index_service import active_library_tagging_tasks_by_asset
 from app.services.background_task_runner import run_detached_process
+from app.services.stem_separation_service import (
+    LOCAL_DEMUCS_BACKEND,
+    REPLICATE_DEMUCS_BACKEND,
+    ReplicateDemucsError,
+    load_stem_separation_settings,
+    normalize_stem_backend,
+    parse_stem_backend,
+    run_replicate_demucs,
+    stem_backend_label,
+)
 from app.services.task_lifecycle_service import (
     append_task_debug_event,
     append_task_step_log,
@@ -98,8 +107,13 @@ class BulkGenerateSrtRequest(BaseModel):
     alignment_engine: str | None = None
 
 
+class GenerateStemsRequest(BaseModel):
+    backend: str | None = None
+
+
 class BulkGenerateStemsRequest(BaseModel):
     ids: list[int] = Field(default_factory=list, min_length=1, max_length=250)
+    backend: str | None = None
 
 
 class AudioAiAnalysisRequest(BaseModel):
@@ -288,6 +302,10 @@ def _resolve_file_inside_roots(value: str | Path | None, roots: list[Path]) -> P
         marker = f"/{root.name}/"
         if marker in raw:
             candidates.append(root / raw.rsplit(marker, 1)[-1])
+        portable_prefix = f"{root.name}/"
+        normalized_raw = raw.replace("\\", "/").lstrip("./")
+        if normalized_raw.startswith(portable_prefix):
+            candidates.append(root / normalized_raw[len(portable_prefix):])
     for item in candidates:
         try:
             resolved = item.expanduser().resolve()
@@ -546,6 +564,13 @@ def _stem_download_payload(asset: AudioAsset) -> dict[str, Any]:
         "exists": bool(result_files),
         "status": stems.get("status") or ("completed" if result_files else "missing"),
         "backend": stems.get("backend"),
+        "stem_separation_backend": stems.get("stem_separation_backend"),
+        "provider": stems.get("provider"),
+        "model": stems.get("model"),
+        "demucs_model": stems.get("demucs_model"),
+        "provider_prediction_id": stems.get("provider_prediction_id"),
+        "provider_prediction_url": stems.get("provider_prediction_url"),
+        "provider_status": stems.get("provider_status"),
         "bpm": stems.get("bpm"),
         "generated_at": stems.get("generated_at"),
         "error_message": stems.get("error_message"),
@@ -587,7 +612,7 @@ def _copy_stem_file(source: Path, target: Path) -> dict[str, Any]:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return {
-        "local_path": to_portable_path(target, storage_root=get_settings().cover_storage_path),
+        "local_path": to_portable_path(target, storage_root=_stem_storage_path()),
         "filename": target.name,
         "content_type": "audio/wav",
         "file_size_bytes": target.stat().st_size,
@@ -870,8 +895,11 @@ def convert_asset_to_wav(db: Session, audio_asset_id: int, *, force: bool = Fals
         raise HTTPException(status_code=500, detail=f"WAV-Konvertierung fehlgeschlagen: {exc}") from exc
 
 
-def _create_stem_status_task(db: Session, asset: AudioAsset) -> SunoTask:
+def _create_stem_status_task(db: Session, asset: AudioAsset, *, backend: str | None = None) -> SunoTask:
     title = _asset_title(asset, f"AudioAsset {asset.id}")
+    selected_backend = normalize_stem_backend(backend or load_stem_separation_settings(db).backend)
+    backend_payload = "replicate_demucs" if selected_backend == REPLICATE_DEMUCS_BACKEND else "demucs"
+    backend_label = stem_backend_label(selected_backend)
     task = SunoTask(
         task_id=None,
         task_type="generate_stems",
@@ -879,7 +907,8 @@ def _create_stem_status_task(db: Session, asset: AudioAsset) -> SunoTask:
         request_payload={
             "audio_asset_id": asset.id,
             "title": title,
-            "backend": "demucs",
+            "backend": backend_payload,
+            "stem_separation_backend": selected_backend,
             "local_task": True,
         },
         response_payload=None,
@@ -894,7 +923,7 @@ def _create_stem_status_task(db: Session, asset: AudioAsset) -> SunoTask:
         task,
         event="stem_generation_started",
         detail="Stem-Erzeugung wurde gestartet.",
-        data={"audio_asset_id": asset.id, "title": title, "backend": "demucs"},
+        data={"audio_asset_id": asset.id, "title": title, "backend": backend_payload, "stem_separation_backend": selected_backend},
         commit=False,
     )
     append_task_step_log(
@@ -902,14 +931,14 @@ def _create_stem_status_task(db: Session, asset: AudioAsset) -> SunoTask:
         task,
         phase="started",
         phase_label="Stem-Erzeugung gestartet",
-        detail="Vocals und Instrumental werden lokal mit Demucs erzeugt.",
-        data={"audio_asset_id": asset.id},
+        detail=f"Vocals und Instrumental werden mit {backend_label} erzeugt.",
+        data={"audio_asset_id": asset.id, "stem_separation_backend": selected_backend},
         commit=False,
     )
     db.add(StatusNotification(
         event_type="stem_generation_started",
         title=f"Stem-Erzeugung läuft: {title}",
-        message="Vocals und Instrumental werden lokal mit Demucs erzeugt.",
+        message=f"Vocals und Instrumental werden mit {backend_label} erzeugt.",
         severity="info",
         status="unread",
         task_local_id=task.id,
@@ -917,7 +946,7 @@ def _create_stem_status_task(db: Session, asset: AudioAsset) -> SunoTask:
         content_type="audio",
         content_id=asset.id,
         target_tab="status",
-        target_payload={"audio_asset_id": asset.id, "task_local_id": task.id, "task_type": "generate_stems", "status": "RUNNING"},
+        target_payload={"audio_asset_id": asset.id, "task_local_id": task.id, "task_type": "generate_stems", "status": "RUNNING", "stem_separation_backend": selected_backend},
     ))
     db.commit()
     return task
@@ -1005,20 +1034,34 @@ def _build_stems_zip(asset: AudioAsset) -> tuple[bytes, str]:
     return buffer.getvalue(), f"{safe_title}_{bpm}bpm_stems_asset_{asset.id}.zip"
 
 
-def generate_stems_for_asset(db: Session, audio_asset_id: int, status_task: SunoTask | None = None) -> dict[str, Any]:
+def generate_stems_for_asset(
+    db: Session,
+    audio_asset_id: int,
+    status_task: SunoTask | None = None,
+    *,
+    backend: str | None = None,
+) -> dict[str, Any]:
     asset = db.query(AudioAsset).filter(AudioAsset.id == audio_asset_id, AudioAsset.is_deleted.is_(False)).first()
     if not asset:
         raise HTTPException(status_code=404, detail="AudioAsset wurde nicht gefunden.")
 
     stem_task: SunoTask | None = None
     try:
+        selected_backend = parse_stem_backend(backend, default=load_stem_separation_settings(db).backend)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    stored_backend = "replicate_demucs" if selected_backend == REPLICATE_DEMUCS_BACKEND else "demucs"
+    stem_settings = load_stem_separation_settings(db)
+    try:
         audio_path = _resolve_asset_audio_file(asset)
         if not audio_path:
             raise HTTPException(status_code=422, detail="Keine lokale Audiodatei für Stem-Erzeugung gefunden.")
-        if importlib.util.find_spec("demucs") is None:
+        if selected_backend == LOCAL_DEMUCS_BACKEND and not stem_settings.local_demucs_available:
             raise HTTPException(status_code=422, detail="Demucs ist nicht im FastAPI-Python-Environment installiert. Installiere es z. B. mit: pip install demucs")
+        if selected_backend == REPLICATE_DEMUCS_BACKEND and not stem_settings.replicate_available:
+            raise HTTPException(status_code=422, detail="Replicate Demucs ist nicht verfügbar. Prüfe REPLICATE_API_TOKEN und das Python-Paket 'replicate'.")
 
-        stem_task = status_task or _create_stem_status_task(db, asset)
+        stem_task = status_task or _create_stem_status_task(db, asset, backend=selected_backend)
         bpm = _extract_bpm_from_asset(asset)
         bpm_part = f"{bpm}bpm" if bpm else "unknownbpm"
         safe_title = _safe_zip_part(asset.display_title or asset.title or audio_path.stem or f"audio_{asset.id}", f"audio_{asset.id}")
@@ -1029,43 +1072,128 @@ def generate_stems_for_asset(db: Session, audio_asset_id: int, status_task: Suno
         stems_meta = metadata.get("stems") if isinstance(metadata.get("stems"), dict) else {}
         stems_meta.update({
             "status": "running",
-            "backend": "demucs",
+            "backend": stored_backend,
+            "stem_separation_backend": selected_backend,
             "started_at": utc_now_naive().isoformat(),
             "bpm": bpm,
             "task_local_id": stem_task.id,
         })
+        if selected_backend == REPLICATE_DEMUCS_BACKEND:
+            stems_meta.update({
+                "provider": "replicate",
+                "model": stem_settings.replicate_model,
+                "demucs_model": stem_settings.replicate_model_name,
+            })
         metadata["stems"] = stems_meta
         asset.metadata_json = metadata
         db.commit()
 
+        replicate_details: dict[str, Any] = {}
         with tempfile.TemporaryDirectory(prefix=f"songstudio_stems_{asset.id}_") as tmp:
             out_root = Path(tmp).resolve()
-            cmd = [
-                sys.executable,
-                "-m",
-                "demucs",
-                "--two-stems",
-                "vocals",
-                "-n",
-                "htdemucs",
-                "--out",
-                str(out_root),
-                str(audio_path),
-            ]
-            completed = subprocess.run(cmd, capture_output=True, text=True, timeout=60 * 60)
-            if completed.returncode != 0:
-                detail = (completed.stderr or completed.stdout or "Demucs fehlgeschlagen.").strip()[-1200:]
-                raise RuntimeError(detail)
-            vocals_src, instrumental_src = _find_demucs_output(out_root, audio_path.stem, audio_path.name)
-            if not vocals_src or not instrumental_src:
-                raise RuntimeError("Demucs hat keine vocals.wav und no_vocals.wav erzeugt.")
+            if selected_backend == REPLICATE_DEMUCS_BACKEND:
+                last_provider_status: dict[str, str] = {"value": ""}
+
+                def _replicate_progress(event: dict[str, Any]) -> None:
+                    provider_status = str(event.get("status") or "unknown")
+                    prediction_id = str(event.get("prediction_id") or "").strip() or None
+                    prediction_url = str(event.get("prediction_url") or "").strip() or None
+                    progress_payload = {
+                        "current": 1,
+                        "total": 1,
+                        "audio_asset_id": asset.id,
+                        "phase": str(event.get("phase") or "replicate_demucs"),
+                        "detail": f"Replicate Demucs: {provider_status}",
+                        "provider_status": provider_status,
+                        "provider_prediction_id": prediction_id,
+                        "provider_prediction_url": prediction_url,
+                        "elapsed_seconds": event.get("elapsed_seconds"),
+                        "timeout_seconds": event.get("timeout_seconds"),
+                    }
+                    if event.get("poll_error_count"):
+                        progress_payload["poll_error_count"] = event.get("poll_error_count")
+                        progress_payload["poll_error"] = event.get("poll_error")
+
+                    heartbeat_task(db, stem_task.id, progress=progress_payload, commit=False)
+
+                    current_metadata = _safe_metadata(asset.metadata_json)
+                    current_stems = current_metadata.get("stems") if isinstance(current_metadata.get("stems"), dict) else {}
+                    current_stems.update({
+                        "provider": "replicate",
+                        "provider_status": provider_status,
+                        "provider_prediction_id": prediction_id,
+                        "provider_prediction_url": prediction_url,
+                        "provider_elapsed_seconds": event.get("elapsed_seconds"),
+                        "updated_at": utc_now_naive().isoformat(),
+                    })
+                    current_metadata["stems"] = current_stems
+                    asset.metadata_json = current_metadata
+                    db.add(asset)
+
+                    status_changed = provider_status != last_provider_status["value"]
+                    if status_changed or str(event.get("phase") or "") == "prediction_poll_retry":
+                        append_task_debug_event(
+                            db,
+                            stem_task,
+                            event="replicate_demucs_prediction_status",
+                            detail=f"Replicate-Prediction: {provider_status}",
+                            level="warning" if str(event.get("phase") or "") == "prediction_poll_retry" else "info",
+                            data=progress_payload,
+                            commit=False,
+                        )
+                        last_provider_status["value"] = provider_status
+                    db.commit()
+
+                def _replicate_cancel_requested() -> bool:
+                    db.expire_all()
+                    return is_cancel_requested(db, stem_task.id)
+
+                try:
+                    replicate_details = run_replicate_demucs(
+                        audio_path,
+                        out_root,
+                        token=str(get_settings().replicate_api_token or ""),
+                        model_id=stem_settings.replicate_model,
+                        model_name=stem_settings.replicate_model_name,
+                        max_input_mb=stem_settings.replicate_max_input_mb,
+                        timeout_seconds=stem_settings.replicate_timeout_seconds,
+                        poll_interval_seconds=stem_settings.replicate_poll_interval_seconds,
+                        http_timeout_seconds=stem_settings.replicate_http_timeout_seconds,
+                        progress_callback=_replicate_progress,
+                        cancel_requested=_replicate_cancel_requested,
+                    )
+                except ReplicateDemucsError as exc:
+                    raise HTTPException(status_code=502, detail=str(exc)) from exc
+                vocals_src = Path(replicate_details["vocals_path"])
+                instrumental_src = Path(replicate_details["instrumental_path"])
+            else:
+                cmd = [
+                    sys.executable,
+                    "-m",
+                    "demucs",
+                    "--two-stems",
+                    "vocals",
+                    "-n",
+                    "htdemucs",
+                    "--out",
+                    str(out_root),
+                    str(audio_path),
+                ]
+                completed = subprocess.run(cmd, capture_output=True, text=True, timeout=60 * 60)
+                if completed.returncode != 0:
+                    detail = (completed.stderr or completed.stdout or "Demucs fehlgeschlagen.").strip()[-1200:]
+                    raise RuntimeError(detail)
+                vocals_src, instrumental_src = _find_demucs_output(out_root, audio_path.stem, audio_path.name)
+                if not vocals_src or not instrumental_src:
+                    raise RuntimeError("Demucs hat keine vocals.wav und no_vocals.wav erzeugt.")
+
             vocals_info = _copy_stem_file(vocals_src, target_dir / f"{safe_title}_{bpm_part}_vocals.wav")
             instrumental_info = _copy_stem_file(instrumental_src, target_dir / f"{safe_title}_{bpm_part}_instrumental.wav")
 
-        metadata = _safe_metadata(asset.metadata_json)
-        metadata["stems"] = {
+        completed_meta: dict[str, Any] = {
             "status": "completed",
-            "backend": "demucs",
+            "backend": stored_backend,
+            "stem_separation_backend": selected_backend,
             "mode": "two_stems_vocals",
             "bpm": bpm,
             "generated_at": utc_now_naive().isoformat(),
@@ -1076,6 +1204,19 @@ def generate_stems_for_asset(db: Session, audio_asset_id: int, status_task: Suno
                 "instrumental": instrumental_info,
             },
         }
+        if selected_backend == REPLICATE_DEMUCS_BACKEND:
+            completed_meta.update({
+                "provider": "replicate",
+                "model": replicate_details.get("model") or stem_settings.replicate_model,
+                "demucs_model": replicate_details.get("demucs_model") or stem_settings.replicate_model_name,
+                "provider_prediction_id": replicate_details.get("prediction_id"),
+                "provider_prediction_url": replicate_details.get("prediction_url"),
+                "provider_status": replicate_details.get("prediction_status") or "succeeded",
+                "provider_elapsed_seconds": replicate_details.get("elapsed_seconds"),
+            })
+
+        metadata = _safe_metadata(asset.metadata_json)
+        metadata["stems"] = completed_meta
         asset.metadata_json = metadata
         db.commit()
         db.refresh(asset)
@@ -1086,7 +1227,14 @@ def generate_stems_for_asset(db: Session, audio_asset_id: int, status_task: Suno
         metadata = _safe_metadata(asset.metadata_json) if asset else {}
         if asset:
             stems_meta = metadata.get("stems") if isinstance(metadata.get("stems"), dict) else {}
-            stems_meta.update({"status": "failed", "error_message": str(exc.detail), "updated_at": utc_now_naive().isoformat(), "task_local_id": stem_task.id if stem_task else None})
+            stems_meta.update({
+                "status": "failed",
+                "backend": stored_backend,
+                "stem_separation_backend": selected_backend,
+                "error_message": str(exc.detail),
+                "updated_at": utc_now_naive().isoformat(),
+                "task_local_id": stem_task.id if stem_task else None,
+            })
             metadata["stems"] = stems_meta
             asset.metadata_json = metadata
             db.commit()
@@ -1096,12 +1244,20 @@ def generate_stems_for_asset(db: Session, audio_asset_id: int, status_task: Suno
         if asset:
             metadata = _safe_metadata(asset.metadata_json)
             stems_meta = metadata.get("stems") if isinstance(metadata.get("stems"), dict) else {}
-            stems_meta.update({"status": "failed", "error_message": str(exc), "updated_at": utc_now_naive().isoformat(), "task_local_id": stem_task.id if stem_task else None})
+            stems_meta.update({
+                "status": "failed",
+                "backend": stored_backend,
+                "stem_separation_backend": selected_backend,
+                "error_message": str(exc),
+                "updated_at": utc_now_naive().isoformat(),
+                "task_local_id": stem_task.id if stem_task else None,
+            })
             metadata["stems"] = stems_meta
             asset.metadata_json = metadata
             db.commit()
             _finish_stem_status_task(db, stem_task, asset, "FAILED", str(exc))
         raise HTTPException(status_code=500, detail=f"Stem-Erzeugung fehlgeschlagen: {exc}") from exc
+
 
 def _latest_completed_transcript(db: Session, asset_id: int) -> AudioTranscript | None:
     return (
@@ -1699,7 +1855,7 @@ def _run_bulk_stems_generation_background(master_task_id: int, payload: dict[str
                 if not local_path or not local_path.exists() or not local_path.is_file():
                     skipped += 1
                     continue
-                generate_stems_for_asset(db, asset_id)
+                generate_stems_for_asset(db, asset_id, backend=payload.get("backend"))
                 success += 1
             except Exception as exc:
                 failed += 1
@@ -2113,6 +2269,14 @@ def update_audio_asset_lyrics(audio_asset_id: int, payload: UpdateAssetLyricsReq
         song.metadata_json = metadata
         db.add(song)
 
+    auto_srt = _queue_srt_regeneration_after_lyrics_update(
+        db,
+        asset,
+        clean_lyrics,
+    )
+    metadata["srt_auto_regeneration"] = auto_srt
+    asset.metadata_json = metadata
+
     db.add(asset)
     db.add(ActivityLog(
         action="audio_asset_lyrics_updated",
@@ -2135,6 +2299,92 @@ def update_audio_asset_lyrics(audio_asset_id: int, payload: UpdateAssetLyricsReq
     db.commit()
     db.refresh(asset)
     return AudioAssetRead.model_validate(asset)
+
+
+def _queue_srt_regeneration_after_lyrics_update(
+    db: Session,
+    asset: AudioAsset,
+    lyrics: str,
+) -> dict[str, Any]:
+    """Queue eine deduplizierte SRT-Neuausrichtung nach einer Lyrics-Aenderung.
+
+    Die Admin-Option war bisher reine Persistenz. Regeneriert wird nur, wenn
+    bereits eine fertige SRT existiert; ein normaler expliziter SRT-Start bleibt
+    dadurch unveraendert. Aktive Tasks werden erkannt, damit schnelles Speichern
+    im Editor keine parallelen Provider-Aufrufe und konkurrierende Dateien
+    erzeugt.
+    """
+    admin_settings = load_transcription_admin_settings(db)
+    result: dict[str, Any] = {
+        "enabled": bool(admin_settings.get("srt_auto_regenerate", False)),
+        "queued": False,
+        "task_local_id": None,
+        "reason": None,
+    }
+    if not result["enabled"]:
+        result["reason"] = "disabled"
+        return result
+
+    completed = (
+        db.query(AudioTranscript)
+        .filter(AudioTranscript.audio_asset_id == asset.id, AudioTranscript.status == "completed")
+        .order_by(AudioTranscript.updated_at.desc(), AudioTranscript.id.desc())
+        .first()
+    )
+    if not completed or not str(completed.srt_text or "").strip():
+        result["reason"] = "no_completed_srt"
+        return result
+
+    active_tasks = (
+        db.query(SunoTask)
+        .filter(SunoTask.task_type == "generate_srt", SunoTask.status.in_(("PENDING", "RUNNING")))
+        .order_by(SunoTask.id.desc())
+        .limit(50)
+        .all()
+    )
+    for task in active_tasks:
+        request_payload = task.request_payload if isinstance(task.request_payload, dict) else {}
+        if int(request_payload.get("audio_asset_id") or 0) == int(asset.id):
+            result["reason"] = "already_running"
+            result["task_local_id"] = task.id
+            return result
+
+    backend = str(admin_settings.get("transcription_backend") or "").strip().lower() or None
+    language = str(admin_settings.get("transcription_language") or "auto").strip().lower() or None
+    alignment_engine = str(admin_settings.get("srt_alignment_engine") or "heuristic").strip().lower()
+    task = _create_srt_status_task(
+        db,
+        asset,
+        backend or "groq",
+        language or "auto",
+        lyrics_cleanup_info={"source": "lyrics_update_auto_regeneration"},
+    )
+    mark_task_started(
+        db,
+        task,
+        payload={
+            "source": "lyrics_update_auto_regeneration",
+            "lyrics_sha256": _short_text_hash(lyrics),
+        },
+    )
+    regeneration_payload = GenerateSrtRequest(
+        lyrics_override=lyrics,
+        force=True,
+        language=language,
+        backend=backend,
+        prefer_existing_vocal_stem=True,
+        alignment_engine=alignment_engine,
+    ).model_dump()
+    run_detached_process(
+        f"srt-lyrics-update-{asset.id}-{task.id}",
+        _run_single_srt_generation_background,
+        task.id,
+        asset.id,
+        regeneration_payload,
+        finalize_task_id=task.id,
+    )
+    result.update({"queued": True, "task_local_id": task.id, "reason": "queued"})
+    return result
 
 
 @router.post("/manual-import", response_model=dict)
@@ -2338,7 +2588,12 @@ async def _apply_srt_quality_gate(
     if _score(best_result) >= min_score:
         return best_result
 
-    if str(first_result.get("transcription_audio_source") or "") not in {"vocal_stem", "existing_vocal_stem"}:
+    source_meta = first_result.get("transcription_audio_source")
+    if isinstance(source_meta, dict):
+        audio_source = str(source_meta.get("source") or "").strip().lower()
+    else:
+        audio_source = str(source_meta or "").strip().lower()
+    if audio_source not in {"vocal_stem", "existing_vocal_stem"}:
         if status_task is not None:
             heartbeat_task(db, status_task.id, progress={
                 "current": 1, "total": 1, "audio_asset_id": audio_asset_id,
@@ -2490,7 +2745,7 @@ def _ensure_vocal_stem_before_srt(
                 "total": 1,
                 "audio_asset_id": audio_asset_id,
                 "phase": "vocal_stems_before_srt",
-                "detail": "Vocal-Stems werden vor der SRT-Transkription erzeugt (Demucs).",
+                "detail": "Vocal-Stems werden vor der SRT-Transkription mit dem konfigurierten Demucs-Backend erzeugt.",
             },
         )
     generate_stems_for_asset(db, audio_asset_id)
@@ -2498,14 +2753,14 @@ def _ensure_vocal_stem_before_srt(
     return result
 
 
-def _run_single_stems_generation_background(task_id: int, audio_asset_id: int) -> None:
+def _run_single_stems_generation_background(task_id: int, audio_asset_id: int, backend: str | None = None) -> None:
     db = SessionLocal()
     try:
         task = db.query(SunoTask).filter(SunoTask.id == task_id).first()
         heartbeat_task(db, task_id, progress={"current": 1, "total": 1, "audio_asset_id": audio_asset_id})
         if is_cancel_requested(db, task_id):
             raise RuntimeError("Stem-Erzeugung wurde vor dem Start abgebrochen.")
-        generate_stems_for_asset(db, audio_asset_id, status_task=task)
+        generate_stems_for_asset(db, audio_asset_id, status_task=task, backend=backend)
     except Exception:
         db.rollback()
         raise
@@ -2618,19 +2873,34 @@ def bulk_generate_srt(payload: BulkGenerateSrtRequest, background_tasks: Backgro
 @router.post("/bulk/stems/generate")
 def bulk_generate_stems(payload: BulkGenerateStemsRequest, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     asset_ids = _dedupe_positive_ids(payload.ids)
+    stem_settings = load_stem_separation_settings(db)
+    try:
+        selected_backend = parse_stem_backend(payload.backend, default=stem_settings.backend)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if selected_backend == REPLICATE_DEMUCS_BACKEND and not stem_settings.replicate_available:
+        raise HTTPException(status_code=422, detail="Replicate Demucs ist nicht verfügbar. Prüfe REPLICATE_API_TOKEN und das Python-Paket 'replicate'.")
+    backend_label = stem_backend_label(selected_backend)
     task = _create_bulk_status_task(
         db,
         task_type="bulk_generate_stems",
         title="Stem-Sammellauf gestartet",
-        message=f"Stem-Erzeugung für {len(asset_ids)} Varianten läuft im Hintergrund.",
+        message=f"Stem-Erzeugung für {len(asset_ids)} Varianten mit {backend_label} läuft im Hintergrund.",
         asset_ids=asset_ids,
+        request_payload={"stem_separation_backend": selected_backend},
     )
-    run_detached_process(f"bulk-stems-{task.id}", _run_bulk_stems_generation_background, task.id, {"ids": asset_ids})
+    run_detached_process(
+        f"bulk-stems-{task.id}",
+        _run_bulk_stems_generation_background,
+        task.id,
+        {"ids": asset_ids, "backend": selected_backend},
+    )
     return {
         "task_local_id": task.id,
         "task_type": "bulk_generate_stems",
         "status": "RUNNING",
         "count": len(asset_ids),
+        "stem_separation_backend": selected_backend,
         "message": "Stem-Sammellauf wurde gestartet und läuft im Hintergrund.",
     }
 
@@ -2711,14 +2981,36 @@ def download_audio_asset_bundle(audio_asset_id: int, include: str | None = None,
 
 
 @router.post("/{audio_asset_id}/stems/generate")
-def generate_stems(audio_asset_id: int, db: Session = Depends(get_db)):
+def generate_stems(audio_asset_id: int, payload: GenerateStemsRequest | None = None, db: Session = Depends(get_db)):
     asset = db.query(AudioAsset).filter(AudioAsset.id == audio_asset_id, AudioAsset.is_deleted.is_(False)).first()
     if not asset:
         raise HTTPException(status_code=404, detail="AudioAsset wurde nicht gefunden.")
-    task = _create_stem_status_task(db, asset)
-    mark_task_started(db, task, payload={"audio_asset_id": audio_asset_id})
-    run_detached_process(f"stems-asset-{audio_asset_id}-{task.id}", _run_single_stems_generation_background, task.id, audio_asset_id)
-    return {"ok": True, "queued": True, "task_local_id": task.id, "task_type": "generate_stems", "status": "RUNNING", "audio_asset_id": audio_asset_id, "message": "Stem-Erzeugung wurde gestartet und läuft im Hintergrund."}
+    stem_settings = load_stem_separation_settings(db)
+    try:
+        selected_backend = parse_stem_backend(payload.backend if payload else None, default=stem_settings.backend)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if selected_backend == REPLICATE_DEMUCS_BACKEND and not stem_settings.replicate_available:
+        raise HTTPException(status_code=422, detail="Replicate Demucs ist nicht verfügbar. Prüfe REPLICATE_API_TOKEN und das Python-Paket 'replicate'.")
+    task = _create_stem_status_task(db, asset, backend=selected_backend)
+    mark_task_started(db, task, payload={"audio_asset_id": audio_asset_id, "stem_separation_backend": selected_backend})
+    run_detached_process(
+        f"stems-asset-{audio_asset_id}-{task.id}",
+        _run_single_stems_generation_background,
+        task.id,
+        audio_asset_id,
+        selected_backend,
+    )
+    return {
+        "ok": True,
+        "queued": True,
+        "task_local_id": task.id,
+        "task_type": "generate_stems",
+        "status": "RUNNING",
+        "audio_asset_id": audio_asset_id,
+        "stem_separation_backend": selected_backend,
+        "message": "Stem-Erzeugung wurde gestartet und läuft im Hintergrund.",
+    }
 
 
 @router.get("/{audio_asset_id}/analysis")

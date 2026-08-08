@@ -217,3 +217,61 @@ def test_build_up_is_recognized_and_generic_unmatched_tags_are_not_prepended():
     assert merged.startswith("[Intro]")
     assert "[Male Spoken Word | No Melody]\n\n[Intro]" not in merged
     assert "[Build-Up | Male Spoken Word | Direct | No Singing]" in merged
+
+
+def test_section_tags_do_not_override_local_singer_rapper_switches():
+    service = GlobalAssistantService()
+    original = """[Chorus]
+[Male Singer | Powerful Belting | No Rap]
+Gesungene Zeile
+
+[Male Rapper | Straight Rap | No Singing | No Melody]
+Gerappte Zeile"""
+    tags = [{"section": "Chorus", "tag": "[Chorus: powerful male singer, no rap, no singing]"}]
+
+    merged = service._merge_lyric_vocal_tags_into_lyrics(
+        original,
+        tags,
+        preserve_local_directives=True,
+    )
+
+    assert "[Chorus: powerful male singer]" in merged
+    assert "[Male Singer | Powerful Belting | No Rap]" in merged
+    assert "[Male Rapper | Straight Rap | No Singing | No Melody]" in merged
+    assert service._role_directive_signature("[Male Rapper | No Singing]") == frozenset({"male", "rapper", "no-singing"})
+    assert service._validate_style_tagged_lyrics(original, merged) == []
+
+
+@pytest.mark.asyncio
+async def test_tagged_preview_uses_compatible_fallback_for_local_role_switches(monkeypatch, isolated_db_session):
+    service = GlobalAssistantService()
+    original = """[Chorus]
+[Male Singer | Powerful Belting | No Rap]
+Gesungene Zeile
+
+[Male Rapper | Straight Rap | No Singing | No Melody]
+Gerappte Zeile"""
+
+    async def fake_json_task(self, *, provider, model, system_prompt, instruction_payload, profile_options=None):
+        # An empty model response forces the same safe fallback used by the
+        # complete-lyrics preview in the UI.
+        return AiJsonResult(data={}, raw_text="{}", raw_response={})
+
+    monkeypatch.setattr(service, "_get_ai_runtime", _fake_runtime)
+    monkeypatch.setattr("app.services.global_assistant_service.AiChatService.run_json_task", fake_json_task)
+
+    result = await service.generate_style_tagged_lyrics(
+        isolated_db_session,
+        lyrics=original,
+        suggestion={
+            "title": "Test",
+            "style": "German hip-hop, powerful male vocals",
+            "lyric_vocal_tags": [
+                {"section": "Chorus", "tag": "[Chorus: powerful male singer, no rap, no singing]"}
+            ],
+        },
+    )
+
+    assert "[Chorus: powerful male singer]" in result["tagged_lyrics"]
+    assert service._lyric_content_lines(result["tagged_lyrics"]) == service._lyric_content_lines(original)
+    assert "sichere strukturtreue Vorschau" in result["notes"]

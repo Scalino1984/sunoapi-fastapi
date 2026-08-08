@@ -177,6 +177,7 @@ export const api = {
   runtimeConfig: () => apiFetch('/api/music/runtime-config', { timeoutMs: 8000 }),
   archive: {
     audio: () => apiFetch(`/api/archive/audio?v=${Date.now()}`, { cache: 'no-store', timeoutMs: 15000 }),
+    getAudio: (id) => apiFetch(`/api/archive/audio/${encodeURIComponent(id)}`, { cache: 'no-store', timeoutMs: 15000 }),
     importManualAudio: (formData) => apiFetch('/api/audio-assets/manual-import', { method: 'POST', body: formData }),
     updateLyrics: (id, payload = {}) => apiFetch(`/api/audio-assets/${id}/lyrics`, { method: 'PATCH', body: JSON.stringify(payload) }),
     convertToWav: (id, payload = {}) => apiFetch(`/api/audio-assets/${id}/wav/convert`, { method: 'POST', body: JSON.stringify(payload) }),
@@ -299,6 +300,7 @@ export const api = {
     }
   },
   library: {
+    search: (query, { page = 1, pageSize = 25 } = {}) => apiFetch(`/api/library/search?q=${encodeURIComponent(query)}&page=${encodeURIComponent(page)}&page_size=${encodeURIComponent(pageSize)}`, { cache: 'no-store', timeoutMs: 15000 }),
     playlists: () => apiFetch('/api/library/playlists'),
     createPlaylist: (payload) => apiFetch('/api/library/playlists', { method: 'POST', body: JSON.stringify(payload) }),
     addPlaylistItem: (playlistId, payload) => apiFetch(`/api/library/playlists/${playlistId}/items`, { method: 'POST', body: JSON.stringify(payload) }),

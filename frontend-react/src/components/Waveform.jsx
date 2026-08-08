@@ -2,131 +2,69 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { api } from '../api/client.js';
 import { useI18n } from '../i18n/I18nContext.jsx';
 
-const SECTION_PATTERNS = [
-  [/\bpre\s*[- ]?chorus\b/i, 'Pre-Chorus', 'pre_chorus'],
-  [/\bpost\s*[- ]?chorus\b/i, 'Post-Chorus', 'post_chorus'],
-  [/\b(?:final|last)\s+(?:chorus|hook|refrain)\b/i, 'Final Chorus', 'chorus'],
-  [/\b(?:chorus|hook|refrain)\b/i, 'Chorus', 'chorus'],
-  [/\bverse\s*(\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten)?\b/i, 'Verse', 'verse'],
-  [/\bpart\s*(\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten)?\b/i, 'Verse', 'verse'],
-  [/\bbridge\b/i, 'Bridge', 'bridge'],
-  [/\bintro\b/i, 'Intro', 'intro'],
-  [/\boutro\b/i, 'Outro', 'outro'],
-  [/\binterlude\b/i, 'Interlude', 'interlude'],
-  [/\bbreak\s*[- ]?down\b|\bbreakdown\b/i, 'Breakdown', 'breakdown'],
-  [/\bdrop\b/i, 'Drop', 'drop'],
-];
+import {
+  assetStructureSegments,
+  normalizeStructureSegments,
+  parseMaybeJson,
+  scaleStructureSegments,
+  segmentsHaveDescriptorNoise,
+  waveformSegments,
+} from '../utils/songStructure.js';
 
-const NUMBER_WORDS = {
-  one: '1',
-  two: '2',
-  three: '3',
-  four: '4',
-  five: '5',
-  six: '6',
-  seven: '7',
-  eight: '8',
-  nine: '9',
-  ten: '10',
-};
-
-function parseMaybeJson(value) {
-  if (!value) return null;
-  if (Array.isArray(value) || typeof value === 'object') return value;
-  if (typeof value === 'string') {
-    try { return JSON.parse(value); } catch { return null; }
-  }
-  return null;
-}
-
-function structureMarker(label) {
-  const raw = String(label || '')
-    .replace(/^\s*\[/, '')
-    .replace(/\]\s*$/, '')
-    .replace(/[_|/]+/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-  if (!raw) return null;
-  for (const [pattern, display, type] of SECTION_PATTERNS) {
-    const match = raw.match(pattern);
-    if (!match) continue;
-    let text = display;
-    if (type === 'verse' && match[1]) {
-      text = `Verse ${NUMBER_WORDS[String(match[1]).toLowerCase()] || match[1]}`;
-    }
-    return { label: text, type };
-  }
-  return null;
-}
-
-function normalizeSegments(segments) {
-  const parsed = parseMaybeJson(segments);
-  if (!Array.isArray(parsed)) return [];
-  return parsed
-    .map((segment) => {
-      if (!segment || typeof segment !== 'object') return null;
-      const marker = structureMarker(segment.label) || structureMarker(segment.type) || structureMarker(segment.name) || structureMarker(segment.title);
-      if (!marker) return null;
-      let start = Number(segment.start || 0);
-      let end = Number(segment.end || start);
-      if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return null;
-      start = Math.max(0, start);
-      end = Math.max(0, end);
-      if (end <= start) return null;
-      return { ...segment, label: marker.label, type: marker.type, start, end };
-    })
-    .filter(Boolean);
-}
-
-function segmentMaxEnd(segments) {
-  return Math.max(0, ...segments.map((segment) => Number(segment.end || 0)).filter(Number.isFinite));
-}
-
-function scaleSegmentsForDisplay(segments, duration) {
-  const maxDuration = Number(duration || 0);
-  if (!segments.length || !(maxDuration > 0)) return segments;
-  const sourceEnd = segmentMaxEnd(segments);
-  if (!(sourceEnd > 0)) return segments;
-  if (Math.abs(sourceEnd - maxDuration) <= Math.max(1, maxDuration * 0.02)) return segments;
-  const ratio = maxDuration / sourceEnd;
-  return segments.map((segment) => ({
-    ...segment,
-    start: Math.max(0, Number(segment.start || 0) * ratio),
-    end: Math.max(0, Number(segment.end || 0) * ratio),
-  }));
-}
-
-function hasDescriptorNoise(segments) {
-  const parsed = parseMaybeJson(segments);
-  if (!Array.isArray(parsed) || !parsed.length) return true;
-  return parsed.some((segment) => {
-    if (!segment || typeof segment !== 'object') return true;
-    const marker = structureMarker(segment.label) || structureMarker(segment.type) || structureMarker(segment.name) || structureMarker(segment.title);
-    if (!marker) return true;
-    return String(segment.label || '').trim().toLowerCase() !== marker.label.toLowerCase();
+export function useLiveAudioProgress(assetId, initialTime = 0, initialIsPlaying = false) {
+  const [liveState, setLiveState] = useState({
+    currentTime: Number(initialTime || 0),
+    isPlaying: Boolean(initialIsPlaying),
+    hasLiveTick: false,
   });
-}
 
-function assetStructureSegments(asset) {
-  return (
-    parseMaybeJson(asset?.structure_segments_json)
-    || parseMaybeJson(asset?.structure_segments)
-    || parseMaybeJson(asset?.waveform_json?.structure_segments_json)
-    || parseMaybeJson(asset?.waveform_json?.structure_segments)
-    || parseMaybeJson(asset?.metadata_json?.structure_segments_json)
-    || parseMaybeJson(asset?.metadata_json?.structure_segments)
-    || []
-  );
-}
+  useEffect(() => {
+    setLiveState({
+      currentTime: Number(initialTime || 0),
+      isPlaying: Boolean(initialIsPlaying),
+      hasLiveTick: false,
+    });
+  }, [assetId, initialTime, initialIsPlaying]);
 
-function waveformSegments(waveform) {
-  const parsed = parseMaybeJson(waveform);
-  if (!parsed || typeof parsed !== 'object') return [];
-  return parseMaybeJson(parsed.segments) || [];
+  useEffect(() => {
+    if (typeof window === 'undefined' || !assetId) return undefined;
+    const handleProgress = (event) => {
+      const detail = event?.detail || {};
+      if (String(detail.assetId || '') !== String(assetId)) return;
+      setLiveState({
+        currentTime: Number(detail.currentTime || 0),
+        isPlaying: Boolean(detail.isPlaying),
+        hasLiveTick: true,
+      });
+    };
+    window.addEventListener('audio:progress', handleProgress);
+    return () => window.removeEventListener('audio:progress', handleProgress);
+  }, [assetId]);
+
+  return liveState;
 }
 
 function segmentClass(type) {
   return `wave-segment-${String(type || 'section').toLowerCase().replace(/[^a-z0-9_ -]/g, '').replace(/\s+/g, '_')}`;
+}
+
+function compactSegmentLabel(segment) {
+  const type = String(segment?.type || '').toLowerCase();
+  const label = String(segment?.label || '').trim();
+  const number = label.match(/\b(\d{1,2})\b/)?.[1] || '';
+  if (type === 'verse') return `V${number || ''}`;
+  if (type === 'chorus') return /final/i.test(label) ? 'Final' : 'Ch';
+  if (type === 'pre_chorus') return 'Pre';
+  if (type === 'post_chorus') return 'Post';
+  if (type === 'build_up') return 'Build';
+  if (type === 'bridge') return 'Br';
+  if (type === 'intro') return 'Intro';
+  if (type === 'outro') return 'Outro';
+  if (type === 'interlude') return 'Inter';
+  if (type === 'instrumental') return 'Instr';
+  if (type === 'break') return 'Break';
+  if (type === 'drop') return 'Drop';
+  return label.slice(0, 5);
 }
 
 function fallbackPeaks(count = 96) {
@@ -161,6 +99,7 @@ export function Waveform({
   currentTime = 0,
   durationSeconds = null,
   interactive = true,
+  liveProgress = false,
   showProgress = true,
   sourceStartSeconds = 0,
   sourceEndSeconds = null,
@@ -170,6 +109,22 @@ export function Waveform({
   const { t } = useI18n();
   const [waveform, setWaveform] = useState(asset?.waveform_json || null);
   const [loading, setLoading] = useState(false);
+  const [liveCurrentTime, setLiveCurrentTime] = useState(null);
+
+  useEffect(() => {
+    setLiveCurrentTime(null);
+  }, [asset?.id, currentTime]);
+
+  useEffect(() => {
+    if (!liveProgress || typeof window === 'undefined' || !asset?.id) return undefined;
+    const handleProgress = (event) => {
+      const detail = event?.detail || {};
+      if (String(detail.assetId || '') !== String(asset.id)) return;
+      setLiveCurrentTime(Number(detail.currentTime || 0));
+    };
+    window.addEventListener('audio:progress', handleProgress);
+    return () => window.removeEventListener('audio:progress', handleProgress);
+  }, [asset?.id, liveProgress]);
 
   useEffect(() => {
     let cancelled = false;
@@ -180,7 +135,7 @@ export function Waveform({
     const structureSegments = assetStructureSegments(asset);
     const shouldRefresh = Boolean(
       !embedded?.peaks?.length
-      || hasDescriptorNoise(embeddedSegments)
+      || segmentsHaveDescriptorNoise(embeddedSegments)
       || (!structureSegments.length && embeddedSegments.length)
     );
 
@@ -196,10 +151,14 @@ export function Waveform({
     api.archive.waveform(asset.id)
       .then((data) => {
         if (cancelled) return;
-        const apiStructure = parseMaybeJson(data?.structure_segments_json) || parseMaybeJson(data?.structure_segments) || [];
+        const apiStructure = normalizeStructureSegments(
+          data?.structure_segments_json || data?.structure_segments || [],
+          positiveDuration(data?.duration_seconds) || positiveDuration(asset?.duration_seconds),
+        );
+        const apiWaveformSegments = waveformSegments(data);
         const segments = apiStructure.length
           ? apiStructure
-          : (Array.isArray(data?.segments) && data.segments.length ? data.segments : (structureSegments.length ? structureSegments : embeddedSegments));
+          : (apiWaveformSegments.length ? apiWaveformSegments : (structureSegments.length ? structureSegments : embeddedSegments));
         setWaveform({ ...data, segments });
       })
       .catch(() => {
@@ -237,15 +196,17 @@ export function Waveform({
   const duration = hasSourceWindow
     ? Math.max(0.1, sourceWindowEnd - sourceWindowStart)
     : sourceDuration;
-  const absoluteCurrentTime = Number.isFinite(Number(currentTime)) ? Number(currentTime) : 0;
+  const effectiveCurrentTime = liveProgress && liveCurrentTime !== null ? liveCurrentTime : currentTime;
+  const absoluteCurrentTime = Number.isFinite(Number(effectiveCurrentTime)) ? Number(effectiveCurrentTime) : 0;
   const displayCurrentTime = hasSourceWindow
     ? Math.max(0, Math.min(duration, absoluteCurrentTime - sourceWindowStart))
     : absoluteCurrentTime;
   const segments = useMemo(() => {
+    const resolvedWaveformSegments = waveformSegments(waveform);
     const preferred = assetStructureSegments(asset);
-    const source = preferred.length ? preferred : waveformSegments(waveform);
-    const normalized = scaleSegmentsForDisplay(normalizeSegments(source), sourceDuration || duration);
-    if (!hasSourceWindow) return scaleSegmentsForDisplay(normalized, duration);
+    const source = resolvedWaveformSegments.length ? resolvedWaveformSegments : preferred;
+    const normalized = scaleStructureSegments(normalizeStructureSegments(source, sourceDuration || duration), sourceDuration || duration);
+    if (!hasSourceWindow) return scaleStructureSegments(normalized, duration);
     return normalized
       .map((segment) => {
         const start = Number(segment.start || 0);
@@ -263,9 +224,19 @@ export function Waveform({
       .filter(Boolean);
   }, [asset, waveform, duration, sourceDuration, hasSourceWindow, sourceWindowStart, sourceWindowEnd]);
 
+  function dispatchSeek(seconds, autoplay = true) {
+    if (typeof window === 'undefined' || !asset?.id) return;
+    window.dispatchEvent(new CustomEvent('audio:seek', {
+      detail: { assetId: asset.id, seconds: Number(seconds || 0), autoplay },
+    }));
+  }
+
   function seekTo(seconds) {
     const audio = audioRef?.current;
-    if (!audio) return;
+    if (!audio) {
+      dispatchSeek(seconds);
+      return;
+    }
     const safeDuration = resolveWaveformDuration(audio, durationSeconds, waveform, asset);
     const target = Math.max(0, Number(seconds || 0));
     audio.currentTime = safeDuration > 0 ? Math.min(safeDuration, target) : target;
@@ -273,11 +244,15 @@ export function Waveform({
   }
 
   function seekByClick(event) {
-    const audio = audioRef?.current;
-    if (!interactive || !audio || duration <= 0) return;
+    if (!interactive || duration <= 0) return;
     const rect = event.currentTarget.getBoundingClientRect();
     const ratio = rect.width > 0 ? (event.clientX - rect.left) / rect.width : 0;
     const target = hasSourceWindow ? sourceWindowStart + ratio * duration : ratio * duration;
+    const audio = audioRef?.current;
+    if (!audio) {
+      dispatchSeek(target);
+      return;
+    }
     const safeDuration = resolveWaveformDuration(audio, durationSeconds, waveform, asset);
     audio.currentTime = Math.max(0, Math.min(safeDuration || target, target));
     audio.play().catch(() => null);
@@ -295,13 +270,29 @@ export function Waveform({
           const left = duration > 0 ? Math.max(0, Math.min(100, (start / duration) * 100)) : 0;
           const width = duration > 0 ? Math.max(1.5, Math.min(100 - left, ((end - start) / duration) * 100)) : 0;
           const absoluteStart = Number.isFinite(Number(segment.absoluteStart)) ? Number(segment.absoluteStart) : start;
-          return <button key={`${segment.label}-${index}-${start}-${end}`} type="button" className={`react-waveform-segment ${segmentClass(segment.type)}`} style={{ left: `${left}%`, width: `${width}%` }} onClick={() => seekTo(absoluteStart)} title={segment.label || segment.type}>{segment.label}</button>;
+          const fullLabelThreshold = compact ? 7 : 4.5;
+          const compactLabelThreshold = compact ? 3 : 2.25;
+          const labelMode = width >= fullLabelThreshold ? 'full' : width >= compactLabelThreshold ? 'compact' : 'hidden';
+          const visibleLabel = labelMode === 'full' ? segment.label : labelMode === 'compact' ? compactSegmentLabel(segment) : '';
+          return (
+            <button
+              key={`${segment.label}-${index}-${start}-${end}`}
+              type="button"
+              className={`react-waveform-segment ${segmentClass(segment.type)} label-${labelMode}`}
+              style={{ left: `${left}%`, width: `${width}%` }}
+              onClick={() => seekTo(absoluteStart)}
+              title={segment.label || segment.type}
+              aria-label={segment.label || segment.type}
+            >
+              {visibleLabel}
+            </button>
+          );
         })}
       </div>}
-      <button type="button" className="react-waveform-bars" onClick={seekByClick} aria-label={t('waveform.navigation', 'Waveform Navigation')} disabled={!interactive || !audioRef?.current}>
+      <button type="button" className="react-waveform-bars" onClick={seekByClick} aria-label={t('waveform.navigation', 'Waveform Navigation')} disabled={!interactive || (!audioRef?.current && !asset?.id)}>
         {peaks.map((value, index) => <span key={index} className={index <= activeIndex ? 'played' : ''} style={{ height: `${Math.max(5, value * 100)}%` }} />)}
       </button>
-      {showProgress && progressRatio > 0 && <span className="react-waveform-progress-line" style={{ left: `${progressRatio * 100}%` }} />}
+      {showProgress && progressRatio > 0 && <span className="react-waveform-progress-fill" style={{ width: `${progressRatio * 100}%` }} aria-hidden="true" />}
     </div>
   );
 }

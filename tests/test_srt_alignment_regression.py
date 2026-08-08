@@ -315,8 +315,9 @@ def test_alignment_quality_score_reacts_to_signals() -> None:
 
 def test_forced_alignment_engine_uses_span_times(monkeypatch) -> None:
     """Forced-Alignment-Bundle uebernimmt die CTC-Span-Zeiten als Zeilenzeiten."""
-    import sys as _sys
-    fa = _sys.modules["forced_alignment_service"]
+    # Das Produkt importiert das Modul package-qualified; der alte Zugriff auf
+    # einen zufaelligen Bare-Module-Key war abhaengig von der Test-Reihenfolge.
+    fa = _fa
 
     lyrics = "\n".join([
         "Skalino auf dem Beat",
@@ -351,8 +352,7 @@ def test_forced_alignment_engine_uses_span_times(monkeypatch) -> None:
 
 
 def test_forced_alignment_low_coverage_raises_for_fallback(monkeypatch) -> None:
-    import sys as _sys
-    fa = _sys.modules["forced_alignment_service"]
+    fa = _fa
     monkeypatch.setattr(fa, "force_align_tokens", lambda audio_path, tokens: [None] * len(tokens))
     asr = _asr_from_words(_timed_words("irgend", "etwas", start=1.0))
     try:

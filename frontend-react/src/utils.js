@@ -425,6 +425,35 @@ export function assetSearchText(asset) {
   ].filter(Boolean).join(' ').toLowerCase();
 }
 
+// Die Header-Suche ist absichtlich fehlertolerant: "Hip Hop", "hip-hop" und
+// "Híp Hòp" sollen denselben Inhalt finden. Eine Suche mit mehreren Wörtern
+// verlangt, dass alle Begriffe vorkommen, aber nicht in exakt dieser Reihenfolge.
+export function searchTokens(value) {
+  return String(value || '')
+    .toLocaleLowerCase('de-DE')
+    .replace(/ß/g, 'ss')
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+}
+
+export function matchesSearchQuery(value, query) {
+  const tokens = searchTokens(query);
+  if (!tokens.length) return true;
+  const haystackTokens = searchTokens(value);
+  const umlautEquivalent = (token) => token.replace(/ae/g, 'a').replace(/oe/g, 'o').replace(/ue/g, 'u');
+  return tokens.every((token) => {
+    const normalizedToken = umlautEquivalent(token);
+    return haystackTokens.some((candidate) => {
+      const normalizedCandidate = umlautEquivalent(candidate);
+      return normalizedCandidate === normalizedToken || normalizedCandidate.includes(normalizedToken);
+    });
+  });
+}
+
 export function dedupeAssets(assets) {
   const score = (asset) => {
     let value = 0;

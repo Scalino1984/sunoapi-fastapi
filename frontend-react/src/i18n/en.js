@@ -48,6 +48,7 @@ export const en = {
   },
   nav: {
     home: 'Home',
+    search: 'Search',
     library: 'Library',
     imports: 'Import',
     music: 'Music',
@@ -74,6 +75,7 @@ export const en = {
     }
   },
   topbar: {
+    search: 'Search',
     sidebarMode: 'Sidebar open / compact / off',
     directLink: 'Direct link: {{url}}',
     searchPlaceholder: 'Search song, task, section or command …',
@@ -101,6 +103,29 @@ export const en = {
   messages: {
     opened: '{{label}} opened.',
     songWizardOpened: 'Song wizard opened.'
+  },
+  search: {
+    title: 'Search',
+    resultsFor: 'Results for “{{query}}”',
+    total: '{{count}} direct results',
+    emptyQueryTitle: 'Enter a search term',
+    emptyQueryText: 'Header search covers songs, lyrics, styles and playlists.',
+    emptyTitle: 'No matching content',
+    emptyText: 'Try individual terms or remove filter words.',
+    serverFallback: 'Server search is unavailable; searching the currently loaded content instead.',
+    songs: 'Songs',
+    songsEmpty: 'No songs found.',
+    songFallback: 'Audio variant',
+    lyrics: 'Lyrics',
+    lyricsEmpty: 'No lyrics found.',
+    untitledLyric: 'Untitled',
+    styles: 'Styles',
+    stylesEmpty: 'No styles found.',
+    untitledStyle: 'Untitled',
+    playlists: 'Playlists',
+    playlistsEmpty: 'No playlists found.',
+    untitledPlaylist: 'Untitled',
+    tracks: '{{count}} tracks'
   },
   player: {
     openDetails: 'Open song details',
@@ -796,7 +821,7 @@ export const en = {
     },
     stems: {
       title: 'Stem files',
-      text: 'Generate vocals and instrumental locally and download them individually or as ZIP.',
+      text: 'Generate vocals and instrumental with the Demucs backend selected in Admin and download them individually or as ZIP.',
       playerTitle: 'Stem player: {{title}}',
       playback: 'Stem playback',
       previewText: 'Normal playback was paused. Play vocals or instrumental directly in this modal.',
@@ -808,7 +833,7 @@ export const en = {
       downloadStem: 'Download {{label}}',
       downloadAllZip: 'Download all stems as ZIP',
       generating: 'Generating stems…',
-      needsDemucs: 'Requires locally installed Demucs in the FastAPI Python environment.'
+      needsDemucs: 'Uses the stem backend configured in Admin: local Demucs or optional Replicate Demucs.'
     },
     srt: {
       title: 'SRT subtitles',
@@ -2625,6 +2650,7 @@ export const en = {
         text: 'These settings are technically stored in the same settings object, but are not fully controlled by AI profiles.',
         hint: 'Existing process logic remains unchanged; the grouping only improves transparency.',
         srtScope: 'Independent transcription, alignment and SRT settings.',
+        stemScope: 'Local Demucs or optional Replicate Demucs.',
         audioScope: 'Local audio analysis with its own model and runtime configuration.',
         libraryScope: 'Manually started AI search terms per audio variant.',
         libraryProfileHint: 'Only this function uses the tagging profile selected here.'
@@ -2647,6 +2673,18 @@ export const en = {
       vocalThreshold: 'Vocal threshold',
       fallbackBeforeEnd: 'Fallback seconds before end',
       analysisTimeout: 'Analysis timeout seconds'
+    },
+    stems: {
+      title: 'Stem separation',
+      backend: 'Default backend',
+      local: 'Local Demucs',
+      replicate: 'Replicate Demucs',
+      backendHint: 'The selection applies to single, bulk and optional pre-SRT stem generation. Local Demucs remains the default.',
+      replicateModel: 'Replicate model',
+      localRuntime: 'Local Demucs installed',
+      replicateToken: 'Replicate API token configured',
+      replicateRuntime: 'Replicate runtime ready',
+      hint: 'Replicate is used only after explicit selection. Generated stems are immediately stored in the local app storage.'
     },
     audioAi: {
       title: 'Local audio analysis',

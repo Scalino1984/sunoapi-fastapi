@@ -1,0 +1,710 @@
+--- /mnt/data/suno_content_fix_pristine/app/services/task_lifecycle_service.py	2026-07-12 00:24:52.000000000 +0000
++++ /mnt/data/suno_content_fix_work/app/services/task_lifecycle_service.py	2026-07-13 19:15:07.428309422 +0000
+@@ -80,6 +80,22 @@
+     "maintenance_repair",
+ }
+ 
++LOCAL_TASK_ID_PREFIXES = (
++    "local-",
++    "local_",
++    "opencli-",
++    "opencli_",
++    "background-",
++    "background_",
++    "maintenance-",
++    "maintenance_",
++)
++
++
++def is_local_task_identifier(task_id: Any) -> bool:
++    normalized = str(task_id or "").strip().lower()
++    return bool(normalized) and normalized.startswith(LOCAL_TASK_ID_PREFIXES)
++
+ 
+ def utcnow() -> datetime:
+     return utc_now_naive()
+@@ -101,6 +117,7 @@
+     response_payload = task.response_payload if isinstance(task.response_payload, dict) else {}
+     return (
+         task_type in LOCAL_APP_TASK_TYPES
++        or is_local_task_identifier(task.task_id)
+         or bool(request_payload.get("local_task"))
+         or bool(request_payload.get("background"))
+         or bool(response_payload.get("background"))
+--- /mnt/data/suno_content_fix_pristine/app/services/music_service.py	2026-07-11 21:29:52.000000000 +0000
++++ /mnt/data/suno_content_fix_work/app/services/music_service.py	2026-07-13 19:15:07.437067443 +0000
+@@ -20,6 +20,7 @@
+ from __future__ import annotations
+ 
+ import json
++import logging
+ from typing import Any
+ from datetime import datetime
+ 
+@@ -39,6 +40,7 @@
+     strip_manual_sunoapi_import_source,
+ )
+ from app.services.song_library_sync_service import song_sort_datetime
++from app.services.task_lifecycle_service import LOCAL_APP_TASK_TYPES as LIFECYCLE_LOCAL_APP_TASK_TYPES, is_local_app_task, is_local_task_identifier
+ from app.services.video_asset_service import VideoAssetService, extract_video_status, extract_video_url, is_video_success_status, is_video_terminal_status
+ from app.suno_client import SunoAPIClient
+ from app.utils.time_utils import utc_now_naive
+@@ -49,18 +51,34 @@
+ LYRICS_KEYS = ("lyrics", "lyric", "songtext", "text", "content")
+ TITLE_KEYS = ("title", "name", "songTitle", "displayName")
+ 
+-LOCAL_APP_TASK_TYPES = {
+-    "generate_srt",
+-    "generate_stems",
+-    "bulk_generate_srt",
+-    "bulk_generate_stems",
+-    "generate_cover_art",
+-    "library_ai_tagging",
+-    "bulk_library_ai_tagging",
+-    "convert_to_wav_local",
+-    "import_suno_song",
+-    "import_suno_song_batch",
+-    "import_sunoapi_task_batch",
++logger = logging.getLogger(__name__)
++
++# Eine einzige lokale Task-Typen-Wahrheit verhindert, dass neue Wartungs- oder
++# Background-Tasks versehentlich als externe SunoAPI-Tasks behandelt werden.
++LOCAL_APP_TASK_TYPES = set(LIFECYCLE_LOCAL_APP_TASK_TYPES)
++
++SUNOAPI_MUSIC_RECORD_INFO_TASK_TYPES = {
++    "generate_music",
++    "extend_music",
++    "upload_and_cover",
++    "upload_and_extend",
++    "add_instrumental",
++    "add_vocals",
++    "generate_mashup",
++    "replace_section",
++    "generate_sounds",
++}
++
++SUNOAPI_RECORD_INFO_TASK_TYPES = SUNOAPI_MUSIC_RECORD_INFO_TASK_TYPES | {
++    "generate_lyrics",
++    "separate",
++    "convert_to_wav",
++    "generate_midi",
++    "create_video",
++    "create_cover",
++    "create_custom_voice",
++    "voice_validate",
++    "voice_regenerate",
+ }
+ 
+ IMPORT_DEDUP_BLOCKING_ACTIVE_STATUSES = {
+@@ -109,7 +127,69 @@
+     "personaId",
+     "personaModel",
+ )
+-GENERATION_OPTIONS_PROVIDER_CHECK_VERSION = "sunoapi-options-v3"
++GENERATION_OPTIONS_PROVIDER_CHECK_VERSION = "sunoapi-options-v4"
++
++
++def _normalized_task_type(value: Any) -> str:
++    return str(value or "").strip().lower()
++
++
++def _extract_explicit_provider_task_id(payload: Any) -> str | None:
++    if isinstance(payload, dict):
++        for key in ("task_id", "taskId"):
++            value = payload.get(key)
++            if value:
++                return str(value)
++        for value in payload.values():
++            found = _extract_explicit_provider_task_id(value)
++            if found:
++                return found
++    elif isinstance(payload, list):
++        for value in payload:
++            found = _extract_explicit_provider_task_id(value)
++            if found:
++                return found
++    return None
++
++
++def _validate_external_task_details(details: Any, *, task_id: str) -> dict[str, Any]:
++    """Reject API-Gateway placeholders and mismatched task responses.
++
++    A successful HTTP status alone is not sufficient. In particular,
++    ``{"code": 200, "data": null}`` and API-Gateway messages such as
++    ``Missing Authentication Token`` are not usable record-info payloads.
++    """
++    if not isinstance(details, dict):
++        raise ValueError("SunoAPI.org lieferte keine gültigen Taskdetails.")
++
++    message = str(details.get("message") or details.get("msg") or "").strip()
++    if "missing authentication token" in message.lower():
++        raise ValueError("SunoAPI.org lieferte statt Taskdetails: Missing Authentication Token.")
++
++    if "data" in details and details.get("data") is None:
++        raise ValueError("SunoAPI.org lieferte keine Taskdaten (data=null).")
++
++    response_task_id = _extract_explicit_provider_task_id(details)
++    if response_task_id and str(response_task_id).strip() != str(task_id).strip():
++        raise ValueError("SunoAPI.org lieferte Taskdetails für eine andere Task-ID.")
++
++    return details
++
++
++def _is_provider_generation_options_candidate(task: SunoTask) -> bool:
++    """Allow remote option repair only for proven manual SunoAPI imports."""
++    if is_local_app_task(task) or is_local_task_identifier(task.task_id):
++        return False
++    request_payload = task.request_payload if isinstance(task.request_payload, dict) else {}
++    response_payload = task.response_payload if isinstance(task.response_payload, dict) else {}
++    task_type = _normalized_task_type(request_payload.get("task_type") or task.task_type)
++    if task_type not in SUNOAPI_MUSIC_RECORD_INFO_TASK_TYPES:
++        return False
++    return is_confirmed_manual_sunoapi_import(
++        task_type=task.task_type,
++        request_payload=request_payload,
++        response_payload=response_payload,
++    )
+ 
+ 
+ def _walk_values(payload: Any):
+@@ -1419,21 +1499,34 @@
+         self.db.add(notification)
+ 
+     async def _fetch_external_task_details(self, task_id: str, task_type: str) -> dict[str, Any]:
+-        if task_type == "generate_lyrics":
+-            return await self.client.get_lyrics_details(task_id)
+-        if task_type == "separate":
+-            return await self.client.get_vocal_separation_details(task_id)
+-        if task_type == "convert_to_wav":
+-            return await self.client.get_wav_details(task_id)
+-        if task_type == "generate_midi":
+-            return await self.client.get_midi_details(task_id)
+-        if task_type == "create_video":
+-            return await self.client.get_video_details(task_id)
+-        if task_type == "create_cover":
+-            return await self.client.get_cover_details(task_id)
+-        if task_type == "create_custom_voice":
+-            return await self.client.get_custom_voice_record(task_id)
+-        return await self.client.get_details(task_id)
++        normalized_type = _normalized_task_type(task_type)
++        normalized_task_id = str(task_id or "").strip()
++        if not normalized_task_id:
++            raise ValueError("Externe SunoAPI-Task-ID fehlt.")
++        if is_local_task_identifier(normalized_task_id):
++            raise ValueError("Lokale Task-IDs dürfen niemals an SunoAPI.org gesendet werden.")
++        if normalized_type not in SUNOAPI_RECORD_INFO_TASK_TYPES:
++            raise ValueError(f"Kein freigegebener SunoAPI-Record-Info-Endpunkt für Task-Typ: {normalized_type or 'unbekannt'}")
++
++        if normalized_type == "generate_lyrics":
++            details = await self.client.get_lyrics_details(normalized_task_id)
++        elif normalized_type == "separate":
++            details = await self.client.get_vocal_separation_details(normalized_task_id)
++        elif normalized_type == "convert_to_wav":
++            details = await self.client.get_wav_details(normalized_task_id)
++        elif normalized_type == "generate_midi":
++            details = await self.client.get_midi_details(normalized_task_id)
++        elif normalized_type == "create_video":
++            details = await self.client.get_video_details(normalized_task_id)
++        elif normalized_type == "create_cover":
++            details = await self.client.get_cover_details(normalized_task_id)
++        elif normalized_type in {"voice_validate", "voice_regenerate"}:
++            details = await self.client.get_voice_verification_phrase(normalized_task_id)
++        elif normalized_type == "create_custom_voice":
++            details = await self.client.get_custom_voice_record(normalized_task_id)
++        else:
++            details = await self.client.get_details(normalized_task_id)
++        return _validate_external_task_details(details, task_id=normalized_task_id)
+ 
+     def _infer_external_task_type_from_details(self, details: dict[str, Any], fallback: str = "generate_music") -> str:
+         values: list[str] = []
+@@ -1574,7 +1667,13 @@
+         return self._sync_task_request_payload_to_related_media(task) or changed
+ 
+     async def repair_imported_task_generation_options_from_provider(self, *, limit: int = 40) -> int:
+-        """Backfill old manual imports whose stored result payload lacks Suno request options."""
++        """Backfill options only for proven manual SunoAPI music imports.
++
++        This maintenance path intentionally does *not* refresh task status,
++        result_payload or task_type. It only merges generation options into the
++        local request metadata. Local app tasks and synthetic ``local-*`` IDs
++        are excluded before any network request is made.
++        """
+         repaired = 0
+         any_changed = False
+         rows = (
+@@ -1585,38 +1684,48 @@
+             .all()
+         )
+         for task in rows:
++            if not _is_provider_generation_options_candidate(task):
++                continue
++
+             request_payload = task.request_payload if isinstance(task.request_payload, dict) else {}
+             if (
+                 request_payload.get("generation_options_provider_checked")
+                 and request_payload.get("generation_options_provider_check_version") == GENERATION_OPTIONS_PROVIDER_CHECK_VERSION
+             ):
+                 continue
++
+             missing_before = _missing_imported_generation_option_keys(request_payload)
+             if not missing_before:
+                 continue
+-            task_type = str(request_payload.get("task_type") or task.task_type or "generate_music")
+-            if task_type in LOCAL_APP_TASK_TYPES or task_type == "generate_music_opencli":
+-                continue
++
++            task_type = _normalized_task_type(request_payload.get("task_type") or task.task_type)
+             try:
+-                changed = await self._refresh_existing_imported_task_details(task, task_type=task_type, base_request_payload=request_payload)
+-                request_payload = task.request_payload if isinstance(task.request_payload, dict) else {}
+-                missing_after = _missing_imported_generation_option_keys(request_payload)
+-                next_request_payload = dict(request_payload)
+-                next_request_payload["generation_options_provider_checked"] = True
+-                next_request_payload["generation_options_provider_checked_at"] = utc_now_naive().isoformat()
+-                next_request_payload["generation_options_provider_check_version"] = GENERATION_OPTIONS_PROVIDER_CHECK_VERSION
+-                if task.request_payload != next_request_payload:
+-                    task.request_payload = next_request_payload
++                details = await self._fetch_external_task_details(str(task.task_id), task_type)
++                merged_request = _merge_generation_options_into_request(request_payload, details)
++                missing_after = _missing_imported_generation_option_keys(merged_request)
++                merged_request["generation_options_provider_checked"] = True
++                merged_request["generation_options_provider_checked_at"] = utc_now_naive().isoformat()
++                merged_request["generation_options_provider_check_version"] = GENERATION_OPTIONS_PROVIDER_CHECK_VERSION
++
++                changed = merged_request != request_payload
++                if changed:
++                    task.request_payload = merged_request
+                     flag_modified(task, "request_payload")
+                     self.db.add(task)
+-                    changed = True
+                 if self._sync_task_request_payload_to_related_media(task):
+                     changed = True
+                 if changed:
+                     any_changed = True
+                 if len(missing_after) < len(missing_before):
+                     repaired += 1
+-            except Exception:
++            except Exception as exc:
++                logger.warning(
++                    "SunoAPI generation-options backfill skipped for task local_id=%s task_id=%s type=%s: %s",
++                    task.id,
++                    task.task_id,
++                    task_type,
++                    exc,
++                )
+                 continue
+         if any_changed:
+             self.db.flush()
+@@ -1805,10 +1914,10 @@
+     async def refresh_task(self, task: SunoTask) -> SunoTask:
+         old_status = task.status
+ 
+-        # Lokale App-Tasks besitzen keine externe Suno-Task-ID und dürfen
+-        # niemals gegen die SunoAPI geprüft werden. Das betrifft u.a.
+-        # Replicate-Cover, SRT, Stems und lokale WAV-Konvertierung.
+-        if task.task_type in LOCAL_APP_TASK_TYPES or (isinstance(task.request_payload, dict) and task.request_payload.get("local_task")):
++        # Lokale App-Tasks und synthetische lokale IDs dürfen niemals gegen
++        # SunoAPI.org geprüft werden. Die zentrale Erkennung umfasst auch neue
++        # Wartungs-/Background-Tasktypen und verhindert Listen-Drift.
++        if is_local_app_task(task) or is_local_task_identifier(task.task_id):
+             return task
+         if task.task_type == "generate_music_opencli":
+             # OpenCLI ist ein lokaler Background-Provider. Er darf nicht gegen die
+@@ -1834,24 +1943,7 @@
+ 
+             raise ValueError("Task besitzt keine externe Suno Task-ID.")
+ 
+-        if task.task_type == "generate_lyrics":
+-            details = await self.client.get_lyrics_details(task.task_id)
+-        elif task.task_type == "separate":
+-            details = await self.client.get_vocal_separation_details(task.task_id)
+-        elif task.task_type == "convert_to_wav":
+-            details = await self.client.get_wav_details(task.task_id)
+-        elif task.task_type == "generate_midi":
+-            details = await self.client.get_midi_details(task.task_id)
+-        elif task.task_type == "create_video":
+-            details = await self.client.get_video_details(task.task_id)
+-        elif task.task_type == "voice_validate" or task.task_type == "voice_regenerate":
+-            details = await self.client.get_voice_verification_phrase(task.task_id)
+-        elif task.task_type == "create_custom_voice":
+-            details = await self.client.get_custom_voice_record(task.task_id)
+-        elif task.task_type == "create_cover":
+-            details = await self.client.get_cover_details(task.task_id)
+-        else:
+-            details = await self.client.get_details(task.task_id)
++        details = await self._fetch_external_task_details(str(task.task_id), str(task.task_type or ""))
+ 
+         task.result_payload = details
+         if task.task_type == "create_video":
+--- /mnt/data/suno_content_fix_pristine/app/services/library_content_cache_service.py	2026-07-05 20:56:58.000000000 +0000
++++ /mnt/data/suno_content_fix_work/app/services/library_content_cache_service.py	2026-07-13 19:15:07.437429354 +0000
+@@ -31,9 +31,16 @@
+ from app.services.audio_asset_materialization_service import AudioAssetMaterializationService
+ from app.services.audio_cache_service import AudioCacheService, AudioCandidate, CoverCacheService
+ from app.services.music_service import MusicService
+-from app.services.task_lifecycle_service import append_task_debug_event, append_task_step_log
++from app.services.task_lifecycle_service import LOCAL_APP_TASK_TYPES, append_task_debug_event, append_task_step_log, is_local_app_task, is_local_task_identifier
+ from app.utils.time_utils import utc_now_naive
+ 
++GENERATION_OPTIONS_PROVIDER_MARKER_KEYS = (
++    "generation_options_provider_checked",
++    "generation_options_provider_checked_at",
++    "generation_options_provider_check_version",
++    "generation_options_provider_last_error",
++)
++
+ IMAGE_URL_KEYS = (
+     "source_image_url",
+     "sourceImageUrl",
+@@ -713,6 +720,89 @@
+     return changed
+ 
+ 
++def _is_provider_placeholder_payload(payload: Any) -> bool:
++    if not isinstance(payload, dict):
++        return False
++    message = str(payload.get("message") or payload.get("msg") or "").strip().lower()
++    if "missing authentication token" in message:
++        return True
++    return "data" in payload and payload.get("data") is None and set(payload).issubset({"code", "msg", "message", "data"})
++
++
++def _recover_local_task_result_payload(db: Session, task: SunoTask) -> dict[str, Any] | None:
++    notification = (
++        db.query(StatusNotification)
++        .filter(
++            StatusNotification.task_local_id == task.id,
++            StatusNotification.is_deleted.is_(False),
++        )
++        .order_by(StatusNotification.updated_at.desc(), StatusNotification.id.desc())
++        .first()
++    )
++    if notification and isinstance(notification.target_payload, dict) and notification.target_payload:
++        return dict(notification.target_payload)
++
++    response_payload = task.response_payload if isinstance(task.response_payload, dict) else {}
++    last_event = response_payload.get("last_debug_event")
++    if isinstance(last_event, dict) and isinstance(last_event.get("data"), dict) and last_event.get("data"):
++        return dict(last_event["data"])
++    debug_log = response_payload.get("debug_log")
++    if isinstance(debug_log, list):
++        for entry in reversed(debug_log):
++            if isinstance(entry, dict) and isinstance(entry.get("data"), dict) and entry.get("data"):
++                return dict(entry["data"])
++    return None
++
++
++def _repair_misclassified_local_provider_checks(db: Session) -> int:
++    """Undo provider-backfill pollution on local maintenance/background tasks.
++
++    Earlier versions selected every row with a task_id and could therefore
++    send synthetic ``local-*`` IDs to SunoAPI.org. This repair removes only
++    the foreign provider-check markers and restores an overwritten local
++    result from the task notification/debug payload when possible.
++    """
++    rows = (
++        db.query(SunoTask)
++        .filter(SunoTask.is_deleted.is_(False))
++        .order_by(SunoTask.id.asc())
++        .all()
++    )
++    repaired = 0
++    for task in rows:
++        if not (is_local_app_task(task) or is_local_task_identifier(task.task_id) or str(task.task_type or "") in LOCAL_APP_TASK_TYPES):
++            continue
++
++        changed = False
++        request_payload = dict(task.request_payload) if isinstance(task.request_payload, dict) else {}
++        cleaned_request = dict(request_payload)
++        for key in GENERATION_OPTIONS_PROVIDER_MARKER_KEYS:
++            cleaned_request.pop(key, None)
++        if cleaned_request != request_payload:
++            task.request_payload = cleaned_request
++            flag_modified(task, "request_payload")
++            changed = True
++
++        if _is_provider_placeholder_payload(task.result_payload):
++            recovered = _recover_local_task_result_payload(db, task)
++            if recovered:
++                task.result_payload = recovered
++                flag_modified(task, "result_payload")
++                if str(task.status or "").strip().lower() == "success":
++                    task.status = "SUCCESS"
++                if task.error_message and "missing authentication token" in str(task.error_message).lower():
++                    task.error_message = None
++                changed = True
++
++        if changed:
++            db.add(task)
++            repaired += 1
++
++    if repaired:
++        db.flush()
++    return repaired
++
++
+ def _repair_generation_options_from_tasks(db: Session, *, limit: int = 500) -> int:
+     """Repair imported SunoAPI generation options for Library "Inhalte pruefen".
+ 
+@@ -772,12 +862,14 @@
+             return
+         unavailable_examples.append({"scope": scope, "id": item_id, "reason": str(message_text)[:500]})
+ 
++    provider_boundary_repairs = _repair_misclassified_local_provider_checks(db)
+     materialized_from_tasks = AudioAssetMaterializationService(db).materialize_recent_tasks(limit=max(80, int(limit or 500)), force=True)
+     materialization_changed = int(materialized_from_tasks.created or 0) + int(materialized_from_tasks.updated or 0)
+     cover_metadata_fixed = _hydrate_generated_cover_sources_from_tasks(db, limit=limit)
+     generation_options_repair_limit = min(1000, max(80, int(limit or 500)))
+     generation_options_fixed = _repair_generation_options_from_tasks(db, limit=generation_options_repair_limit)
+     generation_options_fixed += await MusicService(db).repair_imported_task_generation_options_from_provider(limit=generation_options_repair_limit)
++    stale_metadata_fixed += provider_boundary_repairs
+     stale_metadata_fixed += cover_metadata_fixed
+     stale_metadata_fixed += generation_options_fixed
+ 
+@@ -904,7 +996,8 @@
+ 
+     changed_total = audio_cached + cover_cached + stale_metadata_fixed + materialization_changed
+     materialization_note = f" Materialisierung geändert: {materialization_changed}." if materialization_changed else ""
+-    message = f"Inhalte geprüft: {audio_cached} Audios, {cover_cached} Cover nachgeladen. Metadaten repariert: {stale_metadata_fixed}.{materialization_note} Übersprungen: {skipped}, nicht cachebar: {unavailable}, Fehler: {failed}."
++    provider_boundary_note = f" Provider-Fehlzuordnungen repariert: {provider_boundary_repairs}." if provider_boundary_repairs else ""
++    message = f"Inhalte geprüft: {audio_cached} Audios, {cover_cached} Cover nachgeladen. Metadaten repariert: {stale_metadata_fixed}.{materialization_note}{provider_boundary_note} Übersprungen: {skipped}, nicht cachebar: {unavailable}, Fehler: {failed}."
+     result_payload = {
+         "audio_cached": audio_cached,
+         "cover_cached": cover_cached,
+@@ -914,6 +1007,7 @@
+         "materialization_changed": materialization_changed,
+         "cover_metadata_fixed": cover_metadata_fixed,
+         "generation_options_fixed": generation_options_fixed,
++        "provider_boundary_repairs": provider_boundary_repairs,
+         "assets_checked": assets_checked,
+         "songs_checked": songs_checked,
+         "audio_attempted": audio_attempted,
+@@ -958,6 +1052,7 @@
+             "cover_cached": cover_cached,
+             "stale_metadata_fixed": stale_metadata_fixed,
+             "materialization_changed": materialization_changed,
++            "provider_boundary_repairs": provider_boundary_repairs,
+             "failed": failed,
+             "unavailable": unavailable,
+         },
+@@ -1008,6 +1103,7 @@
+         "materialization_changed": materialization_changed,
+         "cover_metadata_fixed": cover_metadata_fixed,
+         "generation_options_fixed": generation_options_fixed,
++        "provider_boundary_repairs": provider_boundary_repairs,
+         "assets_checked": assets_checked,
+         "songs_checked": songs_checked,
+         "audio_attempted": audio_attempted,
+--- /mnt/data/suno_content_fix_pristine/tests/test_library_content_cache_service.py	2026-06-27 02:37:53.000000000 +0000
++++ /mnt/data/suno_content_fix_work/tests/test_library_content_cache_service.py	2026-07-13 19:11:39.143380340 +0000
+@@ -11,8 +11,8 @@
+ import json
+ 
+ from app.config import get_settings
+-from app.models import AudioAsset, AudioProject, Song, SunoTask
+-from app.services.library_content_cache_service import _known_cover_urls, _repair_generation_options_from_tasks, cache_missing_library_content_once
++from app.models import AudioAsset, AudioProject, Song, StatusNotification, SunoTask
++from app.services.library_content_cache_service import _known_cover_urls, _repair_generation_options_from_tasks, _repair_misclassified_local_provider_checks, cache_missing_library_content_once
+ from app.services.library_ai_tagging_service import normalize_ai_tags
+ from app.services.music_service import MusicService
+ 
+@@ -218,6 +218,198 @@
+     assert task.request_payload["audioWeight"] == 0.51
+     assert task.request_payload["personaId"] == "persona_provider"
+     assert task.request_payload["personaModel"] == "style_persona"
+-    assert task.request_payload["generation_options_provider_check_version"] == "sunoapi-options-v3"
++    assert task.request_payload["generation_options_provider_check_version"] == "sunoapi-options-v4"
+     assert asset.metadata_json["request_payload"]["negativeTags"] == "no noise"
+     assert asset.metadata_json["request_payload"]["personaId"] == "persona_provider"
++
++
++@pytest.mark.asyncio
++async def test_provider_backfill_never_calls_local_library_content_task(isolated_db_session):
++    db = isolated_db_session
++    task = SunoTask(
++        task_id="local-library-content-cache-20260713174326944870",
++        task_type="library_content_cache",
++        status="SUCCESS",
++        request_payload={"limit": 500, "background": True},
++        response_payload={"background": True},
++        result_payload={"audio_cached": 0, "cover_cached": 0},
++    )
++    db.add(task)
++    db.commit()
++
++    class RejectingClient:
++        async def get_details(self, task_id):
++            raise AssertionError(f"Local task was sent to provider: {task_id}")
++
++    repaired = await MusicService(db, client=RejectingClient()).repair_imported_task_generation_options_from_provider(limit=20)
++
++    db.refresh(task)
++    assert repaired == 0
++    assert task.result_payload == {"audio_cached": 0, "cover_cached": 0}
++    assert "generation_options_provider_checked" not in task.request_payload
++
++
++@pytest.mark.asyncio
++async def test_provider_backfill_requires_confirmed_manual_import(isolated_db_session):
++    db = isolated_db_session
++    task = SunoTask(
++        task_id="provider-generated-by-local-app",
++        task_type="generate_music",
++        status="SUCCESS",
++        request_payload={
++            "task_type": "generate_music",
++            "callback_url": "http://localhost/api/webhooks/suno",
++        },
++        response_payload={"code": 200, "data": {"taskId": "provider-generated-by-local-app"}},
++        result_payload={"original": "must-stay"},
++    )
++    db.add(task)
++    db.commit()
++
++    class RejectingClient:
++        async def get_details(self, task_id):
++            raise AssertionError(f"Non-import task was sent to provider backfill: {task_id}")
++
++    repaired = await MusicService(db, client=RejectingClient()).repair_imported_task_generation_options_from_provider(limit=20)
++
++    db.refresh(task)
++    assert repaired == 0
++    assert task.result_payload == {"original": "must-stay"}
++
++
++@pytest.mark.asyncio
++async def test_provider_backfill_preserves_task_result_status_and_type(isolated_db_session):
++    db = isolated_db_session
++    original_result = {"data": {"status": "SUCCESS", "audio": "stored-result"}}
++    task = SunoTask(
++        task_id="manual-provider-preserve",
++        task_type="generate_music",
++        status="SUCCESS",
++        request_payload={
++            "source": "manual_sunoapi_import",
++            "task_id": "manual-provider-preserve",
++            "task_type": "generate_music",
++        },
++        response_payload={
++            "source": "manual_sunoapi_import",
++            "taskId": "manual-provider-preserve",
++            "taskType": "generate_music",
++        },
++        result_payload=original_result,
++    )
++    db.add(task)
++    db.commit()
++
++    class FakeClient:
++        async def get_details(self, task_id):
++            return {
++                "code": 200,
++                "data": {
++                    "taskId": task_id,
++                    "param": json.dumps({"negativeTags": "no noise", "styleWeight": 0.8}),
++                },
++            }
++
++    repaired = await MusicService(db, client=FakeClient()).repair_imported_task_generation_options_from_provider(limit=20)
++
++    db.refresh(task)
++    assert repaired == 1
++    assert task.task_type == "generate_music"
++    assert task.status == "SUCCESS"
++    assert task.result_payload == original_result
++    assert task.request_payload["negativeTags"] == "no noise"
++    assert task.request_payload["styleWeight"] == 0.8
++
++
++@pytest.mark.asyncio
++async def test_provider_backfill_rejects_empty_or_gateway_placeholder_response(isolated_db_session):
++    db = isolated_db_session
++    task = SunoTask(
++        task_id="manual-provider-empty",
++        task_type="generate_music",
++        status="SUCCESS",
++        request_payload={
++            "source": "manual_sunoapi_import",
++            "task_id": "manual-provider-empty",
++            "task_type": "generate_music",
++        },
++        response_payload={
++            "source": "manual_sunoapi_import",
++            "taskId": "manual-provider-empty",
++            "taskType": "generate_music",
++        },
++        result_payload={"original": True},
++    )
++    db.add(task)
++    db.commit()
++
++    class EmptyClient:
++        async def get_details(self, task_id):
++            return {"code": 200, "msg": "success", "data": None}
++
++    repaired = await MusicService(db, client=EmptyClient()).repair_imported_task_generation_options_from_provider(limit=20)
++
++    db.refresh(task)
++    assert repaired == 0
++    assert task.result_payload == {"original": True}
++    assert "generation_options_provider_checked" not in task.request_payload
++
++
++@pytest.mark.asyncio
++async def test_unknown_task_type_has_no_default_music_record_info_fallback(isolated_db_session):
++    class RejectingClient:
++        async def get_details(self, task_id):
++            raise AssertionError("Unknown task type must not fall back to generate/record-info")
++
++    service = MusicService(isolated_db_session, client=RejectingClient())
++    with pytest.raises(ValueError, match="Kein freigegebener SunoAPI-Record-Info-Endpunkt"):
++        await service._fetch_external_task_details("external-id", "library_content_cache")
++
++
++def test_content_check_repairs_previous_local_provider_pollution(isolated_db_session):
++    db = isolated_db_session
++    task = SunoTask(
++        task_id="local-library-content-cache-20260713174326944870",
++        task_type="library_content_cache",
++        status="success",
++        request_payload={
++            "limit": 500,
++            "background": True,
++            "generation_options_provider_checked": True,
++            "generation_options_provider_checked_at": "2026-07-13T17:58:29",
++            "generation_options_provider_check_version": "sunoapi-options-v3",
++        },
++        response_payload={
++            "last_debug_event": {
++                "event": "library_content_cache_finished",
++                "data": {"audio_cached": 0, "cover_cached": 0, "stale_metadata_fixed": 1},
++            }
++        },
++        result_payload={"code": 200, "msg": "success", "data": None},
++    )
++    db.add(task)
++    db.flush()
++    db.add(StatusNotification(
++        event_type="library_content_background_loaded",
++        title="Neue Inhalte wurden geladen",
++        message="Neue Inhalte wurden geladen",
++        severity="success",
++        status="unread",
++        task_local_id=task.id,
++        suno_task_id=task.task_id,
++        content_type="system",
++        content_id=task.id,
++        target_tab="library",
++        target_payload={"audio_cached": 0, "cover_cached": 0, "stale_metadata_fixed": 1},
++    ))
++    db.commit()
++
++    repaired = _repair_misclassified_local_provider_checks(db)
++
++    db.refresh(task)
++    assert repaired == 1
++    assert task.status == "SUCCESS"
++    assert task.result_payload == {"audio_cached": 0, "cover_cached": 0, "stale_metadata_fixed": 1}
++    assert "generation_options_provider_checked" not in task.request_payload
++    assert "generation_options_provider_checked_at" not in task.request_payload
++    assert "generation_options_provider_check_version" not in task.request_payload

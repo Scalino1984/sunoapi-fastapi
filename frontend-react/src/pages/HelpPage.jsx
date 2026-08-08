@@ -73,7 +73,7 @@ const workflows = [
   {
     title: 'Library-Workflow',
     items: [
-      'Die zentrale Header-Suche filtert Library, Playlists, Styles und Songtexte; eigene Suchleisten auf diesen Seiten sind bewusst entfernt.',
+      'Die zentrale Header-Suche zeigt gemeinsame Treffer aus Library, Playlists, Styles und Songtexten; die Zielseiten übernehmen den Filter weiter.',
       'Library-Ansichten: gruppierte Listenansicht, Titelliste sowie Cover-Ansicht jeweils mit einfacher oder erweiterter Darstellung.',
       'Das Drei-Punkt-Menü pro Audio enthält SRT, Stems, Cover-Aktionen, Extend, Wiederverwenden, Audioanalyse, KI-Tags, Mini-DAW, Playlist und Papierkorb.',
       'Mehrfachauswahl zeigt passende Sammelaktionen oberhalb der Library, ohne die einzelnen Songdetails öffnen zu müssen.'
@@ -126,7 +126,7 @@ const faqItems = [
   },
   {
     question: 'Welche Suche ist maßgeblich?',
-    answer: 'Die zentrale Suche im Header ist die maßgebliche Suche für Inhalte und Bereiche. Library, Playlists, Styles und Songtexte übernehmen diese Suche direkt.'
+      answer: 'Die zentrale Suche im Header zeigt Treffer aus Songs, Playlists, Styles und Songtexten. Die Zielseiten übernehmen den Filter direkt.'
   },
   {
     question: 'Was tun, wenn Mobile komisch aussieht?',
@@ -269,7 +269,7 @@ const helpContentEn = {
     {
       title: 'Library workflow',
       items: [
-        'The central header search filters library, playlists, styles and lyrics; separate search bars on those pages are intentionally removed.',
+      'The central header search shows combined results from the library, playlists, styles and lyrics; target pages keep the filter applied.',
         'Library views: grouped list, title list and cover view, each with compact or expanded display where available.',
         'Each audio three-dot menu contains SRT, stems, cover actions, extend, reuse, audio analysis, AI tags, Mini DAW, playlist and trash actions.',
         'Multi-select shows matching bulk actions above the library without opening each song detail page.'
@@ -321,7 +321,7 @@ const helpContentEn = {
     },
     {
       question: 'Which search is authoritative?',
-      answer: 'The central header search is the authoritative search for content and sections. Library, playlists, styles and lyrics consume that search directly.'
+      answer: 'The central header search shows results from songs, playlists, styles and lyrics. Target pages keep the filter applied directly.'
     },
     {
       question: 'What should I do if mobile layout looks odd?',

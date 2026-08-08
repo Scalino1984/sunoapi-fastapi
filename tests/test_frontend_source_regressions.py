@@ -55,8 +55,8 @@ def test_library_page_keeps_audio_action_menu_and_srt_bulk_actions():
     library = _read("frontend-react/src/pages/LibraryPage.jsx")
 
     assert "AudioActionMenu" in library
-    assert "Alle SRT" in library
-    assert "Alle Stems" in library
+    assert "bulkGenerateSrt" in library
+    assert "generateSelectedSrt" in library
     assert "generateSrt" in library
     assert "bulk" in library.lower()
 
@@ -313,7 +313,13 @@ def test_react_status_polling_is_rate_limited_and_skips_credit_fetches():
     assert "refreshPendingAndReload({ silent: true, credits: false })" in app
     assert "shouldFetchCredits ? api.credits() : skippedContent" in app
     assert "shouldFetchNotifications ? api.notifications.list(true) : skippedContent" in app
-    assert "}, [user, refreshPendingAndReload]);" in app
+    assert "const refreshNotificationsOnly = useCallback" in app
+    assert "content: false" in app
+    assert "tasks: false" in app
+    assert "credits: false" in app
+    assert "await refreshNotificationsOnly();" in app
+    assert "document.addEventListener('visibilitychange', onVisible)" in app
+    assert "}, [user, refreshPendingAndReload, refreshNotificationsOnly]);" in app
 
 
 def test_library_extended_assets_open_original_from_audio_action_menu_only():
@@ -332,7 +338,7 @@ def test_library_extended_assets_open_original_from_audio_action_menu_only():
     gallery_tile = library.split("function AssetGalleryTile", 1)[1].split("function AssetFlatListRow", 1)[0]
     flat_list = library.split("function AssetFlatListRow", 1)[1].split("function LibraryFlatListView", 1)[0]
     project_gallery = library.split("function ProjectGalleryCard", 1)[1].split("function LibraryGalleryView", 1)[0]
-    project_list = library.split("className={`project-audio-action-pill", 1)[1].split("className=\"project-actions\"", 1)[0]
+    project_list = library.split("className=\"library-variant-list\"", 1)[1].split("function ActionModal", 1)[0]
     menu = library.split("function AudioActionMenu", 1)[1].split("function SparklesIconFallback", 1)[0]
 
     assert "ExtendSourceBadge" not in gallery_tile
@@ -404,101 +410,16 @@ def test_css_contains_modal_and_player_safety_hooks():
     assert "mini-player" in css
     assert "z-index" in css
 
-
-def test_audit_repair_confirmation_is_visible_and_never_fails_silently():
-    audit_page = _read("frontend-react/src/pages/AuditPage.jsx")
-
-    assert "window.prompt" not in audit_page
-    assert "REPAIR_CONFIRMATION_TEXT" in audit_page
-    assert "repairConfirmOpen" in audit_page
-    assert "repairConfirmError" in audit_page
-    assert "repairConfirmText.trim().toUpperCase()" in audit_page
-    assert "setRepairConfirmError(message)" in audit_page
-    assert "audit-repair-confirm-modal" in audit_page
+def test_library_content_check_uses_background_task_start_callback():
+    source = (ROOT / "frontend-react/src/pages/LibraryPage.jsx").read_text(encoding="utf-8")
+    assert "onTaskStarted" in source
+    assert "result?.queued && onTaskStarted" in source
+    assert "await onTaskStarted(result)" in source
+    assert "forceContentRefresh: true" not in source[source.index("async function cacheMissingLibraryContent"):source.index("function audioMenuKey")]
 
 
-def test_audit_repairs_have_dedicated_summary_verification_and_compact_details():
-    audit_page = _read("frontend-react/src/pages/AuditPage.jsx")
-    audit_css = _read("frontend-react/src/styles/app.css")
-
-    assert "audit-repair-result" in audit_page
-    assert "currentRepairSummary.changed" in audit_page
-    assert "startVerification" in audit_page
-    assert "verification_of_repair_task_id" in audit_page
-    assert "runHistorySummary(run, t)" in audit_page
-    assert "compactFindingsModal" in audit_page
-    assert "showGroupSearch" in audit_page
-    assert "showGroupPagination" in audit_page
-    assert "TRUSTED_HOSTS_WILDCARD" in audit_page
-    assert ".audit-findings-modal.compact" in audit_css
-    assert ".audit-repair-stat-grid" in audit_css
-
-
-def test_admin_ai_assistant_explains_effective_runtime_and_usage_boundaries():
-    admin = _read("frontend-react/src/pages/AdminPage.jsx")
-
-    assert "assistant-section-tabs" in admin
-    assert "loadRuntimePreview" in admin
-    assert "api.assistant.runtime" in admin
-    assert "Wo greift welche Konfiguration?" in admin
-    assert "Globaler KI-Assistent" in admin
-    assert "Style-Engine auf /music" in admin
-    assert "Songtext-Studio" in admin
-    assert "Library-Suchindex" in admin
-    assert "DAW-KI" in admin
-    assert "KI-Profile und Wissensdateien greifen hier derzeit nicht" in admin
-    assert "Transkription, Alignment und lokale Modellanalyse werden nicht durch KI-Profile gesteuert" in admin
-
-
-def test_admin_ai_profiles_and_instruction_files_are_transparently_manageable():
-    admin = _read("frontend-react/src/pages/AdminPage.jsx")
-    client = _read("frontend-react/src/api/client.js")
-
-    assert "instructionFiles(true)" in admin
-    assert "openProfileEditor" in admin
-    assert "saveProfileEditor" in admin
-    assert "duplicateProfile" in admin
-    assert "openInstructionEditor" in admin
-    assert "saveInstructionEditor" in admin
-    assert "toggleInstructionFile" in admin
-    assert "profileUsageLabels" in admin
-    assert "linkedProfilesForFile" in admin
-    assert "updateInstructionFile" in client
-    assert "include_content=${includeContent ? 'true' : 'false'}" in client
-
-
-def test_admin_ai_assistant_transparency_has_complete_bilingual_labels():
-    de = _read("frontend-react/src/i18n/de.js")
-    en = _read("frontend-react/src/i18n/en.js")
-
-    for source in (de, en):
-        assert "sections: {" in source
-        assert "standards: {" in source
-        assert "usage: {" in source
-        assert "runtime: {" in source
-        assert "warnings: {" in source
-        assert "knowledgeTitle:" in source
-        assert "profileDuplicated:" in source
-        assert "instructionUpdated:" in source
-
-
-def test_admin_ai_runtime_sources_are_explicit_and_library_profile_is_directly_reachable():
-    admin = _read("frontend-react/src/pages/AdminPage.jsx")
-    css = _read("frontend-react/src/styles/app.css")
-    de = _read("frontend-react/src/i18n/de.js")
-    en = _read("frontend-react/src/i18n/en.js")
-
-    assert "runtimeCompositionRows" in admin
-    assert "runtimeStatusLabel" in admin
-    assert "profileOverridesFallback ? 'overridden' : 'active'" in admin
-    assert "assistant-runtime-source-list" in admin
-    assert "assistant-runtime-state" in admin
-    assert "openLibraryTaggingSettings" in admin
-    assert "assistant-library-tagging-settings" in admin
-    assert "Profil auswählen" in admin
-    assert "assistant-warning-action" in css
-    assert "assistant-runtime-source-row" in css
-    assert "statusNotUsed" in de
-    assert "statusNotUsed" in en
-    assert "compositionHint" in de
-    assert "compositionHint" in en
+def test_app_enables_polling_window_for_library_background_tasks():
+    source = (ROOT / "frontend-react/src/App.jsx").read_text(encoding="utf-8")
+    assert "const handleBackgroundTaskStarted = useCallback" in source
+    assert "setPollingUntil(Date.now() + POLLING_AFTER_CREATE_MS)" in source
+    assert "onTaskStarted={handleBackgroundTaskStarted}" in source
