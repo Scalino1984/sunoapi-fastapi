@@ -1,4 +1,5 @@
 from app.models import AudioAsset, Song, SunoTask
+from app.routers.archive import mark_audio_asset_played
 from app.schemas import AudioAssetRead, SongRead, TaskRead
 from app.services.replicate_cover_service import ReplicateCoverService
 
@@ -10,6 +11,7 @@ def test_audio_asset_properties_read_candidate_and_request_payload_fallbacks():
         status="remote",
         image_url="https://cdn.example.test/image.jpg",
         operation_label="Generiert",
+        has_been_played=False,
         metadata_json={
             "candidate": {
                 "lyrics": "Candidate Lyrics",
@@ -37,6 +39,23 @@ def test_audio_asset_properties_read_candidate_and_request_payload_fallbacks():
     assert data["cover_local_url"] == "/media/covers/local.jpg"
     assert data["cover_cached"] is True
     assert data["operation_type"] == "Generiert"
+    assert data["has_been_played"] is False
+
+
+def test_audio_asset_played_status_is_persisted_on_successful_playback(isolated_db_session):
+    asset = AudioAsset(
+        source_url="https://cdn.example.test/new-song.mp3",
+        status="remote",
+        has_been_played=False,
+    )
+    isolated_db_session.add(asset)
+    isolated_db_session.commit()
+
+    result = mark_audio_asset_played(asset.id, db=isolated_db_session)
+
+    isolated_db_session.refresh(asset)
+    assert result == {"ok": True, "audio_asset_id": asset.id, "has_been_played": True}
+    assert asset.has_been_played is True
 
 
 def test_song_read_exposes_capabilities_and_cover_cache_context():

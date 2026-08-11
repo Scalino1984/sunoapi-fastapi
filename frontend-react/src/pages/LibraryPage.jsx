@@ -9,7 +9,7 @@ import { useLiveAudioProgress, Waveform } from '../components/Waveform.jsx';
 import { LibrarySongDetails } from '../components/library/LibrarySongDetails.jsx';
 import { LibraryDetailAccordion } from '../components/library/LibraryDetailAccordion.jsx';
 import { useI18n } from '../i18n/I18nContext.jsx';
-import { assetSearchText, copyToClipboard, downloadTextFile, formatBoolean, formatDate, parseBackendDate, formatDuration, formatVocalGender, getGenerationOptions, groupAssetsByProject, handleCoverImageError, hasGenerationOptions, isPlayable, matchesSearchQuery, operationKey, operationLabel, pickCover, isCoverCached, pickLyrics, pickModel, pickPrompt, pickStyle, pickTitle, safeFilename, shortId, stableLibrarySortValue, updatedLibrarySortValue, summarizeStyle } from '../utils.js';
+import { assetSearchText, cleanLyricsSectionTags, copyToClipboard, downloadTextFile, formatBoolean, formatDate, parseBackendDate, formatDuration, formatVocalGender, getGenerationOptions, groupAssetsByProject, handleCoverImageError, hasGenerationOptions, isPlayable, matchesSearchQuery, operationKey, operationLabel, pickCover, isCoverCached, pickLyrics, pickModel, pickPrompt, pickStyle, pickTitle, safeFilename, shortId, stableLibrarySortValue, updatedLibrarySortValue, summarizeStyle } from '../utils.js';
 
 
 const srtLiveColorOptions = [
@@ -82,6 +82,12 @@ function ResponsiveLabel({ full, short }) {
       <span className="responsive-label-short">{short || full}</span>
     </>
   );
+}
+
+
+function UnplayedIndicator({ asset, className = '' }) {
+  if (asset?.has_been_played !== false) return null;
+  return <span className={`unplayed-indicator ${className}`.trim()} title="Noch nicht abgespielt" role="img" aria-label="Noch nicht abgespielt" />;
 }
 
 
@@ -3487,40 +3493,20 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
       openAudioOperationModal(asset, typeName);
       return;
     }
+    if (typeName === 'Add Vocals' || typeName === 'Add Instrumental') {
+      prepareAssetLayerSwapInMusic(asset, typeName);
+      return;
+    }
     const title = pickTitle(asset);
-    const generationOptions = getGenerationOptions(asset);
-    const optionPayload = {
-      vocalGender: generationOptions.vocalGender || undefined,
-      styleWeight: optionalGenerationNumber(generationOptions.styleWeight),
-      weirdnessConstraint: optionalGenerationNumber(generationOptions.weirdnessConstraint),
-      audioWeight: optionalGenerationNumber(generationOptions.audioWeight)
-    };
     const payload = { title: `${title} - ${typeName}` };
     if (typeName === 'Extend') payload.prompt = pickPrompt(asset) || '';
     if (typeName === 'Cover Song') payload.prompt = pickPrompt(asset) || title;
-    if (typeName === 'Add Vocals') {
-      payload.prompt = pickPrompt(asset) || pickLyrics(asset) || title;
-      payload.style = pickStyle(asset) || 'studio vocals';
-      payload.negativeTags = generationOptions.negativeTags || 'low quality, distorted, off key';
-      payload.model = 'V4_5PLUS';
-      Object.assign(payload, optionPayload);
-    }
-    if (typeName === 'Add Instrumental') {
-      payload.tags = pickStyle(asset) || 'studio instrumental';
-      payload.negativeTags = generationOptions.negativeTags || 'low quality, distorted, noisy';
-      payload.model = 'V4_5PLUS';
-      Object.assign(payload, optionPayload);
-    }
     try {
       const result = typeName === 'Extend'
         ? await api.archive.extend(asset.id, payload)
         : typeName === 'Cover Song'
           ? await api.archive.coverSong(asset.id, payload)
-          : typeName === 'Add Vocals'
-            ? await api.archive.addVocals(asset.id, payload)
-            : typeName === 'Add Instrumental'
-              ? await api.archive.addInstrumental(asset.id, payload)
-              : typeName === 'Persona'
+          : typeName === 'Persona'
                 ? await api.archive.createPersona(asset.id, { name: `${title} Persona`, description: title })
                 : await api.archive.createCoverImage(asset.id, { prompt: title });
       notify(t('library.messages.operationStarted', '{{type}} gestartet: {{task}}', { type: typeName, task: result.task_id || result.external_task_id || t('library.messages.taskCreated', 'Task erstellt') }), 'success');
@@ -3614,6 +3600,52 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
       message: hasReusableAudioId
         ? t('library.messages.extendPreparedInGenerator', 'Musik erweitern wurde im Generator vorbereitet.')
         : t('library.messages.uploadExtendPrepared', 'Upload And Extend wurde vorbereitet. Prüfe bei lokalen Importen, ob eine extern erreichbare Audio-URL vorhanden ist.')
+    });
+  }
+
+  function prepareAssetLayerSwapInMusic(asset, typeName) {
+    if (!asset?.id || !['Add Vocals', 'Add Instrumental'].includes(typeName)) return;
+    if (!canRunSunoApiAction(asset, typeName)) {
+      notify(localOnlyHint(asset, t) || t('library.messages.actionDisabledForAsset', '{{type}} ist für dieses AudioAsset deaktiviert.', { type: typeName }), 'info');
+      return;
+    }
+
+    const sourceText = pickPrompt(asset) || pickLyrics(asset) || '';
+    const sourceStyle = pickStyle(asset) || '';
+    const generationOptions = getGenerationOptions(asset);
+    const sourceModel = String(asset?.model_name || asset?.model || '');
+    const model = ['V4_5PLUS', 'V5', 'V5_5'].includes(sourceModel) ? sourceModel : 'V4_5PLUS';
+    const isAddInstrumental = typeName === 'Add Instrumental';
+
+    // Beide Suno-Operationen arbeiten auf der hier ausgewählten Originaldatei:
+    // Add Instrumental ergänzt deren vorhandene Vocals, Add Vocals ergänzt deren
+    // vorhandenes Instrumental. Deshalb bleibt instrumental bewusst false – es
+    // ist keine Neu-Generierung ohne Gesang, sondern eine Layer-Operation.
+    onReusePrompt?.({
+      title: `${pickTitle(asset)} – ${isAddInstrumental ? 'Instrumental ergänzt' : 'Vocals ergänzt'}`,
+      prompt: sourceText,
+      lyrics: sourceText,
+      style: sourceStyle,
+      operationTags: sourceStyle,
+      operationMode: isAddInstrumental ? 'add-instrumental' : 'add-vocals',
+      selectedAssetId: String(asset.id),
+      taskIdInput: String(asset.suno_task_id || asset.task_id || ''),
+      audioIdInput: String(asset.audio_id || ''),
+      negativeTags: generationOptions.negativeTags || (isAddInstrumental ? 'low quality, distorted, noisy' : 'low quality, distorted, off key'),
+      // Leere Werte werden absichtlich explizit weitergereicht: Sie löschen
+      // ggf. noch gespeicherte Werte einer vorherigen Music-Operation.
+      vocalGender: generationOptions.vocalGender || '',
+      styleWeight: generationOptions.styleWeight !== '' ? generationOptions.styleWeight : '',
+      weirdnessConstraint: generationOptions.weirdnessConstraint !== '' ? generationOptions.weirdnessConstraint : '',
+      audioWeight: generationOptions.audioWeight !== '' ? generationOptions.audioWeight : '',
+      model,
+      customMode: true,
+      instrumental: false,
+      work_mode: 'lyrics',
+      forceAdvanced: true,
+      message: isAddInstrumental
+        ? t('library.messages.addInstrumentalPreparedInGenerator', 'Add Instrumental wurde vorbereitet. Die Original-Vocals bleiben als Teil der ausgewählten Audioquelle erhalten.')
+        : t('library.messages.addVocalsPreparedInGenerator', 'Add Vocals wurde vorbereitet. Das Original-Instrumental bleibt als Teil der ausgewählten Audioquelle erhalten.')
     });
   }
 
@@ -4050,6 +4082,7 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
   function PromptLyricsCard({ asset }) {
     if (!asset) return null;
     const text = pickPrompt(asset) || pickLyrics(asset) || '';
+    const textWithoutSectionTags = cleanLyricsSectionTags(text);
     const manualOverride = asset?.metadata_json?.lyrics_manual_override;
     return (
       <LibraryDetailAccordion
@@ -4061,6 +4094,7 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
         actionSlot={(
           <div className="button-row compact prompt-lyrics-actions">
             <button type="button" onClick={async (event) => { event.stopPropagation(); await copyToClipboard(text); notify(t('library.messages.textCopied', 'Text kopiert.'), 'success'); }} disabled={!text}><Copy size={14} /> {t('common.copy', 'Kopieren')}</button>
+            <button type="button" onClick={async (event) => { event.stopPropagation(); await copyToClipboard(textWithoutSectionTags); notify(t('library.messages.textWithoutSectionTagsCopied', 'Songtext ohne Abschnitts-Tags kopiert.'), 'success'); }} disabled={!textWithoutSectionTags}><Copy size={14} /> {t('library.promptLyrics.copyWithoutSectionTags', 'Ohne Abschnitts-Tags kopieren')}</button>
             <button type="button" className="primary" onClick={(event) => openLyricsEditor(asset, event)}><Edit3 size={14} /> {t('stylesPage.edit', 'Bearbeiten')}</button>
           </div>
         )}
@@ -4743,6 +4777,7 @@ ${generationOptionsText(asset)}`,
             onClick={(event) => { event.preventDefault(); event.stopPropagation(); openGalleryAssetDetails(project, asset); }}
             title={t('library.openSongDetails', 'Songdetails öffnen')}
           >{t('library.details', 'Details')}</button>
+          <UnplayedIndicator asset={asset} className="gallery-unplayed-indicator" />
           <div className="gallery-audio-menu-anchor">
             <AudioActionMenu asset={asset} compact label="" playQueue={projectQueue} playIndex={queueIndex} project={project} />
           </div>
@@ -4779,6 +4814,7 @@ ${generationOptionsText(asset)}`,
         </label>
         <button className={`asset-flat-cover ${active ? 'is-active-cover' : ''}`} type="button" onClick={(event) => preservePlaybackClick(event, () => playAsset(asset, projectQueue, queueIndex, project))} disabled={!isPlayable(asset)} title={isPlayingAsset(asset) ? t('player.pause', 'Pause') : t('player.play', 'Abspielen')}>
           <img src={pickCover(asset)} alt={pickTitle(asset)} onError={handleCoverImageError} />
+          <UnplayedIndicator asset={asset} className="flat-unplayed-indicator" />
           <span className="cover-play">{isPlayingAsset(asset) ? <Pause size={16} /> : <Play size={16} fill="currentColor" />}</span>
         </button>
         <div className="asset-flat-main">
@@ -4851,6 +4887,7 @@ ${generationOptionsText(asset)}`,
         <div className="project-gallery-asset-actions">
           {project.assets.map((asset, index) => (
             <div className="gallery-asset-menu-pill" key={`gallery-action-${project.id}-${asset.id}`}>
+              <UnplayedIndicator asset={asset} className="pill-unplayed-indicator" />
               <span>{index + 1}/{project.assets.length || 1}</span>
               <small>{variantTitle(asset, project)}</small>
               <AudioActionMenu asset={asset} compact label="" dropUp />
@@ -5249,6 +5286,7 @@ ${generationOptionsText(asset)}`,
                             <input type="checkbox" checked={selectedIds.has(asset.id)} onChange={() => toggleSelected(asset.id)} aria-label={t('library.selectAsset', '{{title}} auswählen', { title: variantDisplayTitle })} />
                           </label>
                           <button type="button" className="library-variant-row-main" onClick={(event) => openProjectDetails(project, event)} title={variantDisplayTitle}>
+                            <UnplayedIndicator asset={asset} className="variant-unplayed-indicator" />
                             <span className="library-variant-row-version">V{index + 1}</span>
                             <span className="library-variant-row-copy">
                               <strong>{variantOperation}</strong>

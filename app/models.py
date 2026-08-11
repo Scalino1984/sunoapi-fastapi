@@ -203,6 +203,11 @@ class AudioAsset(Base, TimestampMixin, SoftDeleteMixin):
     version_label: Mapped[str | None] = mapped_column(String(120), nullable=True)
     is_favorite: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     is_final: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # Library-Status: Neu erstellte Varianten erhalten einen Punkt, bis ihre
+    # Wiedergabe mindestens einmal erfolgreich gestartet wurde. Der Status ist
+    # bewusst am Asset (nicht nur am Song/Projekt), weil Varianten separat
+    # angehört werden können.
+    has_been_played: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     waveform_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     waveform_generated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     structure_segments_json: Mapped[list | None] = mapped_column(JSON, nullable=True)

@@ -1104,6 +1104,7 @@ export const en = {
     promptLyrics: {
       title: 'Prompt / lyrics',
       sourceOfTruth: 'Source of truth for reuse and new SRT generations',
+      copyWithoutSectionTags: 'Copy without section tags',
       manuallyCorrected: 'Manually corrected',
       saveUnderLyrics: 'Save under lyrics',
       correctForSrt: 'Correct for SRT',
@@ -1218,6 +1219,7 @@ export const en = {
       audioImported: 'Audio was imported.',
       audioImportFailed: 'Audio import failed.',
       textCopied: 'Text copied.',
+      textWithoutSectionTagsCopied: 'Lyrics without section tags copied.',
       noAudioAnalysisReport: 'No audio analysis report exists for this variant yet.',
       audioAnalysisReportLoadFailed: 'Audio analysis report could not be loaded.',
       reportBlockCopied: 'Report block copied.',

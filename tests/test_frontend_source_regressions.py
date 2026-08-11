@@ -71,6 +71,48 @@ def test_api_client_exposes_safe_srt_and_audio_asset_methods():
     assert "detail" in client
 
 
+def test_library_unplayed_indicator_is_persisted_and_rendered_in_all_asset_views():
+    app = _read("frontend-react/src/App.jsx")
+    library = _read("frontend-react/src/pages/LibraryPage.jsx")
+    client = _read("frontend-react/src/api/client.js")
+
+    assert "markAssetPlayed" in app
+    assert "markPlayed" in client
+    assert "/mark-played" in client
+    assert "function UnplayedIndicator" in library
+    assert "gallery-unplayed-indicator" in library
+    assert "flat-unplayed-indicator" in library
+    assert "pill-unplayed-indicator" in library
+    assert "variant-unplayed-indicator" in library
+
+
+def test_library_layer_actions_prepare_music_instead_of_starting_tasks_directly():
+    app = _read("frontend-react/src/App.jsx")
+    library = _read("frontend-react/src/pages/LibraryPage.jsx")
+    music = _read("frontend-react/src/pages/MusicPage.jsx")
+
+    assert "function prepareAssetLayerSwapInMusic" in library
+    layer_block = library.split("function prepareAssetLayerSwapInMusic", 1)[1].split("async function saveAssetLyricsToArchive", 1)[0]
+    assert "operationMode: isAddInstrumental ? 'add-instrumental' : 'add-vocals'" in layer_block
+    assert "selectedAssetId: String(asset.id)" in layer_block
+    assert "instrumental: false" in layer_block
+    run_action_block = library.split("async function runAction", 1)[1].split("async function exportProjectJson", 1)[0]
+    assert "prepareAssetLayerSwapInMusic(asset, typeName);" in run_action_block
+    assert "api.archive.addVocals" not in run_action_block
+    assert "api.archive.addInstrumental" not in run_action_block
+    assert "...(payload || {})" in app
+    assert "setOperationMode(draft.operationMode)" in music
+    assert "setSelectedAssetId(String(draft.selectedAssetId ?? draft.assetId ?? ''))" in music
+    assert "setWizard(!draft.forceAdvanced);" in music
+
+
+def test_music_page_defaults_to_expert_form_instead_of_restoring_the_wizard():
+    music = _read("frontend-react/src/pages/MusicPage.jsx")
+
+    assert "const [wizard, setWizard] = useState(() => Boolean(initialWizard));" in music
+    assert "storedMusicState.wizard !== undefined ? Boolean(storedMusicState.wizard) : initialWizard" not in music
+
+
 def test_music_generate_submit_uses_official_suno_advanced_option_names():
     music = _read("frontend-react/src/pages/MusicPage.jsx")
 
@@ -86,12 +128,23 @@ def test_music_clear_button_resets_advanced_suno_fields():
     music = _read("frontend-react/src/pages/MusicPage.jsx")
 
     clear_block = music.split("function clearMusicForm", 1)[1].split("async function runSafeCheck", 1)[0]
+    assert "setOperationMode('generate');" in clear_block
     assert "setStyle('');" in clear_block
     assert "setNegativeTags('');" in clear_block
     assert "setStyleWeight('');" in clear_block
     assert "setWeirdnessConstraint('');" in clear_block
     assert "setAudioWeight('');" in clear_block
     assert "onClick={clearMusicForm}" in music
+
+
+def test_music_master_style_replaces_negative_tags_but_append_action_merges_them():
+    music = _read("frontend-react/src/pages/MusicPage.jsx")
+
+    apply_style_block = music.split("function applyAiStyle", 1)[1].split("function applySuggestedSongTitle", 1)[0]
+    assert "const negativeMode = options.negativeMode === 'append' ? 'append' : 'replace';" in apply_style_block
+    assert "negativeMode === 'replace' ? nextNegative : mergeCommaTags(current, nextNegative)" in apply_style_block
+    assert "applyAiStyle(suggestion, { negativeMode: 'replace' })" in music
+    assert "applyNegativeTagsOnly(suggestion, 'append')" in music
 
 
 def test_music_extend_submit_uses_official_suno_payload_names_and_continue_at():
@@ -203,21 +256,42 @@ def test_header_search_is_single_source_for_archive_pages_and_library_view_persi
     assert "writeStoredChoice(libraryViewStorageKey, value, libraryViewModes)" in library
 
 
-def test_library_add_vocals_and_instrumental_reuse_saved_payload_options():
+def test_library_add_vocals_and_instrumental_prepare_saved_payload_options_for_music():
     library = _read("frontend-react/src/pages/LibraryPage.jsx")
 
-    run_action_block = library.split("async function runAction", 1)[1].split("async function exportProjectJson", 1)[0]
-    assert "const generationOptions = getGenerationOptions(asset);" in run_action_block
-    assert "if (typeName === 'Add Vocals')" in run_action_block
-    assert "payload.prompt = pickPrompt(asset) || pickLyrics(asset) || title;" in run_action_block
-    assert "payload.style = pickStyle(asset) || 'studio vocals';" in run_action_block
-    assert "payload.negativeTags = generationOptions.negativeTags || 'low quality, distorted, off key';" in run_action_block
-    assert "payload.tags = pickStyle(asset) || 'studio instrumental';" in run_action_block
-    assert "payload.negativeTags = generationOptions.negativeTags || 'low quality, distorted, noisy';" in run_action_block
-    assert "vocalGender: generationOptions.vocalGender || undefined" in run_action_block
-    assert "styleWeight: optionalGenerationNumber(generationOptions.styleWeight)" in run_action_block
-    assert "weirdnessConstraint: optionalGenerationNumber(generationOptions.weirdnessConstraint)" in run_action_block
-    assert "audioWeight: optionalGenerationNumber(generationOptions.audioWeight)" in run_action_block
+    layer_block = library.split("function prepareAssetLayerSwapInMusic", 1)[1].split("async function saveAssetLyricsToArchive", 1)[0]
+    assert "const generationOptions = getGenerationOptions(asset);" in layer_block
+    assert "prompt: sourceText" in layer_block
+    assert "style: sourceStyle" in layer_block
+    assert "operationTags: sourceStyle" in layer_block
+    assert "negativeTags: generationOptions.negativeTags" in layer_block
+    assert "vocalGender: generationOptions.vocalGender || ''" in layer_block
+    assert "styleWeight: generationOptions.styleWeight" in layer_block
+    assert "weirdnessConstraint: generationOptions.weirdnessConstraint" in layer_block
+    assert "audioWeight: generationOptions.audioWeight" in layer_block
+    assert "selectedAssetId: String(asset.id)" in layer_block
+
+
+def test_music_add_vocals_requires_an_instrumental_source_preflight():
+    music = _read("frontend-react/src/pages/MusicPage.jsx")
+
+    assert "function instrumentalStatusForAsset(asset)" in music
+    assert "const addVocalsSourceStatus" in music
+    assert "addVocalsSourceStatus === false" in music
+    assert "addVocalsInstrumentalConfirmed" in music
+    assert "sourceIsInstrumental: addVocalsSourceStatus === true || addVocalsInstrumentalConfirmed" in music
+    assert "Instrumentalquelle erforderlich" in music
+    assert "if (assetId && !directAudioUrl && !hasUploadedUrl) return startTask(() => api.archive.addVocals" in music
+
+
+def test_library_song_details_offer_clean_lyrics_clipboard_copy():
+    library = _read("frontend-react/src/pages/LibraryPage.jsx")
+    utils = _read("frontend-react/src/utils.js")
+
+    assert "cleanLyricsSectionTags" in utils
+    assert "textWithoutSectionTags = cleanLyricsSectionTags(text)" in library
+    assert "copyWithoutSectionTags" in library
+    assert "textWithoutSectionTagsCopied" in library
 
 
 def test_library_audio_ai_analysis_is_isolated_and_available_in_song_details():
@@ -320,6 +394,17 @@ def test_react_status_polling_is_rate_limited_and_skips_credit_fetches():
     assert "await refreshNotificationsOnly();" in app
     assert "document.addEventListener('visibilitychange', onVisible)" in app
     assert "}, [user, refreshPendingAndReload, refreshNotificationsOnly]);" in app
+
+
+def test_library_refreshes_when_first_playable_task_variant_arrives():
+    app = _read("frontend-react/src/App.jsx")
+
+    assert "function isLibraryContentReadyTaskStatus(status)" in app
+    assert "normalized === 'FIRST_SUCCESS' || isTerminalSuccessStatus(normalized)" in app
+    assert "successContentRefreshTaskStatesRef" in app
+    assert "const taskStateKey = `${taskKey}:${status}`;" in app
+    assert "deferContentWhilePlaying: !libraryIsVisible" in app
+    assert "ignorePlaybackLock: libraryIsVisible" in app
 
 
 def test_library_extended_assets_open_original_from_audio_action_menu_only():

@@ -245,6 +245,14 @@ function isTerminalSuccessStatus(status) {
   return TERMINAL_SUCCESS_STATUSES.has(String(status || '').trim().toUpperCase());
 }
 
+// Suno liefert die ersten abspielbaren Varianten teilweise bereits mit
+// FIRST_SUCCESS. Der Task bleibt dann noch aktiv, die Library darf aber nicht
+// bis zum finalen SUCCESS oder einem Browser-Reload warten.
+function isLibraryContentReadyTaskStatus(status) {
+  const normalized = String(status || '').trim().toUpperCase();
+  return normalized === 'FIRST_SUCCESS' || isTerminalSuccessStatus(normalized);
+}
+
 function activeTaskCount(value) {
   return normalizeApiList(value, ['tasks', 'items']).filter(isActiveTask).length;
 }
@@ -316,11 +324,12 @@ export default function App() {
   const pendingContentRefreshRef = useRef(false);
   const cachedRefreshStateRef = useRef({ assets: [], tasks: [], notifications: [] });
   const lastPlaybackCommitRef = useRef({ currentAssetId: null, isPlaying: false, currentTime: 0, duration: 0, committedAt: 0 });
+  const playbackMarkedAssetIdsRef = useRef(new Set());
   const notificationSessionStartedAtRef = useRef(Date.now());
   const notificationBootstrapDoneRef = useRef(false);
   const seenNotificationIdsRef = useRef(readSeenNotificationIds());
   const successContentRefreshNotificationIdsRef = useRef(new Set());
-  const successContentRefreshTaskIdsRef = useRef(new Set());
+  const successContentRefreshTaskStatesRef = useRef(new Set());
   const tasksRef = useRef([]);
   const pollingUntilRef = useRef(0);
   const lastStatusPollAtRef = useRef(0);
@@ -423,6 +432,26 @@ export default function App() {
     return () => document.body.classList.remove('audio-playback-active');
   }, [assets, tasks, notifications, playerState?.isPlaying]);
 
+  const markAssetPlayed = useCallback((assetId) => {
+    const id = String(assetId || '').trim();
+    if (!id || playbackMarkedAssetIdsRef.current.has(id)) return;
+    playbackMarkedAssetIdsRef.current.add(id);
+
+    // Sofort im UI entfernen; der persistente Request läuft bewusst im
+    // Hintergrund, damit der erfolgreiche Playback-Start nicht verzögert wird.
+    setAssets((current) => (current || []).map((asset) => (
+      String(asset?.id || '') === id && asset.has_been_played !== true
+        ? { ...asset, has_been_played: true }
+        : asset
+    )));
+    api.archive.markPlayed(id).catch(() => {
+      // Der Punkt darf einen funktionierenden Player nicht beeinträchtigen.
+      // Beim nächsten Reload liefert das Backend den tatsächlich gespeicherten
+      // Status erneut.
+      playbackMarkedAssetIdsRef.current.delete(id);
+    });
+  }, []);
+
   const handlePlaybackStateChange = useCallback((nextState = {}) => {
     const normalized = {
       currentAssetId: nextState.currentAssetId || null,
@@ -441,6 +470,10 @@ export default function App() {
     lastPlaybackCommitRef.current = { ...normalized, committedAt: Date.now() };
     playbackRefreshLockRef.current = Boolean(normalized.isPlaying);
 
+    if (normalized.isPlaying && normalized.currentAssetId) {
+      markAssetPlayed(normalized.currentAssetId);
+    }
+
     if (!identityChanged && normalized.isPlaying) return;
 
     setPlayerState((current) => {
@@ -452,7 +485,7 @@ export default function App() {
       if (!stateIdentityChanged && !shouldCommitPausedTime) return current;
       return normalized;
     });
-  }, []);
+  }, [markAssetPlayed]);
 
   useEffect(() => {
     const activeId = String(playerState.currentAssetId || '').trim();
@@ -941,9 +974,14 @@ export default function App() {
 
     for (const task of taskRows) {
       const taskKey = task?.id != null ? String(task.id) : String(task?.task_id || '');
-      if (!taskKey || successContentRefreshTaskIdsRef.current.has(taskKey)) continue;
-      if (!isTerminalSuccessStatus(task?.status)) continue;
-      successContentRefreshTaskIdsRef.current.add(taskKey);
+      const status = String(task?.status || '').trim().toUpperCase();
+      const taskStateKey = `${taskKey}:${status}`;
+      if (!taskKey || successContentRefreshTaskStatesRef.current.has(taskStateKey)) continue;
+      if (!isLibraryContentReadyTaskStatus(status)) continue;
+      // FIRST_SUCCESS und ein späteres SUCCESS müssen jeweils einmal laden:
+      // Der erste Status kann nur die erste Variante enthalten, der finale
+      // Status weitere Varianten oder nachgelagerte Metadaten.
+      successContentRefreshTaskStatesRef.current.add(taskStateKey);
       shouldRefreshContent = true;
     }
 
@@ -952,8 +990,17 @@ export default function App() {
       pendingContentRefreshRef.current = true;
       return;
     }
-    refreshAll({ silent: true, forceContentRefresh: true, deferContentWhilePlaying: true }).catch(() => null);
-  }, [notifications, tasks, user, refreshAll]);
+    const libraryIsVisible = activeTab === 'library';
+    // In einer sichtbaren Library ist Aktualität wichtiger als der sonstige
+    // Playback-Schutz. Der Player nutzt seine eigene Queue, daher kann die
+    // Assetliste hier gefahrlos nachgeladen werden, ohne dass F5 nötig wird.
+    refreshAll({
+      silent: true,
+      forceContentRefresh: true,
+      deferContentWhilePlaying: !libraryIsVisible,
+      ignorePlaybackLock: libraryIsVisible
+    }).catch(() => null);
+  }, [notifications, tasks, user, activeTab, refreshAll]);
 
   async function logout() {
     await api.auth.logout();
@@ -1410,13 +1457,17 @@ export default function App() {
 
   function reusePromptForMusic(payload) {
     setMusicDraft({
+      ...(payload || {}),
       title: payload?.title || '',
       prompt: payload?.prompt || payload?.lyrics || '',
       style: payload?.style || '',
       operationMode: payload?.operationMode || undefined,
       selectedAssetId: payload?.selectedAssetId || payload?.assetId || undefined,
       continueAt: payload?.continueAt || undefined,
-      audioUrl: payload?.audioUrl || undefined,
+      // Ein explizit leerer Wert löscht eine möglicherweise noch gespeicherte
+      // Upload-URL im Music-Formular. So nutzt die Layer-Operation garantiert
+      // das ausgewählte Original-Asset statt einer alten Fremdquelle.
+      audioUrl: payload?.audioUrl ?? undefined,
       audioIdInput: payload?.audioIdInput || payload?.audioId || undefined,
       taskIdInput: payload?.taskIdInput || payload?.taskId || undefined,
       customMode: payload?.customMode,

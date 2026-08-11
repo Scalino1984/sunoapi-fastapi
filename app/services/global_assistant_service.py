@@ -983,6 +983,24 @@ class GlobalAssistantService:
         text = self._clean_section_descriptor(raw)
         if not text:
             return None
+
+        # Ein lokaler Vocal-Tag kann das Wort "chorus" oder "verse" als
+        # Delivery-Beschreibung enthalten (z. B. "male vocal ... rap chorus").
+        # Das ist kein neuer Songabschnitt. Würde er hier als Section erkannt,
+        # entfernt der Merge-Fallback ihn beim Ersetzen des echten Headers und
+        # die Integritätsprüfung meldet anschließend fälschlich einen
+        # Abschnittsverlust. Echte Section-Header beginnen immer mit ihrem
+        # Section-Namen bzw. "Final Chorus".
+        section_prefix = re.compile(
+            r"^(?:final\s+)?(?:intro|einleitung|build[ -]?up|verse|strophe|part|pre[ -]?chorus|pre[ -]?refrain|post[ -]?chorus|post[ -]?refrain|hook|chorus|refrain|bridge|breakdown|break|drop|outro|ende|finale|adlibs?)\b",
+            re.IGNORECASE,
+        )
+        role_signal = re.compile(
+            r"\b(?:singer|singing|sung|rapper|rap|spoken|vocal|voice|belting|falsetto|choir|duet|toaster|singjay)\b",
+            re.IGNORECASE,
+        )
+        if role_signal.search(text) and not section_prefix.search(text):
+            return None
         number_match = re.search(r"\b(\d{1,2})\b", text)
         number = number_match.group(1) if number_match else ""
 
@@ -1942,15 +1960,20 @@ class GlobalAssistantService:
             identity_parts.append("Female")
         elif "male" in signature:
             identity_parts.append("Male")
+
+        # Ein lokaler Rollen-Tag kann bewusst mehrere Rollen enthalten, etwa
+        # Singer/Rapper-Wechsel oder ein Duett. Beim Kürzen dürfen diese nicht
+        # per elif-Kette zu einer einzigen Rolle kollabieren – die Validierung
+        # (und vor allem die Suno-Steuerung) braucht die vollständige Signatur.
         if "spoken-word" in signature:
             identity_parts.append("Spoken Word")
-        elif "rapper" in signature:
-            identity_parts.append("Rapper")
-        elif "singer" in signature:
+        if "singer" in signature:
             identity_parts.append("Singer")
-        elif "duet" in signature:
+        if "rapper" in signature:
+            identity_parts.append("Rapper")
+        if "duet" in signature:
             identity_parts.append("Duet")
-        elif "choir" in signature:
+        if "choir" in signature:
             identity_parts.append("Choir")
 
         lowered = str(line or "").lower()
@@ -1975,7 +1998,10 @@ class GlobalAssistantService:
             parts.append("No Rap")
         if "no-singing" in signature:
             parts.append("No Singing")
-        if "no-melody" in signature and not minimal:
+        # Ausschlüsse gehören zur Rollensteuerung und sind daher auch im
+        # Minimalprofil nicht optional. Würden wir sie entfernen, verwirft die
+        # nachgelagerte Integritätsprüfung zu Recht den eigenen Fallback.
+        if "no-melody" in signature:
             parts.append("No Melody")
         return f"[{' | '.join(parts)}]" if parts else ""
 
@@ -2019,6 +2045,37 @@ class GlobalAssistantService:
                 return compacted
         return compact(section_level="minimal", local_role_minimal=True)
 
+    def _section_label_with_source_semantics(self, source_line: str, meta: dict[str, str]) -> str:
+        """Return a normalized label without losing Final/repeat semantics."""
+        source = str(source_line or "").strip().lower()
+        label = str(meta.get("label") or "Section").strip()
+        if re.search(r"\bfinal\b|\bfinale\b", source):
+            label = f"Final {label}" if not label.lower().startswith("final ") else label
+        repeat_match = re.search(r"\bx\s*(\d+)\b", source)
+        if repeat_match:
+            label = f"{label} x{repeat_match.group(1)}"
+        elif "repeat" in source and "twice" in source:
+            label = f"{label} x2"
+        elif "repeat" in source and ("three times" in source or "thrice" in source):
+            label = f"{label} x3"
+        return label
+
+    def _retarget_section_tag(self, tag: str, source_line: str, meta: dict[str, str]) -> str:
+        """Apply a generated descriptor to the actual source section.
+
+        AI/fallback tags occasionally label a Pre-Chorus as Verse or a final
+        hook as a plain Chorus. The descriptor is still useful, but the source
+        section identity has precedence and must remain stable for the preview.
+        """
+        inner = str(tag or "").strip().strip("[]").strip()
+        descriptor = ""
+        if ":" in inner:
+            descriptor = inner.split(":", 1)[1].strip()
+        elif "|" in inner:
+            descriptor = " | ".join(part.strip() for part in inner.split("|")[1:] if part.strip())
+        label = self._section_label_with_source_semantics(source_line, meta)
+        return f"[{label}: {descriptor}]" if descriptor else f"[{label}]"
+
     def _merge_lyric_vocal_tags_into_lyrics(
         self,
         lyrics: str,
@@ -2030,12 +2087,21 @@ class GlobalAssistantService:
         if not normalized_tags:
             return str(lyrics or "").strip()
 
+        def item_section_meta(item: dict[str, str]) -> dict[str, str] | None:
+            # Die deklarierte Section ist die Zuordnung; der KI-Tag selbst
+            # kann einen falschen Header tragen (z. B. [Verse: ...] für einen
+            # Pre-Chorus) und darf die Zuordnung nicht überschreiben.
+            return (
+                self._freeform_lyric_section_meta(item.get("section"))
+                or self._freeform_lyric_section_meta(item.get("tag"))
+            )
+
         exact_tags: dict[str, dict[str, str]] = {}
         base_tags: dict[str, dict[str, str]] = {}
         for item in normalized_tags:
-            key_source = f"{item.get('section') or ''} {item.get('tag') or ''}"
-            key = self._lyric_section_key(key_source)
-            base = self._lyric_section_base_key(key_source)
+            section_meta = item_section_meta(item)
+            key = section_meta["key"] if section_meta else "section"
+            base = section_meta["base"] if section_meta else "section"
             if key and key != "section" and key not in exact_tags:
                 exact_tags[key] = item
             if base and base != "section" and base not in base_tags:
@@ -2062,7 +2128,11 @@ class GlobalAssistantService:
                     inserted_bases.add(meta["base"])
                     index += 1
                     continue
-                tag_text = str(replacement.get("tag") or "").strip()
+                tag_text = self._retarget_section_tag(
+                    str(replacement.get("tag") or "").strip(),
+                    line,
+                    meta,
+                )
                 tag_text = self._remove_conflicting_section_exclusions(
                     tag_text,
                     self._local_roles_until_next_section(lines, index + 1),
@@ -2080,9 +2150,18 @@ class GlobalAssistantService:
                             if str(lines[probe] or "").strip():
                                 next_non_empty = str(lines[probe] or "").strip()
                                 break
+                        # Ein direkt folgender Header ist ein eigener Abschnitt,
+                        # kein dekorativer Tag des gerade ersetzten Abschnitts.
+                        # Er muss in der nächsten Schleifenrunde verarbeitet
+                        # werden, sonst gehen z. B. Verse 1 nach einem leeren
+                        # Intro verloren und die Vorschau wird abgewiesen.
+                        if next_non_empty and self._lyric_section_meta(next_non_empty):
+                            break
                         if next_non_empty and (self._is_standalone_bracket_directive(next_non_empty) or self._is_round_section_header(next_non_empty)):
                             cursor += 1
                             continue
+                        break
+                    if self._lyric_section_meta(candidate):
                         break
                     if preserve_local_directives and (
                         self._is_local_role_directive(candidate)
@@ -2097,7 +2176,7 @@ class GlobalAssistantService:
                 continue
 
             if meta and self._is_round_section_header(line):
-                fallback_tag = self._fallback_section_tag_from_meta(meta)
+                fallback_tag = f"[{self._section_label_with_source_semantics(line, meta)}]"
                 output.append(fallback_tag or line)
                 index += 1
                 continue
@@ -2110,13 +2189,18 @@ class GlobalAssistantService:
         missing: list[str] = []
         for item in normalized_tags:
             tag_text = str(item.get("tag") or "").strip()
-            key = self._lyric_section_key(f"{item.get('section') or ''} {tag_text}")
-            base = self._lyric_section_base_key(f"{item.get('section') or ''} {tag_text}")
+            section_meta = item_section_meta(item)
+            key = section_meta["key"] if section_meta else "section"
+            base = section_meta["base"] if section_meta else "section"
             if key == "section" or base == "section":
                 continue
             if key not in inserted_keys and base not in inserted_bases and tag_text and tag_text not in merged:
                 missing.append(tag_text)
-        if missing:
+        # Die strukturtreue Vorschau darf keine bislang nicht vorhandenen
+        # Abschnitte erfinden. Im normalen (nicht strikten) Merge bleibt das
+        # historische Verhalten erhalten, damit freie Tags weiterhin ergänzt
+        # werden können.
+        if missing and not preserve_local_directives:
             merged = f"{'\n'.join(missing)}\n\n{merged}".strip()
         return merged
 

@@ -185,6 +185,7 @@ class AudioAssetRead(BaseModel):
     version_label: str | None = None
     is_favorite: bool | None = False
     is_final: bool | None = False
+    has_been_played: bool | None = False
     waveform_json: dict[str, Any] | None = None
     waveform_generated_at: Any | None = None
     structure_segments_json: list[dict[str, Any]] | None = None
@@ -862,6 +863,12 @@ class AddVocalsRequest(BaseModel):
         validation_alias=AliasChoices("callback_url", "callBackUrl"),
         serialization_alias="callBackUrl",
     )
+    source_is_instrumental: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("source_is_instrumental", "sourceIsInstrumental"),
+        serialization_alias="sourceIsInstrumental",
+        description="Explizite Bestätigung für unbekannte Upload-Quellen; wird nicht an SunoAPI weitergeleitet.",
+    )
 
     @model_validator(mode="after")
     def validate_add_vocals_payload(self):
@@ -1122,6 +1129,12 @@ class ArchiveAudioAddVocalsRequest(BaseModel):
         default=None,
         validation_alias=AliasChoices("callback_url", "callBackUrl"),
         serialization_alias="callBackUrl",
+    )
+    source_is_instrumental: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("source_is_instrumental", "sourceIsInstrumental"),
+        serialization_alias="sourceIsInstrumental",
+        description="Explizite Bestätigung für unbekannte Alt-Assets; wird nicht an SunoAPI weitergeleitet.",
     )
 
     @model_validator(mode="after")

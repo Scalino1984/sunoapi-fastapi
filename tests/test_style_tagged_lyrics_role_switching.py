@@ -242,6 +242,114 @@ Gerappte Zeile"""
     assert service._validate_style_tagged_lyrics(original, merged) == []
 
 
+def test_minimal_role_tag_compaction_preserves_every_required_role_signature():
+    service = GlobalAssistantService()
+    original_tag = "[Deep Male Singer and Rapper | Duet | No Rap | No Singing | No Melody]"
+
+    compacted = service._compact_local_role_directive(original_tag, minimal=True)
+
+    assert service._role_directive_signature(original_tag).issubset(service._role_directive_signature(compacted))
+    assert "Singer" in compacted
+    assert "Rapper" in compacted
+    assert "Duet" in compacted
+    assert "No Melody" in compacted
+
+
+def test_local_vocal_tag_that_mentions_chorus_is_not_dropped_as_a_second_section():
+    service = GlobalAssistantService()
+    original = """[Chorus]
+[Male vocal, powerful sustained singing with vibrato, then rhythmic rap chorus]
+Die Originalzeile bleibt erhalten."""
+
+    merged = service._merge_lyric_vocal_tags_into_lyrics(
+        original,
+        [{"section": "Chorus", "tag": "[Chorus: powerful male vocal, high energy]"}],
+        preserve_local_directives=True,
+    )
+
+    assert service._lyric_section_meta("[Male vocal, powerful sustained singing with vibrato, then rhythmic rap chorus]") is None
+    assert "[Male vocal, powerful sustained singing with vibrato, then rhythmic rap chorus]" in merged
+    assert service._validate_style_tagged_lyrics(original, merged) == []
+
+
+def test_adjacent_section_headers_are_not_consumed_by_the_preceding_replacement():
+    service = GlobalAssistantService()
+    original = """[Intro]
+
+[Verse 1]
+Die erste Verse-Zeile bleibt erhalten.
+
+[Chorus]
+Die Hook bleibt erhalten."""
+
+    merged = service._merge_lyric_vocal_tags_into_lyrics(
+        original,
+        [
+            {"section": "Intro", "tag": "[Intro: whispered male voice]"},
+            {"section": "Verse 1", "tag": "[Verse: direct rap flow]"},
+            {"section": "Chorus", "tag": "[Chorus: wide sung hook]"},
+        ],
+        preserve_local_directives=True,
+    )
+
+    assert "[Verse 1: direct rap flow]" in merged
+    assert service._validate_style_tagged_lyrics(original, merged) == []
+
+
+def test_strict_preview_does_not_prepend_tags_for_sections_missing_from_source():
+    service = GlobalAssistantService()
+    original = "Ein unstrukturierter Songtext bleibt vollständig erhalten."
+
+    merged = service._merge_lyric_vocal_tags_into_lyrics(
+        original,
+        [{"section": "Chorus", "tag": "[Chorus: wide vocal hook]"}],
+        preserve_local_directives=True,
+    )
+
+    assert merged == original
+    assert service._validate_style_tagged_lyrics(original, merged) == []
+
+
+def test_strict_preview_retargets_wrong_generated_section_without_losing_final_marker():
+    service = GlobalAssistantService()
+    original = """[Pre-Chorus]
+Pre-Chorus-Zeile
+
+[Hook, cinematic finale]
+Finale Hook-Zeile"""
+
+    merged = service._merge_lyric_vocal_tags_into_lyrics(
+        original,
+        [
+            {"section": "Pre-Chorus", "tag": "[Verse: rising vocals]"},
+            {"section": "Hook", "tag": "[Chorus: powerful climax]"},
+        ],
+        preserve_local_directives=True,
+    )
+
+    assert "[Pre-Chorus: rising vocals]" in merged
+    assert "[Final Chorus: powerful climax]" in merged
+    assert service._validate_style_tagged_lyrics(original, merged) == []
+
+
+def test_round_finale_header_keeps_its_final_marker_without_a_generated_tag():
+    service = GlobalAssistantService()
+    original = """[Verse]
+Verse-Zeile
+
+(fast finale)
+Letzte Zeile"""
+
+    merged = service._merge_lyric_vocal_tags_into_lyrics(
+        original,
+        [{"section": "Verse", "tag": "[Verse: direct flow]"}],
+        preserve_local_directives=True,
+    )
+
+    assert "[Final Outro]" in merged
+    assert service._validate_style_tagged_lyrics(original, merged) == []
+
+
 @pytest.mark.asyncio
 async def test_tagged_preview_uses_compatible_fallback_for_local_role_switches(monkeypatch, isolated_db_session):
     service = GlobalAssistantService()

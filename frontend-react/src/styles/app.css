@@ -6728,6 +6728,51 @@ a.button.disabled {
   z-index: 8;
 }
 
+/* Unabgespielte Varianten: Der Punkt ist rein visuell, aber über title und
+   aria-label auch für Tastatur-/Screenreader-Nutzung beschrieben. */
+.unplayed-indicator {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  flex: 0 0 9px;
+  border: 2px solid color-mix(in srgb, var(--panel) 78%, white 22%);
+  border-radius: 50%;
+  background: #38bdf8;
+  box-shadow: 0 0 0 1px rgba(14, 165, 233, .42), 0 0 10px rgba(56, 189, 248, .72);
+}
+
+.gallery-unplayed-indicator {
+  position: absolute;
+  top: 10px;
+  right: 43px;
+  z-index: 11;
+}
+
+.flat-unplayed-indicator {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  z-index: 3;
+}
+
+.pill-unplayed-indicator {
+  width: 7px;
+  height: 7px;
+  flex-basis: 7px;
+  border-width: 1px;
+}
+
+.variant-unplayed-indicator {
+  position: absolute;
+  top: 50%;
+  left: -3px;
+  width: 8px;
+  height: 8px;
+  flex-basis: 8px;
+  border-width: 1px;
+  transform: translateY(-50%);
+}
+
 .gallery-single-cover-wrap {
   position: relative;
 }
@@ -12656,6 +12701,7 @@ body[data-theme="light"] .header-scroll-top-button {
 }
 
 .library-variant-row-main {
+  position: relative;
   display: grid;
   grid-template-columns: 38px minmax(0, 1fr);
   align-items: center;

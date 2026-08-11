@@ -253,6 +253,23 @@ export function copyToClipboard(value) {
   return navigator.clipboard.writeText(String(value)).then(() => true).catch(() => false);
 }
 
+// Entfernt ausschließlich Regie-/Stilzusätze aus bekannten Abschnittszeilen.
+// Der Abschnitt und eine optionale Nummer bleiben erhalten, damit die Lyrics
+// weiterhin gut lesbar und strukturiert sind: [Verse 1 | male rap] → [Verse 1].
+export function cleanLyricsSectionTags(value) {
+  const sectionPattern = '(?:intro|outro|verse|pre[- ]?chorus|chorus|post[- ]?chorus|hook|refrain|bridge|interlude|breakdown|drop)';
+  const sectionLine = new RegExp(
+    `^(\\s*)\\[\\s*(${sectionPattern})(\\s+\\d+)?\\s*(?:[|/:;,—–-]\\s*[^\\]]+)?\\s*\\](\\s*)$`,
+    'i',
+  );
+  return String(value || '')
+    .split(/\r?\n/)
+    .map((line) => line.replace(sectionLine, '$1[$2$3]$4'))
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
 export function operationLabel(value, translate = null) {
   const tr = (key, fallback, values) => translateFormatter(translate, key, fallback, values);
   const normalized = String(value || '').toLowerCase();

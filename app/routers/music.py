@@ -773,7 +773,16 @@ async def add_instrumental(payload: AddInstrumentalRequest, db: Session = Depend
 
 @router.post("/add-vocals", response_model=TaskRead)
 async def add_vocals(payload: AddVocalsRequest, db: Session = Depends(get_db)):
-    return await MusicService(db).call_task_endpoint("add_vocals", payload.model_dump(by_alias=True, exclude_none=True))
+    request_payload = payload.model_dump(by_alias=True, exclude_none=True)
+    # SunoAPI cannot determine whether an arbitrary URL is a clean backing
+    # track. Require the caller to make this explicit, then keep this local
+    # guard field out of the provider payload.
+    if not request_payload.pop("sourceIsInstrumental", False):
+        raise HTTPException(
+            status_code=422,
+            detail="Add Vocals benötigt ein klares Instrumental oder einen Backing-Track. Bitte bestätige diese Quelle im Formular.",
+        )
+    return await MusicService(db).call_task_endpoint("add_vocals", request_payload)
 
 
 @router.post("/boost-style", response_model=TaskRead)

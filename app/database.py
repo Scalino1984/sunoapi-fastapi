@@ -65,20 +65,21 @@ def get_db() -> Generator:
         db.close()
 
 
-def _sqlite_add_column_if_missing(table_name: str, column_name: str, column_sql: str) -> None:
+def _sqlite_add_column_if_missing(table_name: str, column_name: str, column_sql: str) -> bool:
     if not settings.database_url.startswith("sqlite"):
-        return
+        return False
 
     inspector = inspect(engine)
     if table_name not in inspector.get_table_names():
-        return
+        return False
 
     existing_columns = {column["name"] for column in inspector.get_columns(table_name)}
     if column_name in existing_columns:
-        return
+        return False
 
     with engine.begin() as connection:
         connection.execute(text(f"ALTER TABLE {table_name} ADD COLUMN {column_sql}"))
+    return True
 
 
 def _run_lightweight_sqlite_migrations() -> None:
@@ -109,6 +110,12 @@ def _run_lightweight_sqlite_migrations() -> None:
     _sqlite_add_column_if_missing("audio_assets", "version_label", "version_label VARCHAR(120)")
     _sqlite_add_column_if_missing("audio_assets", "is_favorite", "is_favorite BOOLEAN DEFAULT 0 NOT NULL")
     _sqlite_add_column_if_missing("audio_assets", "is_final", "is_final BOOLEAN DEFAULT 0 NOT NULL")
+    played_status_added = _sqlite_add_column_if_missing("audio_assets", "has_been_played", "has_been_played BOOLEAN DEFAULT 0 NOT NULL")
+    if played_status_added:
+        # Der Punkt ist eine Neuheiten-Markierung. Alles, was vor seiner
+        # Einführung bereits in der Library vorhanden war, gilt als gesehen.
+        with engine.begin() as connection:
+            connection.execute(text("UPDATE audio_assets SET has_been_played = 1"))
     _sqlite_add_column_if_missing("audio_assets", "waveform_json", "waveform_json JSON")
     _sqlite_add_column_if_missing("audio_assets", "waveform_generated_at", "waveform_generated_at DATETIME")
     _sqlite_add_column_if_missing("audio_assets", "structure_segments_json", "structure_segments_json JSON")

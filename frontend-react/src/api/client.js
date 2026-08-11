@@ -188,6 +188,7 @@ export const api = {
     cacheMissingContent: () => apiFetch('/api/archive/content/cache-missing', { method: 'POST' }),
     materializeFromTasks: (limit = 80) => apiFetch(`/api/archive/audio/materialize-from-tasks?limit=${encodeURIComponent(limit)}`, { method: 'POST' }),
     preparePlayback: (id) => apiFetch(`/api/archive/audio/${id}/prepare-playback`, { method: 'POST', timeoutMs: 30000 }),
+    markPlayed: (id) => apiFetch(`/api/archive/audio/${id}/mark-played`, { method: 'POST', timeoutMs: 8000 }),
     streamUrl: (id) => `/api/archive/audio/${id}/stream`,
     downloadUrl: (id) => `/api/archive/audio/${id}/download`,
     waveform: (id) => apiFetch(`/api/archive/audio/${id}/waveform?points=180`),

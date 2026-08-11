@@ -636,6 +636,23 @@ function numberOrNull(value) {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+function instrumentalStatusForAsset(asset) {
+  const metadata = assetMetadata(asset);
+  const candidates = [
+    asset,
+    metadata.request_payload,
+    metadata.source_request_payload,
+    metadata.candidate
+  ];
+  for (const candidate of candidates) {
+    if (!candidate || typeof candidate !== 'object' || !Object.prototype.hasOwnProperty.call(candidate, 'instrumental')) continue;
+    const value = candidate.instrumental;
+    if (typeof value === 'boolean') return value;
+    if (typeof value === 'string' && ['true', 'false'].includes(value.trim().toLowerCase())) return value.trim().toLowerCase() === 'true';
+  }
+  return null;
+}
+
 function splitStyleTags(value) {
   return String(value || '')
     .split(/[#,;|]/)
@@ -735,7 +752,10 @@ export function MusicPage({ styles, voices = [], uploadedFiles = [], assets = []
   const [loading, setLoading] = useState(false);
   const [runtime, setRuntime] = useState(null);
   const [adminRuntimeSettings, setAdminRuntimeSettings] = useState(null);
-  const [wizard, setWizard] = useState(() => storedMusicState.wizard !== undefined ? Boolean(storedMusicState.wizard) : initialWizard);
+  // Das Expertenformular ist der verlässliche Standard für die Musikseite.
+  // Der Wizard wird nur über eine ausdrückliche Navigation angefordert; eine
+  // alte lokale Ansichtsauswahl darf den nächsten Einstieg nicht verändern.
+  const [wizard, setWizard] = useState(() => Boolean(initialWizard));
   const [step, setStep] = useState(() => Number.isFinite(Number(storedMusicState.step)) ? Number(storedMusicState.step) : 0);
   const [startMode, setStartMode] = useState(() => storedMusicState.startMode || 'lyrics');
   const [styleAmount, setStyleAmount] = useState(() => clampStyleAmount(storedMusicState.styleAmount || 3));
@@ -772,6 +792,7 @@ export function MusicPage({ styles, voices = [], uploadedFiles = [], assets = []
   const [styleWeight, setStyleWeight] = useState(() => storedMusicState.styleWeight || '');
   const [weirdnessConstraint, setWeirdnessConstraint] = useState(() => storedMusicState.weirdnessConstraint || '');
   const [audioWeight, setAudioWeight] = useState(() => storedMusicState.audioWeight || '');
+  const [addVocalsInstrumentalConfirmed, setAddVocalsInstrumentalConfirmed] = useState(() => Boolean(storedMusicState.addVocalsInstrumentalConfirmed));
   const [soundLoop, setSoundLoop] = useState(() => Boolean(storedMusicState.soundLoop));
   const [soundTempo, setSoundTempo] = useState(() => storedMusicState.soundTempo || '');
   const [soundKey, setSoundKey] = useState(() => storedMusicState.soundKey || '');
@@ -834,6 +855,7 @@ export function MusicPage({ styles, voices = [], uploadedFiles = [], assets = []
       styleWeight,
       weirdnessConstraint,
       audioWeight,
+      addVocalsInstrumentalConfirmed,
       soundLoop,
       soundTempo,
       soundKey,
@@ -860,7 +882,7 @@ export function MusicPage({ styles, voices = [], uploadedFiles = [], assets = []
     styleAmount, styleVariantStrategy, styleFeatureOptions, styleExtraPrompt, styleBpmMin, styleBpmMax, styleSuggestions, styleSuggestionRuntime, selectedVoiceId,
     generationProvider, operationMode, selectedAssetId, selectedUploadId, sunoImportId,
     sunoImportCacheAudio, sunoImportCacheCover, sunoImportOverwrite, audioUrl, continueAt, autoContinueAt,
-    negativeTags, operationTags, vocalGender, styleWeight, weirdnessConstraint, audioWeight,
+    negativeTags, operationTags, vocalGender, styleWeight, weirdnessConstraint, audioWeight, addVocalsInstrumentalConfirmed,
     soundLoop, soundTempo, soundKey, grabLyrics, stemSeparationType, taskIdInput,
     audioIdInput, replaceStart, replaceEnd, replaceFullLyrics, personaName, personaDescription,
     vocalStart, vocalEnd, mashupUrls, videoAuthor, videoDomain, safeCheckResult,
@@ -875,18 +897,26 @@ export function MusicPage({ styles, voices = [], uploadedFiles = [], assets = []
       setStyle(draft.style);
       setOperationTags(draft.style);
     }
+    if (draft.model && models.includes(String(draft.model))) setModel(String(draft.model));
+    if (draft.operationMode && operationModes.some(([key]) => key === draft.operationMode)) setOperationMode(draft.operationMode);
+    if (draft.selectedAssetId !== undefined || draft.assetId !== undefined) setSelectedAssetId(String(draft.selectedAssetId ?? draft.assetId ?? ''));
+    if (draft.audioUrl !== undefined) setAudioUrl(String(draft.audioUrl || ''));
+    if (draft.operationTags !== undefined) setOperationTags(String(draft.operationTags || ''));
+    if (draft.taskIdInput !== undefined || draft.taskId !== undefined) setTaskIdInput(String(draft.taskIdInput ?? draft.taskId ?? ''));
+    if (draft.audioIdInput !== undefined || draft.audioId !== undefined) setAudioIdInput(String(draft.audioIdInput ?? draft.audioId ?? ''));
     if (draft.negative_tags !== undefined || draft.negativeTags !== undefined) setNegativeTags(String(draft.negative_tags ?? draft.negativeTags ?? ''));
     if (draft.vocal_gender !== undefined || draft.vocalGender !== undefined) setVocalGender(String(draft.vocal_gender ?? draft.vocalGender ?? ''));
     if (draft.styleWeight !== undefined || draft.style_weight !== undefined) setStyleWeight(String(draft.styleWeight ?? draft.style_weight ?? ''));
     if (draft.weirdnessConstraint !== undefined || draft.weirdness_constraint !== undefined || draft.weirdness !== undefined) setWeirdnessConstraint(String(draft.weirdnessConstraint ?? draft.weirdness_constraint ?? draft.weirdness ?? ''));
     if (draft.audioWeight !== undefined || draft.audio_weight !== undefined) setAudioWeight(String(draft.audioWeight ?? draft.audio_weight ?? ''));
+    if (draft.addVocalsInstrumentalConfirmed !== undefined || draft.sourceIsInstrumental !== undefined) setAddVocalsInstrumentalConfirmed(Boolean(draft.addVocalsInstrumentalConfirmed ?? draft.sourceIsInstrumental));
     if (draft.provider === 'opencli' || draft.generationProvider === 'opencli') setGenerationProvider('opencli');
     setCustomMode(draft.customMode !== undefined ? Boolean(draft.customMode) : true);
     setInstrumental(isInstrumentalDraft);
     setStartMode(isInstrumentalDraft ? 'instrumental' : 'lyrics');
     setSelectedVoiceId(isInstrumentalDraft ? '' : selectedVoiceId);
-    setWizard(true);
-    setStep(draft.safeCheckRequested ? 4 : 1);
+    setWizard(!draft.forceAdvanced);
+    setStep(draft.safeCheckRequested ? 4 : draft.forceAdvanced ? 0 : 1);
     if (draft.safeCheckRequested) setSafeCheckRequestedPending(true);
   }, [draft]);
   useEffect(() => {
@@ -987,6 +1017,9 @@ export function MusicPage({ styles, voices = [], uploadedFiles = [], assets = []
   const selectedVoice = voices.find((item) => String(item.id) === String(selectedVoiceId));
   const selectedAsset = assets.find((item) => String(item.id) === String(selectedAssetId));
   const selectedUpload = uploadedFiles.find((item) => String(item.id) === String(selectedUploadId));
+  const addVocalsSourceStatus = !audioUrl.trim() && !selectedUpload?.uploaded_url && selectedAsset
+    ? instrumentalStatusForAsset(selectedAsset)
+    : null;
   const playableAssets = useMemo(() => (assets || []).filter((item) => item?.id && String(item.status || '').toLowerCase() !== 'failed'), [assets]);
   const uploadUrlOptions = useMemo(() => (uploadedFiles || []).filter((item) => item?.uploaded_url), [uploadedFiles]);
   const openCliRuntime = runtime?.opencli || {};
@@ -1125,7 +1158,10 @@ export function MusicPage({ styles, voices = [], uploadedFiles = [], assets = []
     const nextStyle = String(suggestion?.style || '').trim();
     if (!nextStyle) return;
     const includeNegative = options.includeNegative !== false;
-    const negativeMode = options.negativeMode === 'replace' ? 'replace' : 'append';
+    // Applying a style is an import operation: its negative tags replace the
+    // current set. The dedicated "Nur Negative anhängen" action is the only
+    // path that intentionally merges tags.
+    const negativeMode = options.negativeMode === 'append' ? 'append' : 'replace';
     const nextNegative = suggestionNegativeTags(suggestion);
     setStyle(nextStyle);
     setOperationTags(nextStyle);
@@ -1148,7 +1184,7 @@ export function MusicPage({ styles, voices = [], uploadedFiles = [], assets = []
     notify?.(t('music.messages.songTitleApplied', 'Songtitel „{{title}}“ übernommen.', { title: nextTitle }), 'success');
   }
 
-  function applyAiStyleWithNegative(suggestion, mode = 'append') {
+  function applyAiStyleWithNegative(suggestion, mode = 'replace') {
     applyAiStyle(suggestion, { includeNegative: true, negativeMode: mode });
   }
 
@@ -1345,7 +1381,7 @@ export function MusicPage({ styles, voices = [], uploadedFiles = [], assets = []
 
   function applyStyleDraft(draft, includeNegative = true) {
     if (!draft?.style) return;
-    applyAiStyle(draft, { includeNegative });
+    applyAiStyle(draft, { includeNegative, negativeMode: 'replace' });
     closeStyleConsultation();
   }
 
@@ -1428,6 +1464,7 @@ export function MusicPage({ styles, voices = [], uploadedFiles = [], assets = []
   }
 
   function clearMusicForm() {
+    setOperationMode('generate');
     setTitle('');
     setPrompt('');
     setStyle('');
@@ -1855,12 +1892,18 @@ export function MusicPage({ styles, voices = [], uploadedFiles = [], assets = []
         audioWeight: numberOrNull(audioWeight),
         model: addModels.includes(model) ? model : 'V4_5PLUS'
       };
-      if (assetId && !directAudioUrl) return startTask(() => api.archive.addInstrumental(assetId, payload), t('music.messages.addInstrumentalStartedForAsset', 'Add Instrumental für „{{title}}“ wurde gestartet.', { title: assetTitle(selectedAsset, t) }));
+      if (assetId && !directAudioUrl && !hasUploadedUrl) return startTask(() => api.archive.addInstrumental(assetId, payload), t('music.messages.addInstrumentalStartedForAsset', 'Add Instrumental für „{{title}}“ wurde gestartet.', { title: assetTitle(selectedAsset, t) }));
       return startTask(() => api.music.addInstrumental(payload), t('music.messages.addInstrumentalStarted', 'Add Instrumental wurde gestartet.'));
     }
 
     if (operationMode === 'add-vocals') {
       if (!prompt.trim()) return notify?.(t('music.messages.addVocalsNeedsPrompt', 'Für Add Voice/Vocals ist ein Vocal-/Lyrics-Prompt erforderlich.'), 'error');
+      if (addVocalsSourceStatus === false) {
+        return notify?.(t('music.messages.addVocalsNeedsInstrumental', 'Add Voice/Vocals benötigt ein Instrumental oder einen Backing-Track. Das ausgewählte Audio enthält bereits Vocals.'), 'error');
+      }
+      if (addVocalsSourceStatus === null && !addVocalsInstrumentalConfirmed) {
+        return notify?.(t('music.messages.confirmInstrumentalSource', 'Bitte bestätige, dass die gewählte Quelle ein Instrumental ohne Vocals ist.'), 'error');
+      }
       const payload = {
         uploadUrl: selectedAudioUrl(),
         prompt,
@@ -1871,9 +1914,10 @@ export function MusicPage({ styles, voices = [], uploadedFiles = [], assets = []
         styleWeight: numberOrNull(styleWeight),
         weirdnessConstraint: numberOrNull(weirdnessConstraint),
         audioWeight: numberOrNull(audioWeight),
-        model: addModels.includes(model) ? model : 'V4_5PLUS'
+        model: addModels.includes(model) ? model : 'V4_5PLUS',
+        sourceIsInstrumental: addVocalsSourceStatus === true || addVocalsInstrumentalConfirmed
       };
-      if (assetId && !directAudioUrl) return startTask(() => api.archive.addVocals(assetId, payload), t('music.messages.addVocalsStartedForAsset', 'Add Voice/Vocals für „{{title}}“ wurde gestartet.', { title: assetTitle(selectedAsset, t) }));
+      if (assetId && !directAudioUrl && !hasUploadedUrl) return startTask(() => api.archive.addVocals(assetId, payload), t('music.messages.addVocalsStartedForAsset', 'Add Voice/Vocals für „{{title}}“ wurde gestartet.', { title: assetTitle(selectedAsset, t) }));
       return startTask(() => api.music.addVocals(payload), t('music.messages.addVocalsStarted', 'Add Voice/Vocals wurde gestartet.'));
     }
   }
@@ -1946,6 +1990,22 @@ export function MusicPage({ styles, voices = [], uploadedFiles = [], assets = []
       )}
       {selectedAsset && localOnlyAssetHint(selectedAsset, t) && (
         <p className="wide warning-text">{localOnlyAssetHint(selectedAsset, t)}</p>
+      )}
+      {operationMode === 'add-vocals' && (
+        <section className={`wide nested-panel soft-panel ${addVocalsSourceStatus === false ? 'warning-text' : ''}`}>
+          <p className="eyebrow">Qualitäts-Preflight</p>
+          <h3>Instrumentalquelle erforderlich</h3>
+          {addVocalsSourceStatus === true ? (
+            <p className="muted">Die ausgewählte Quelle ist als Instrumental gespeichert. Add Vocals kann sicher gestartet werden.</p>
+          ) : addVocalsSourceStatus === false ? (
+            <p>Dieses Asset wurde mit Vocals erzeugt. Für Add Vocals zuerst einen Instrumental-/Backing-Track erstellen oder die Vocal- und Instrumental-Stems trennen.</p>
+          ) : (
+            <>
+              <p className="muted">SunoAPI erwartet hier ein klares Instrumental oder einen Backing-Track. Bereits vorhandene Vocals führen häufig zu unbrauchbarem Overpainting.</p>
+              <label className="check"><input type="checkbox" checked={addVocalsInstrumentalConfirmed} onChange={(event) => setAddVocalsInstrumentalConfirmed(event.target.checked)} /> Ich bestätige: Diese Audioquelle enthält keine Vocals.</label>
+            </>
+          )}
+        </section>
       )}
     </>
   ) : null;
@@ -2255,7 +2315,7 @@ export function MusicPage({ styles, voices = [], uploadedFiles = [], assets = []
                   </section>
                 )}
                 <div className="button-row wrap">
-                  <button type="button" className="primary" onClick={() => applyAiStyle(suggestion)}>{t('music.actions.applyMasterStyle', 'Master Style übernehmen')}</button>
+                  <button type="button" className="primary" onClick={() => applyAiStyle(suggestion, { negativeMode: 'replace' })}>{t('music.actions.applyMasterStyle', 'Master Style übernehmen')}</button>
                   {lyricTags.length > 0 && <button type="button" onClick={() => openLyricTagPreview(suggestion)}>{t('music.actions.viewLyricTags', 'Songtext-Tags ansehen')}</button>}
                   {negative && <button type="button" onClick={() => applyNegativeTagsOnly(suggestion, 'append')}>{t('music.actions.appendNegativeOnly', 'Nur Negative anhängen')}</button>}
                   <button type="button" onClick={() => openStyleConsultation(suggestion)}>{t('music.actions.refineWithAi', 'Mit KI verfeinern')}</button>

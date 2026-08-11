@@ -121,6 +121,53 @@ def _assert_sunoapi_followup_allowed(asset: AudioAsset, action: str) -> None:
         raise HTTPException(status_code=400, detail=reason)
 
 
+def _asset_instrumental_status(asset: AudioAsset) -> bool | None:
+    """Return the known source type without guessing from titles or prompts.
+
+    Add Vocals is only reliable on an instrumental/backing track.  Assets created
+    by this app retain the original request in metadata; an explicit false value
+    is therefore safe to block.  Older/imported assets stay ``None`` and need a
+    conscious confirmation instead of a heuristic that could wrongly reject a
+    valid stem.
+    """
+    metadata = asset.metadata_json if isinstance(asset.metadata_json, dict) else {}
+    candidates = [
+        metadata.get("request_payload"),
+        metadata.get("source_request_payload"),
+        metadata.get("candidate"),
+    ]
+    for candidate in candidates:
+        if not isinstance(candidate, dict) or "instrumental" not in candidate:
+            continue
+        value = candidate.get("instrumental")
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str) and value.strip().lower() in {"true", "false"}:
+            return value.strip().lower() == "true"
+    return None
+
+
+def _assert_add_vocals_source_is_safe(asset: AudioAsset, *, source_is_instrumental: bool) -> None:
+    status = _asset_instrumental_status(asset)
+    if status is False:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Add Vocals benötigt ein Instrumental oder einen Backing-Track. "
+                "Das ausgewählte Asset wurde mit Vocals erzeugt. Erstelle zuerst "
+                "einen Instrumental-/Backing-Track oder nutze Stem Separation."
+            ),
+        )
+    if status is None and not source_is_instrumental:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Für dieses Asset ist nicht gespeichert, ob es instrumental ist. "
+                "Bestätige im Formular, dass die Quelle keine Vocals enthält."
+            ),
+        )
+
+
 def _safe_filename_stem(value: str | None, fallback: str) -> str:
     base = str(value or fallback).strip() or fallback
     base = re.sub(r"[^A-Za-z0-9ÄÖÜäöüß._ -]+", "_", base)
@@ -535,6 +582,23 @@ def get_audio_asset(asset_id: int, db: Session = Depends(get_db)):
     return _get_audio_asset_or_404(asset_id, db)
 
 
+@router.post("/audio/{asset_id}/mark-played", response_model=dict)
+def mark_audio_asset_played(asset_id: int, db: Session = Depends(get_db)):
+    """Speichert den erfolgreichen ersten Playback-Start einer Variante.
+
+    Der Browser ruft den Endpoint erst auf, nachdem das HTML-Audioelement
+    tatsächlich spielt. Bereits markierte Assets verursachen keinen weiteren
+    Schreibvorgang, damit wiederholtes Starten nicht die Library-Datenbank
+    unnötig belastet.
+    """
+    asset = _get_audio_asset_or_404(asset_id, db)
+    if not asset.has_been_played:
+        asset.has_been_played = True
+        db.add(asset)
+        db.commit()
+    return {"ok": True, "audio_asset_id": asset.id, "has_been_played": True}
+
+
 @router.get("/audio/{asset_id}/timestamped-lyrics", response_model=dict)
 def get_saved_timestamped_lyrics(asset_id: int, db: Session = Depends(get_db)):
     asset = _get_audio_asset_or_404(asset_id, db)
@@ -801,6 +865,8 @@ async def add_vocals_from_audio_asset(asset_id: int, payload: ArchiveAudioAddVoc
     asset = _get_audio_asset_or_404(asset_id, db)
     _assert_sunoapi_followup_allowed(asset, "add_vocals")
     request_payload = _payload_without_empty_values(payload.model_dump(by_alias=True, exclude_none=True))
+    source_is_instrumental = bool(request_payload.pop("sourceIsInstrumental", False))
+    _assert_add_vocals_source_is_safe(asset, source_is_instrumental=source_is_instrumental)
     request_payload["uploadUrl"] = await _get_reusable_upload_url(asset, db)
     try:
         return await MusicService(db).call_task_endpoint("add_vocals", request_payload)
