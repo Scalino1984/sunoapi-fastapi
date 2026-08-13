@@ -64,6 +64,10 @@ SUPPORTED_BACKENDS = {"voxtral", "openai_whisper_api", "whisperx", "groq"}
 SUPPORTED_LANGUAGES = {"auto", "de", "en"}
 STRUCTURE_SEGMENT_LEAD_IN_SECONDS = 2.0
 SRT_DEBUG_LOG_LIMIT = 120
+# Die normale SRT soll gut lesbar bleiben, ohne die bewusst kompakte Half-SRT
+# (22 Zeichen) zu imitieren. Eine einzelne Lyrics-/ASR-Quelle kann ansonsten
+# einen ganzen Vers oder Absatz als nur eine Untertitelzeile liefern.
+STANDARD_SRT_MAX_CHARS = 64
 
 logger = logging.getLogger("songstudio.srt")
 
@@ -3211,24 +3215,118 @@ def _script_wrap_groups(words: list[str], max_chars: int) -> list[list[int]]:
     return _script_rebalance_short_wrap_groups(words, groups, budget)
 
 
+def _split_srt_segments_for_readability(
+    segments: list[dict[str, Any]],
+    *,
+    max_chars: int = STANDARD_SRT_MAX_CHARS,
+) -> list[dict[str, Any]]:
+    """Teilt automatisch erzeugte SRT-Segmente in lesbare Untertitelzeilen.
+
+    Lyrics-Alignment arbeitet absichtlich auf der vollständigen Lyrics-Zeile,
+    damit Reihenfolge und Abschnittszuordnung stabil bleiben. Die gespeicherte
+    Standard-SRT darf diese interne Zeilengrenze jedoch nicht blind übernehmen:
+    insbesondere importierte Lyrics oder ASR-Segmente können ganze Absätze
+    enthalten. Die vorhandene Segmentzeit wird proportional zur Textlänge auf
+    die Teilzeilen verteilt; Metadaten wie ``source_line`` bleiben erhalten.
+    """
+    rows: list[dict[str, Any]] = []
+    budget = max(8, int(max_chars or STANDARD_SRT_MAX_CHARS))
+    for segment in segments or []:
+        if not isinstance(segment, dict):
+            continue
+        text = " ".join(str(segment.get("text") or "").split())
+        words = text.split()
+        groups = _script_wrap_groups(words, budget) if words else []
+        if len(groups) <= 1:
+            rows.append({**segment, "text": text})
+            continue
+
+        start = _seconds(segment.get("start"), 0.0)
+        end = max(start + 0.05, _seconds(segment.get("end"), start + 0.05))
+        parts = [" ".join(words[position] for position in group).strip() for group in groups]
+        weights = [max(1, len(part)) for part in parts]
+        total_weight = sum(weights) or 1
+        duration = end - start
+        cursor = start
+        for position, (part, weight) in enumerate(zip(parts, weights)):
+            part_end = end if position == len(parts) - 1 else cursor + duration * (weight / total_weight)
+            rows.append({
+                **segment,
+                "start": round(cursor, 3),
+                "end": round(max(part_end, cursor + 0.05), 3),
+                "text": part,
+            })
+            cursor = part_end
+    for index, segment in enumerate(rows, start=1):
+        segment["index"] = index
+    return rows
+
+
+def _script_timed_wrap_groups(
+    line: LyricLine,
+    *,
+    max_chars: int,
+    min_dur: float = 0.05,
+) -> list[tuple[str, float, float]]:
+    """Gruppiert eine Lyrics-Zeile ausschließlich anhand ihrer Wortzeiten.
+
+    Die Lesbarkeitsgrenze bestimmt nur, *welche* Wörter gemeinsam angezeigt
+    werden. Start und Ende stammen immer vom ersten bzw. letzten tatsächlich
+    ausgerichteten Wort – niemals aus Zeichen-, Silben- oder BPM-Proportionen.
+    """
+    if not line.words:
+        return []
+    starts = line.wstart or []
+    ends = line.wend or []
+    if len(starts) != len(line.words) or len(ends) != len(line.words):
+        return []
+
+    groups: list[tuple[str, float, float]] = []
+    for group in _script_wrap_groups(line.words, max_chars):
+        text = " ".join(line.words[pos] for pos in group).strip()
+        if not text:
+            continue
+        start = float(starts[group[0]])
+        end = float(ends[group[-1]])
+        groups.append((text, start, end if end > start else start + min_dur))
+    return groups
+
+
+def _lines_to_timed_srt_segments(
+    lines: list[LyricLine],
+    *,
+    alignment_method: str,
+    max_chars: int = STANDARD_SRT_MAX_CHARS,
+) -> list[dict[str, Any]]:
+    """Erzeugt Standard-SRT-Cues aus echten Lyrics-Wortgrenzen."""
+    segments: list[dict[str, Any]] = []
+    for line in lines:
+        groups = _script_timed_wrap_groups(line, max_chars=max_chars)
+        if not groups:
+            # Defensiver Fallback für nicht ausrichtbare Sonderzeichen. Dieser
+            # Pfad soll nur bei unvollständigen Providerdaten auftreten.
+            start = float(line.start or 0.0)
+            end = max(start + 0.05, float(line.end or start + 0.05))
+            groups = [(line.display, start, end)]
+        for text, start, end in groups:
+            segments.append({
+                "index": len(segments) + 1,
+                "source_line": line.index + 1,
+                "start": round(start, 3),
+                "end": round(end, 3),
+                "text": text,
+                "alignment_confidence": 1.0 if line.matched else 0.0,
+                "matched": bool(line.matched),
+                "alignment_method": alignment_method,
+            })
+    return segments
+
+
 def _script_to_portrait_srt(lines: list[LyricLine], max_chars: int = 22, min_dur: float = 0.6) -> str:
     blocks: list[str] = []
     index = 1
     for line in lines:
-        if not line.words:
-            continue
-        starts = line.wstart or []
-        ends = line.wend or []
-        if len(starts) != len(line.words) or len(ends) != len(line.words):
-            continue
-        for group in _script_wrap_groups(line.words, max_chars):
-            text = " ".join(line.words[pos] for pos in group).strip()
-            if not text:
-                continue
-            start = float(starts[group[0]])
-            end = float(ends[group[-1]])
-            if end <= start:
-                end = start + min_dur
+        for text, start, end in _script_timed_wrap_groups(line, max_chars=max_chars, min_dur=min_dur):
             blocks.append(f"{index}\n{_srt_timestamp(start)} --> {_srt_timestamp(end)}\n{text}")
             index += 1
     return ("\n\n".join(blocks).strip() + "\n") if blocks else ""
@@ -3289,7 +3387,7 @@ def segments_to_half_srt(segments: list[dict[str, Any]], max_chars: int = 22, mi
         )
         lines.append(line)
     _script_compute_word_times(lines)
-    return _gapless_srt_text(_script_to_portrait_srt(lines, max_chars=max_chars, min_dur=min_dur))
+    return _script_to_portrait_srt(lines, max_chars=max_chars, min_dur=min_dur)
 
 
 def _clean_text(value: Any) -> str:
@@ -3705,6 +3803,11 @@ def _line_entry_for_srt_segment(
             return 0.98
         return _similarity_score(segment_tokens, candidate_text)
 
+    def is_contained_in(candidate_tokens: list[str]) -> bool:
+        """Erkennt einen umgebrochenen Teil derselben Lyrics-Quellzeile."""
+        candidate_text = " ".join(candidate_tokens)
+        return bool(segment_tokens and f" {segment_tokens} " in f" {candidate_text} ")
+
     def next_cursor_for(idx: int, candidate_tokens: list[str]) -> int:
         if prefix_repeat(candidate_tokens):
             return max(cursor, idx)
@@ -3712,7 +3815,7 @@ def _line_entry_for_srt_segment(
 
     if 0 <= index < len(source_lines):
         candidate_tokens = line_token_list(index)
-        if not segment_tokens or match_score(candidate_tokens) >= 0.45:
+        if not segment_tokens or is_contained_in(candidate_tokens) or match_score(candidate_tokens) >= 0.45:
             return source_lines[index], next_cursor_for(index, candidate_tokens)
 
     if not segment_tokens:
@@ -4298,6 +4401,117 @@ def resolve_lyrics_for_audio_asset(db: Session, audio_asset_id: int, manual_over
     raise HTTPException(status_code=422, detail="Für diesen Song wurde kein verwertbarer Songtext gefunden.")
 
 
+def _lyrics_text_from_transcription_segments(segments: list[dict[str, Any]]) -> str:
+    """Erzeugt einen wiederverwendbaren Songtext aus den finalen SRT-Zeilen."""
+    lines = [
+        " ".join(str(segment.get("text") or "").split())
+        for segment in segments or []
+        if isinstance(segment, dict) and str(segment.get("text") or "").strip()
+    ]
+    return "\n".join(lines).strip()
+
+
+def _persist_transcription_only_lyrics(
+    db: Session,
+    asset: AudioAsset,
+    segments: list[dict[str, Any]],
+    *,
+    backend: str,
+    language: str,
+) -> dict[str, Any]:
+    """Speichert ASR-Songtext für Importe ohne vorhandene Lyrics.
+
+    Der ASR-only-Fallback hat bisher ausschließlich eine SRT abgelegt. Dadurch
+    blieb ein importierter Song trotz erfolgreicher Transkription ohne sichtbaren
+    Songtext und ein späterer SRT-Lauf hatte weiterhin keine Source of Truth.
+    Die Rückschreibung nutzt dieselben Song- und Asset-Felder wie generierte
+    Musik. Vorhandene, manuell gepflegte oder Provider-Lyrics werden nie ersetzt.
+    """
+    recovered_lyrics = _lyrics_text_from_transcription_segments(segments)
+    if not _usable_lyrics_candidate(recovered_lyrics):
+        return {
+            "saved": False,
+            "reason": "transcription_not_lyrics",
+            "chars": len(recovered_lyrics),
+        }
+
+    metadata = dict(asset.metadata_json or {}) if isinstance(asset.metadata_json, dict) else {}
+    candidate = dict(metadata.get("candidate") or {}) if isinstance(metadata.get("candidate"), dict) else {}
+    request_payload = (
+        dict(metadata.get("request_payload") or {})
+        if isinstance(metadata.get("request_payload"), dict)
+        else {}
+    )
+    song = (
+        db.query(Song).filter(Song.id == asset.song_id, Song.is_deleted.is_(False)).first()
+        if asset.song_id
+        else None
+    )
+
+    existing_lyrics = _first_usable_lyrics(
+        candidate.get("lyrics"),
+        candidate.get("text"),
+        request_payload.get("lyrics"),
+        getattr(song, "lyrics", None) if song else None,
+        authoritative=True,
+    )
+    if existing_lyrics or bool((metadata.get("lyrics_manual_override") or {}).get("enabled")):
+        return {"saved": False, "reason": "lyrics_already_present", "chars": len(existing_lyrics)}
+
+    # Vorhandene freie Prompt-/Style-Beschreibungen bleiben nachvollziehbar,
+    # während die Standardfelder nun wie bei einer Musikgenerierung den
+    # tatsächlich erkannten Songtext enthalten.
+    original_prompts = {
+        "candidate": candidate.get("prompt"),
+        "request_payload": request_payload.get("prompt"),
+        "metadata": metadata.get("prompt"),
+        "song": getattr(song, "prompt", None) if song else None,
+    }
+    preserved_prompts = {
+        key: value
+        for key, value in original_prompts.items()
+        if _clean_text(value) and _clean_text(value) != recovered_lyrics
+    }
+    if preserved_prompts:
+        metadata["pre_asr_transcription_prompts"] = preserved_prompts
+
+    candidate.update({"lyrics": recovered_lyrics, "text": recovered_lyrics, "prompt": recovered_lyrics})
+    request_payload.update({"lyrics": recovered_lyrics, "text": recovered_lyrics, "prompt": recovered_lyrics})
+    metadata.update({
+        "candidate": candidate,
+        "request_payload": request_payload,
+        "lyrics": recovered_lyrics,
+        "prompt": recovered_lyrics,
+        "lyrics_transcription": {
+            "source": "srt_asr_transcription",
+            "backend": backend,
+            "language": language,
+            "created_at": utc_now_naive().isoformat(),
+            "chars": len(recovered_lyrics),
+            "segments": len(segments or []),
+        },
+    })
+    asset.metadata_json = metadata
+    db.add(asset)
+
+    if song is None:
+        song = Song(
+            title=_asset_title(asset, f"AudioAsset {asset.id}"),
+            model=str(candidate.get("model") or "asr_transcription"),
+            task_id=asset.suno_task_id,
+            project_id=asset.project_id,
+        )
+        db.add(song)
+        db.flush()
+        asset.song_id = song.id
+        db.add(asset)
+    song.prompt = recovered_lyrics
+    song.lyrics = recovered_lyrics
+    song.metadata_json = metadata
+    db.add(song)
+    return {"saved": True, "chars": len(recovered_lyrics), "segments": len(segments or [])}
+
+
 def has_visible_lyrics_for_alignment(lyrics: str) -> bool:
     """True nur wenn der Text sichtbare Lyrics-Zeilen fuer das Standard-Alignment enthaelt."""
     return bool(_script_parse_lyrics_text(lyrics, skip_prefixes=("#", "/", ";"), skip_parens=False))
@@ -4337,9 +4551,9 @@ def load_transcription_admin_settings(db: Session) -> dict[str, Any]:
         "srt_generate_vocal_stems_before_transcription": bool(value.get("srt_generate_vocal_stems_before_transcription", False)),
         "srt_ai_cleanup_enabled": bool(value.get("srt_ai_cleanup_enabled", True)),
         "srt_alignment_engine": (
-            str(value.get("srt_alignment_engine") or "heuristic").strip().lower()
-            if str(value.get("srt_alignment_engine") or "heuristic").strip().lower() in {"heuristic", "forced_alignment"}
-            else "heuristic"
+            str(value.get("srt_alignment_engine") or "forced_alignment").strip().lower()
+            if str(value.get("srt_alignment_engine") or "forced_alignment").strip().lower() in {"heuristic", "forced_alignment"}
+            else "forced_alignment"
         ),
         "srt_quality_gate_enabled": bool(value.get("srt_quality_gate_enabled", False)),
         "srt_quality_gate_min_score": max(0.3, min(0.95, float(value.get("srt_quality_gate_min_score", 0.7) or 0.7))),
@@ -5573,34 +5787,25 @@ def _finalize_alignment_bundle(
     alignment_method: str,
     extra: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    segments: list[dict[str, Any]] = []
-    for idx, line in enumerate(lines, start=1):
-        start_value = round(float(line.start or 0.0), 3)
-        end_value = round(float(line.end or start_value + 0.6), 3)
-        segments.append({
-            "index": idx,
-            "source_line": line.index + 1,
-            "start": start_value,
-            "end": max(end_value, start_value + 0.05),
-            "text": line.display,
-            "alignment_confidence": 1.0 if line.matched else 0.0,
-            "matched": bool(line.matched),
-            "alignment_method": alignment_method,
-        })
+    # Die Standard-SRT wird aus den ausgerichteten Wortgrenzen gebaut. Früher
+    # wurde eine lange Zeile nach Zeichenlänge aufgeteilt und anschließend bis
+    # zum Beginn der Folgezeile verlängert; beides verschiebt Cue-Ranges bei
+    # Rap, Pausen und lang gezogenen Silben vom tatsächlich gesungenen Audio.
+    segments = _lines_to_timed_srt_segments(
+        lines,
+        alignment_method=alignment_method,
+        max_chars=STANDARD_SRT_MAX_CHARS,
+    )
 
     if report:
         for segment in segments:
             segment.setdefault("alignment_report", report)
 
-    segments, gapless_changed = _extend_srt_segments_to_next_start(segments)
-    if gapless_changed:
-        report.append(f"INFO: Karaoke-SRT: {gapless_changed} Segment-Endzeiten bis zur naechsten Zeile verlaengert.")
-    segments, _ = _extend_srt_segments_to_next_start(segments)
     # Quality VOR der Normalisierung berechnen: externe Normalizer duerfen
     # Zusatzfelder wie `matched` verwerfen, ohne den Score zu zerstoeren.
     alignment_quality = compute_alignment_quality({"segments": segments, "alignment_report": report})
     normalized_segments = validate_and_normalize_srt_segments(segments)
-    half_srt_text = _gapless_srt_text(_script_to_portrait_srt(lines, max_chars=22, min_dur=0.6))
+    half_srt_text = _script_to_portrait_srt(lines, max_chars=22, min_dur=0.05)
     bundle = {
         "segments": normalized_segments,
         "half_srt_text": half_srt_text,
@@ -5774,7 +5979,11 @@ def _transcription_only_segments_from_asr_segments(asr_segments: list[dict[str, 
     return segments
 
 
-def _transcription_only_segments_from_words(words: list[WordTiming]) -> list[dict[str, Any]]:
+def _transcription_only_segments_from_words(
+    words: list[WordTiming],
+    *,
+    max_chars: int = STANDARD_SRT_MAX_CHARS,
+) -> list[dict[str, Any]]:
     valid_words = [
         word
         for word in sorted(words or [], key=lambda item: (item.start, item.end))
@@ -5783,7 +5992,6 @@ def _transcription_only_segments_from_words(words: list[WordTiming]) -> list[dic
     if not valid_words:
         return []
 
-    max_chars = 76
     max_duration = 5.5
     gap_threshold = 0.85
     current_words: list[WordTiming] = []
@@ -5905,11 +6113,18 @@ def _sanitize_transcription_only_segments(
 
 def build_transcription_only_srt_bundle(asr: AsrResult, duration_seconds: float) -> dict[str, Any]:
     """Fallback fuer Audios ohne sichtbare Lyrics; Standard bleibt Lyrics-Alignment."""
-    segments = _transcription_only_segments_from_asr_segments(asr.segments or [])
-    source = "asr_segments"
-    if not segments:
-        segments = _transcription_only_segments_from_words(asr.words or [])
-        source = "word_timestamps"
+    # Echte Wortzeiten sind die einzige belastbare Zeitquelle für schnelle
+    # Raps, Pausen und gedehnte Vocals. Provider-Segmente sind nur Fallback,
+    # weil sie häufig mehrere Wörter oder ganze Sätze zusammenfassen.
+    word_segments = _transcription_only_segments_from_words(asr.words or [])
+    word_source = str(asr.raw.get("songstudio_word_source") or "") if isinstance(asr.raw, dict) else ""
+    # ``segment_text_distributed`` sind keine gemessenen Wortzeiten: Sie
+    # wurden nur gleichmässig aus der Segmentdauer hergeleitet. Solche Werte
+    # dürfen niemals die realen Provider-Segmentgrenzen überstimmen, sonst
+    # entsteht wieder derselbe Tempo-Drift bei Rap und lang gezogenen Vocals.
+    has_measured_word_timestamps = bool(word_segments) and word_source != "segment_text_distributed"
+    segments = word_segments if has_measured_word_timestamps else _transcription_only_segments_from_asr_segments(asr.segments or [])
+    source = "word_timestamps" if has_measured_word_timestamps else "asr_segments"
     if not segments and str(asr.text or "").strip():
         end = max(float(duration_seconds or 0.0), 0.6)
         segments = [{
@@ -5923,16 +6138,32 @@ def build_transcription_only_srt_bundle(asr: AsrResult, duration_seconds: float)
         }]
         source = "full_text"
 
-    segments = _sanitize_transcription_only_segments(segments)
-    segments, _ = _extend_srt_segments_to_next_start(segments)
-    alignment_quality = compute_alignment_quality({"segments": segments, "alignment_report": []})
+    if source != "word_timestamps":
+        segments = _sanitize_transcription_only_segments(segments)
+    # Segment-only-Provider liefern keine echten Wortgrenzen. Für diesen
+    # ausdrücklich degradierten Fallback bleibt der lesbare Umbruch erhalten,
+    # aber die Zeiten sind als geschätzt markiert und werden nicht gapless
+    # verlängert.
+    if source != "word_timestamps":
+        segments = _split_srt_segments_for_readability(segments)
+    report: list[str] = []
+    if word_source == "segment_text_distributed":
+        report.append(
+            "WARN: Provider lieferte keine gemessenen Wort-Timestamps; "
+            "SRT verwendet deshalb die echten Segmentgrenzen."
+        )
+    alignment_quality = compute_alignment_quality({"segments": segments, "alignment_report": report})
     normalized_segments = validate_and_normalize_srt_segments(segments)
     if not normalized_segments:
         raise HTTPException(status_code=422, detail="Transkription lieferte keinen verwertbaren Text fuer SRT.")
     return {
         "segments": normalized_segments,
-        "half_srt_text": segments_to_half_srt(normalized_segments, max_chars=22, min_dur=0.6),
-        "alignment_report": [],
+        "half_srt_text": (
+            segments_to_srt(_transcription_only_segments_from_words(asr.words or [], max_chars=22))
+            if has_measured_word_timestamps
+            else segments_to_half_srt(normalized_segments, max_chars=22, min_dur=0.05)
+        ),
+        "alignment_report": report,
         "half_max_chars": 22,
         "mode": "transcription_only_no_lyrics",
         "source": source,
@@ -7671,7 +7902,7 @@ async def generate_srt_for_audio_asset(
             asr.raw["songstudio_transcription_audio_source"] = transcription_audio_source
             asr.raw["songstudio_lyrics_cleanup"] = lyrics_cleanup_info
 
-        alignment_engine = str(alignment_engine_override or admin_settings.get("srt_alignment_engine") or "heuristic").strip().lower()
+        alignment_engine = str(alignment_engine_override or admin_settings.get("srt_alignment_engine") or "forced_alignment").strip().lower()
         if alignment_engine not in {"heuristic", "forced_alignment"}:
             alignment_engine = "heuristic"
         _update_srt_status_step(
@@ -7793,6 +8024,28 @@ async def generate_srt_for_audio_asset(
         transcript.generated_at = utc_now_naive()
         transcript.updated_at = utc_now_naive()
         db.add(transcript)
+        recovered_lyrics = {"saved": False, "reason": "lyrics_alignment_used"}
+        if alignment_bundle.get("mode") == "transcription_only_no_lyrics":
+            recovered_lyrics = _persist_transcription_only_lyrics(
+                db,
+                asset,
+                segments,
+                backend=backend,
+                language=language,
+            )
+            _append_srt_debug_event(
+                db,
+                srt_task,
+                asset,
+                "transcription_lyrics_persisted",
+                detail=(
+                    "ASR-Songtext wurde in Song- und Asset-Daten übernommen."
+                    if recovered_lyrics.get("saved")
+                    else "ASR-Songtext wurde nicht übernommen."
+                ),
+                data=recovered_lyrics,
+                commit=False,
+            )
         structure_segments = _store_structure_segments_from_srt_alignment(db, asset, source_lyrics, segments, duration) if has_alignment_lyrics else []
         _update_srt_status_step(
             db,
@@ -7827,6 +8080,7 @@ async def generate_srt_for_audio_asset(
         result["alignment_engine"] = alignment_bundle.get("engine") or "heuristic"
         result["half_max_chars"] = alignment_bundle.get("half_max_chars", 22)
         result["srt_generation_mode"] = alignment_bundle.get("mode") or "lyrics_alignment"
+        result["transcription_lyrics"] = recovered_lyrics
         if alignment_bundle.get("source"):
             result["srt_generation_source"] = alignment_bundle.get("source")
         if structure_segments:

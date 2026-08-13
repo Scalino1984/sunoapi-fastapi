@@ -50,3 +50,43 @@ def test_transcription_only_srt_bundle_groups_words_when_segments_are_missing() 
 
     assert bundle["source"] == "word_timestamps"
     assert [segment["text"] for segment in bundle["segments"]] == ["Ein kurzer Satz", "Pause"]
+
+
+def test_transcription_only_prefers_real_word_timestamps_over_provider_segments() -> None:
+    bundle = build_transcription_only_srt_bundle(
+        AsrResult(
+            text="",
+            words=[
+                WordTiming("Lang", 2.0, 2.4),
+                WordTiming("gezogen", 2.4, 4.8),
+                WordTiming("gesungen", 5.0, 5.5),
+            ],
+            segments=[{"start": 0.0, "end": 9.0, "text": "Lang gezogen gesungen"}],
+            raw={},
+        ),
+        duration_seconds=10.0,
+    )
+
+    assert bundle["source"] == "word_timestamps"
+    assert bundle["segments"][0]["start"] == 2.0
+    assert bundle["segments"][0]["end"] == 5.5
+
+
+def test_transcription_only_rejects_synthetic_word_timings_from_segment_text() -> None:
+    bundle = build_transcription_only_srt_bundle(
+        AsrResult(
+            text="",
+            words=[
+                WordTiming("Lang", 0.0, 3.0),
+                WordTiming("gezogen", 3.0, 6.0),
+            ],
+            segments=[{"start": 2.0, "end": 5.5, "text": "Lang gezogen"}],
+            raw={"songstudio_word_source": "segment_text_distributed"},
+        ),
+        duration_seconds=10.0,
+    )
+
+    assert bundle["source"] == "asr_segments"
+    assert bundle["segments"][0]["start"] == 2.0
+    assert bundle["segments"][0]["end"] == 5.5
+    assert bundle["alignment_report"]

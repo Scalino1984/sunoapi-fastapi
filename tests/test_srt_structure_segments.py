@@ -160,7 +160,7 @@ Will am Ende oben sein und wie ein Engel schweben
     assert repeated[0]["start"] == 7.8
     assert repeated[1]["start"] >= 17.0
     assert repeated[1]["start"] < 22.0
-    assert first_verse["start"] == repeated[1]["end"]
+    assert first_verse["start"] > repeated[1]["end"]
     assert 23.5 <= first_verse["start"] <= 24.5
     assert 25.0 <= second_verse["start"] < 26.0
 
@@ -410,7 +410,7 @@ Letzter Klang
     assert [item["type"] for item in result] == ["rap_verse", "post_hook", "instrumental_break", "fade_out"]
 
 
-def test_srt_intro_block_repeat_infers_missing_second_short_call_and_keeps_gapless_srt() -> None:
+def test_srt_intro_block_repeat_infers_missing_second_short_call_and_keeps_real_pauses() -> None:
     lyrics = """
 [Intro: cinematic spoken male vocal]
 Skalinooo.
@@ -465,10 +465,11 @@ Will am Ende oben sein und wie ein Engel schweben
     assert len(intro_calls) == 2
     assert len(intro_lines) == 2
     assert intro_calls[0]["start"] < intro_lines[0]["start"] < intro_calls[1]["start"] < intro_lines[1]["start"] < first_verse["start"]
-    # Normale SRT muss fuer fluessige Player-Uebergaenge gapless bleiben.
+    # Die normale SRT bewahrt echte Pausen; sie darf Cues nicht künstlich bis
+    # zum Beginn der nächsten Zeile verlängern.
     ordered = [intro_calls[0], intro_lines[0], intro_calls[1], intro_lines[1], first_verse]
     for previous, current in zip(ordered, ordered[1:]):
-        assert previous["end"] == current["start"]
+        assert previous["end"] <= current["start"]
 
 
 def test_srt_repeated_chorus_block_keeps_script_order_and_no_extra_duplicates() -> None:

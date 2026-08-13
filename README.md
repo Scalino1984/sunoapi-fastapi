@@ -286,6 +286,27 @@ Optional AI providers and transcription services are configured in `.env.example
 
 This project is designed for private, self-hosted use.
 
+### SRT per Kommandozeile
+
+`scripts/songstudio-srt` erzeugt SRT und Half-SRT für eine lokale Audiodatei oder einen Ordner. Es verwendet dieselben Transkriptions-, Lyrics-Cleanup- und Alignment-Funktionen wie die FastAPI-SRT-Erzeugung, legt dabei aber keine Library-Assets oder Hintergrundtasks in der Datenbank an.
+
+```bash
+# Eine Datei; eine gleichnamige song.lyrics.txt wird automatisch verwendet
+scripts/songstudio-srt /musik/song.mp3
+
+# Explizite Lyrics und Ausgabeordner
+scripts/songstudio-srt /musik/song.mp3 --lyrics /texte/song.txt --output-dir /musik/srt
+
+# Ordner; --recursive nimmt Unterordner mit, Sidecars sind song.lyrics.txt oder song.txt
+scripts/songstudio-srt /musik/album --recursive --lyrics-dir /texte/album --output-dir /musik/srt
+```
+
+Nach dem Kopieren in einen beliebigen `bin`-Ordner muss `SONGSTUDIO_ROOT` auf diesen Projektordner zeigen:
+
+```bash
+SONGSTUDIO_ROOT=/opt/sunoapi-fastapi songstudio-srt /musik/song.mp3
+```
+
 Before publishing or deploying:
 
 - do not commit `.env`, `.env.server`, databases, `storage/`, `node_modules/`, `venv/` or `.venv/`

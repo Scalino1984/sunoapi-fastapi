@@ -1782,12 +1782,12 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
     }
   }
 
-  function InlineRenameTitle({ asset, title, subtitle = null, className = '', onOpen = null, heading = false }) {
+  function InlineRenameTitle({ asset, title, titleSuffix = null, subtitle = null, className = '', onOpen = null, heading = false }) {
     const displayTitle = title || pickTitle(asset);
     return (
       <span className={`inline-title-edit ${className}`.trim()}>
         <button className="inline-title-main" type="button" onClick={onOpen || (() => {})} title={onOpen ? t('library.openSongDetails', 'Songdetails öffnen') : displayTitle}>
-          <strong className={heading ? 'inline-title-heading' : ''}>{displayTitle}</strong>
+          <strong className={heading ? 'inline-title-heading' : ''}>{displayTitle}{titleSuffix ? <small className="asset-flat-variant-index">{titleSuffix}</small> : null}</strong>
           {subtitle ? <span>{subtitle}</span> : null}
         </button>
         {asset?.id ? (
@@ -4795,12 +4795,14 @@ ${generationOptionsText(asset)}`,
   }
 
   function AssetFlatListRow({ item }) {
-    const { project, asset, label } = item;
+    const { project, asset, index } = item;
     const projectQueue = visibleGalleryPlayableQueue();
     const queueIndex = Math.max(0, projectQueue.findIndex((row) => String(row.id) === String(asset.id)));
     const active = isCurrentAsset(asset);
     const badges = assetContentBadges(asset, srtByAsset);
     const advanced = libraryFlatListMode === 'advanced';
+    const variantIndex = `${Number(index || 0) + 1}/${project?.assets?.length || 1}`;
+    const styleSummary = summarizeStyle(pickStyle(asset), advanced ? 220 : 170, t);
     return (
       <article
         className={`asset-flat-row is-${libraryFlatListMode} ${active ? 'is-playing-row' : ''} ${selectedIds.has(asset.id) ? 'is-selected' : ''}`}
@@ -4821,22 +4823,27 @@ ${generationOptionsText(asset)}`,
           <InlineRenameTitle
             asset={asset}
             title={pickTitle(asset)}
-            subtitle={advanced ? `${project?.title || t('library.noSongGroup', 'Ohne Songgruppe')} · ${label} · ${operationLabel(asset.operation_type || asset.task_type || asset.operation_label, t)}` : `${label} · ${formatDuration(asset.duration_seconds)} · ${storageStatusLabel(asset, t)}`}
+            titleSuffix={variantIndex}
             className="asset-flat-title"
             onOpen={(event) => openGalleryAssetDetails(project, asset, event)}
           />
+          {advanced ? (
+            <>
+              <div className="asset-flat-time">{t('common.time', 'Zeit')}: {formatDuration(asset.duration_seconds)}</div>
+              {styleSummary && <p className="asset-flat-style">{styleSummary}</p>}
+            </>
+          ) : (
+            <div className="asset-flat-simple-details">
+              <span className="asset-flat-time">{t('common.time', 'Zeit')}: {formatDuration(asset.duration_seconds)}</span>
+              {styleSummary && <><span className="asset-flat-detail-separator" aria-hidden="true">|</span><span className="asset-flat-style">{styleSummary}</span></>}
+            </div>
+          )}
           {advanced && active && (
             <div className="library-inline-waveform asset-flat-waveform">
               <span>{playbackState?.isPlaying ? t('library.playback.running', 'Läuft') : t('library.playback.ready', 'Bereit')} · {formatDuration(playbackState?.currentTime || 0)} / {formatDuration(playbackState?.duration || asset.duration_seconds)}</span>
               <Waveform asset={asset} compact currentTime={playbackState?.currentTime || 0} durationSeconds={playbackState?.duration || asset.duration_seconds} interactive liveProgress />
             </div>
           )}
-          {advanced && <div className="asset-flat-meta">
-            <span>{formatDuration(asset.duration_seconds)}</span>
-            <span>{storageStatusLabel(asset, t)}</span>
-            <span>audio_assets.id {asset.id}</span>
-            {asset.audio_id && <span>Audio-ID {shortId(asset.audio_id, 12)}</span>}
-          </div>}
         </div>
         {advanced && <div className="asset-flat-badges">
           {isAssetFullyLocal(asset) && <span className="status cached">{fullLocalLabel(t)}</span>}

@@ -1,0 +1,326 @@
+#!/usr/bin/env python3
+"""Create SRT files for a local audio file or an audio directory.
+
+The CLI uses SongStudio's canonical transcription, lyrics-cleanup and alignment
+functions. It does not create library assets, transcript rows, or status tasks.
+
+When copied outside this checkout, set SONGSTUDIO_ROOT to the project root.
+"""
+
+from __future__ import annotations
+
+import argparse
+import asyncio
+import json
+import os
+import sys
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+
+def _bootstrap_project_imports() -> Path:
+    """Locate the checkout, including when copied to a personal bin directory."""
+    configured = os.environ.get("SONGSTUDIO_ROOT", "").strip()
+    candidates = [Path(configured).expanduser()] if configured else []
+    candidates.extend([Path.cwd(), Path(__file__).resolve().parent])
+    for candidate in candidates:
+        for root in (candidate, *candidate.parents):
+            if (root / "app" / "services" / "srt_transcript_service.py").is_file():
+                if str(root) not in sys.path:
+                    sys.path.insert(0, str(root))
+                return root
+    raise RuntimeError(
+        "SongStudio-Projekt nicht gefunden. Setze SONGSTUDIO_ROOT auf den Ordner "
+        "mit app/services/srt_transcript_service.py."
+    )
+
+
+PROJECT_ROOT = _bootstrap_project_imports()
+
+from app.database import SessionLocal  # noqa: E402
+from app.models import AudioAsset  # noqa: E402
+from app.services.audio_metadata_service import read_audio_duration_seconds  # noqa: E402
+from app.services.srt_transcript_service import (  # noqa: E402
+    SUPPORTED_BACKENDS,
+    SUPPORTED_LANGUAGES,
+    _resolve_srt_duration_seconds,
+    _transcribe_audio_with_timeout,
+    align_lyrics_to_timeline_bundle,
+    align_lyrics_with_forced_alignment_bundle,
+    build_transcription_only_srt_bundle,
+    compute_alignment_quality,
+    has_visible_lyrics_for_alignment,
+    load_transcription_admin_settings,
+    prepare_lyrics_for_srt_alignment,
+    resolve_transcription_language,
+    segments_to_srt,
+)
+
+
+AUDIO_EXTENSIONS = {
+    ".aac", ".aif", ".aiff", ".flac", ".m4a", ".mp3", ".mp4", ".ogg",
+    ".opus", ".wav", ".webm", ".wma",
+}
+
+
+@dataclass(frozen=True)
+class RunOptions:
+    backend: str
+    language: str
+    alignment_engine: str
+    output_dir: Path | None
+    lyrics_path: Path | None
+    lyrics_dir: Path | None
+    overwrite: bool
+
+
+def _read_text(path: Path) -> str:
+    try:
+        return path.read_text(encoding="utf-8-sig")
+    except UnicodeDecodeError:
+        return path.read_text(encoding="utf-8")
+
+
+def _sidecar_lyrics_path(audio_path: Path, *, root: Path, lyrics_dir: Path | None) -> Path | None:
+    """Accept only conventional, matching sidecars; never guess arbitrary text."""
+    directories = [audio_path.parent]
+    relative = audio_path.relative_to(root) if audio_path != root else Path(audio_path.name)
+    if lyrics_dir:
+        directories.insert(0, lyrics_dir / relative.parent)
+    for directory in directories:
+        for suffix in (".lyrics.txt", ".txt", ".lyrics.md", ".md"):
+            candidate = directory / f"{audio_path.stem}{suffix}"
+            if candidate.is_file():
+                return candidate
+    return None
+
+
+def _output_paths(audio_path: Path, *, root: Path, output_dir: Path | None) -> tuple[Path, Path]:
+    if output_dir is None:
+        base = audio_path.with_suffix("")
+    else:
+        relative = audio_path.relative_to(root) if audio_path != root else Path(audio_path.name)
+        base = output_dir / relative.parent / audio_path.stem
+    return base.with_suffix(".srt"), base.with_suffix(".half.srt")
+
+
+def _load_admin_settings() -> dict[str, Any]:
+    db = SessionLocal()
+    try:
+        return load_transcription_admin_settings(db)
+    finally:
+        db.close()
+
+
+def _ephemeral_asset(audio_path: Path, duration_seconds: float) -> AudioAsset:
+    """Metadata carrier for shared service code; this object is never persisted."""
+    return AudioAsset(
+        id=0,
+        title=audio_path.stem,
+        display_title=audio_path.stem,
+        filename=audio_path.name,
+        source_url=audio_path.as_uri(),
+        local_path=str(audio_path),
+        duration_seconds=max(0, int(round(duration_seconds))),
+        status="cached",
+    )
+
+
+async def _clean_lyrics(
+    lyrics: str,
+    *,
+    audio_path: Path,
+    duration_seconds: float,
+    admin_settings: dict[str, Any],
+) -> tuple[str, dict[str, Any]]:
+    # Same cleanup routine as FastAPI. Its DB usage here is configuration-only.
+    db = SessionLocal()
+    try:
+        return await prepare_lyrics_for_srt_alignment(
+            db, _ephemeral_asset(audio_path, duration_seconds), lyrics, admin_settings,
+        )
+    finally:
+        db.close()
+
+
+async def _generate_one(
+    audio_path: Path,
+    *,
+    root: Path,
+    options: RunOptions,
+    admin_settings: dict[str, Any],
+) -> dict[str, Any]:
+    srt_path, half_srt_path = _output_paths(audio_path, root=root, output_dir=options.output_dir)
+    if not options.overwrite and srt_path.exists():
+        return {"audio": str(audio_path), "status": "skipped", "reason": "SRT exists", "srt_path": str(srt_path)}
+
+    lyrics_path = options.lyrics_path or _sidecar_lyrics_path(audio_path, root=root, lyrics_dir=options.lyrics_dir)
+    source_lyrics = _read_text(lyrics_path) if lyrics_path else ""
+    file_duration = float(read_audio_duration_seconds(audio_path) or 0.0)
+    asset = _ephemeral_asset(audio_path, file_duration)
+    has_lyrics = has_visible_lyrics_for_alignment(source_lyrics)
+    if has_lyrics:
+        lyrics, cleanup = await _clean_lyrics(
+            source_lyrics,
+            audio_path=audio_path,
+            duration_seconds=file_duration,
+            admin_settings=admin_settings,
+        )
+        has_lyrics = has_visible_lyrics_for_alignment(lyrics)
+    else:
+        lyrics = ""
+        cleanup = {"method": "skipped_no_lyrics", "source_chars": 0, "clean_chars": 0}
+
+    language, language_info = resolve_transcription_language(options.language, lyrics)
+    asr = await _transcribe_audio_with_timeout(audio_path, options.backend, language)
+    duration_info = _resolve_srt_duration_seconds(asset, file_duration, asr)
+    duration = float(duration_info["duration_seconds"] or file_duration or 0.0)
+
+    bundle: dict[str, Any] | None = None
+    forced_alignment_error: str | None = None
+    if has_lyrics and options.alignment_engine == "forced_alignment":
+        try:
+            bundle = align_lyrics_with_forced_alignment_bundle(
+                lyrics, asr, audio_path, duration, source_lyrics=source_lyrics,
+            )
+        except Exception as exc:  # Same safe fallback as the API workflow.
+            forced_alignment_error = str(exc)
+    if bundle is None:
+        bundle = (
+            align_lyrics_to_timeline_bundle(
+                lyrics, asr, duration, source_lyrics=source_lyrics, resolved_language=language,
+            )
+            if has_lyrics else build_transcription_only_srt_bundle(asr, duration)
+        )
+        if forced_alignment_error:
+            bundle.setdefault("alignment_report", []).append(
+                "WARN: Forced-Alignment-Engine nicht verfuegbar/fehlgeschlagen; Heuristik-Engine verwendet."
+            )
+            quality = bundle.get("alignment_quality") if isinstance(bundle.get("alignment_quality"), dict) else {}
+            quality["warn_count"] = int(quality.get("warn_count") or 0) + 1
+            quality["score"] = max(0.0, round(float(quality.get("score") or 0.0) - 0.06, 3))
+            bundle["alignment_quality"] = quality
+    if "alignment_quality" not in bundle:
+        bundle["alignment_quality"] = compute_alignment_quality(bundle)
+
+    srt_text = segments_to_srt(bundle["segments"])
+    if not srt_text.strip():
+        raise RuntimeError("Alignment lieferte keine SRT-Segmente.")
+    srt_path.parent.mkdir(parents=True, exist_ok=True)
+    srt_path.write_text(srt_text, encoding="utf-8")
+    half_srt_text = str(bundle.get("half_srt_text") or "")
+    if half_srt_text.strip():
+        half_srt_path.write_text(half_srt_text, encoding="utf-8")
+
+    return {
+        "audio": str(audio_path),
+        "status": "completed",
+        "srt_path": str(srt_path),
+        "half_srt_path": str(half_srt_path) if half_srt_text.strip() else None,
+        "lyrics_source": str(lyrics_path) if lyrics_path else None,
+        "language": language,
+        "language_detection": language_info,
+        "duration": duration_info,
+        "lyrics_cleanup": cleanup,
+        "mode": bundle.get("mode"),
+        "alignment_engine": bundle.get("engine") or "heuristic",
+        "alignment_quality": bundle.get("alignment_quality"),
+        "segments": len(bundle.get("segments") or []),
+        "warnings": bundle.get("alignment_report") or [],
+    }
+
+
+def _collect_audio_files(source: Path, recursive: bool) -> tuple[Path, list[Path]]:
+    if source.is_file():
+        if source.suffix.lower() not in AUDIO_EXTENSIONS:
+            raise ValueError(f"Keine unterstützte Audiodatei: {source}")
+        return source, [source]
+    if not source.is_dir():
+        raise ValueError(f"Datei oder Ordner nicht gefunden: {source}")
+    iterator = source.rglob("*") if recursive else source.glob("*")
+    files = sorted(path.resolve() for path in iterator if path.is_file() and path.suffix.lower() in AUDIO_EXTENSIONS)
+    if not files:
+        raise ValueError(f"Keine unterstützten Audiodateien in: {source}")
+    return source, files
+
+
+def _parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="SongStudio-SRT für eine Audiodatei oder einen Ordner erzeugen.",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    parser.add_argument("source", type=Path, help="Audiodatei oder Audio-Ordner")
+    parser.add_argument("--backend", choices=sorted(SUPPORTED_BACKENDS), help="Standard: SongStudio-Adminsettings")
+    parser.add_argument("--language", choices=sorted(SUPPORTED_LANGUAGES), help="Standard: SongStudio-Adminsettings")
+    parser.add_argument("--alignment-engine", choices=["heuristic", "forced_alignment"], help="Standard: SongStudio-Adminsettings")
+    parser.add_argument("--lyrics", type=Path, help="Lyrics-Datei für genau eine Audiodatei")
+    parser.add_argument("--lyrics-dir", type=Path, help="Ordner mit gleichnamigen .lyrics.txt/.txt-Sidecars")
+    parser.add_argument("--output-dir", type=Path, help="Ausgabeordner; Ordnerstruktur wird erhalten")
+    parser.add_argument("--recursive", action="store_true", help="Unterordner im Ordner-Modus einbeziehen")
+    parser.add_argument("--skip-existing", action="store_true", help="Vorhandene SRT nicht überschreiben")
+    parser.add_argument("--json", action="store_true", help="Ergebnisse als JSON ausgeben")
+    return parser
+
+
+async def _main_async(args: argparse.Namespace) -> int:
+    source = args.source.expanduser().resolve()
+    root, audio_files = _collect_audio_files(source, args.recursive)
+    if args.lyrics and len(audio_files) != 1:
+        raise ValueError("--lyrics ist nur für eine Datei erlaubt; für Ordner --lyrics-dir verwenden.")
+    if args.lyrics and not args.lyrics.expanduser().is_file():
+        raise ValueError(f"Lyrics-Datei nicht gefunden: {args.lyrics}")
+    if args.lyrics_dir and not args.lyrics_dir.expanduser().is_dir():
+        raise ValueError(f"Lyrics-Ordner nicht gefunden: {args.lyrics_dir}")
+
+    admin = _load_admin_settings()
+    options = RunOptions(
+        backend=str(args.backend or admin["transcription_backend"]).lower(),
+        language=str(args.language or admin["transcription_language"]).lower(),
+        alignment_engine=str(args.alignment_engine or admin["srt_alignment_engine"]).lower(),
+        output_dir=args.output_dir.expanduser().resolve() if args.output_dir else None,
+        lyrics_path=args.lyrics.expanduser().resolve() if args.lyrics else None,
+        lyrics_dir=args.lyrics_dir.expanduser().resolve() if args.lyrics_dir else None,
+        overwrite=not bool(args.skip_existing),
+    )
+    results: list[dict[str, Any]] = []
+    for index, audio_path in enumerate(audio_files, start=1):
+        if not args.json:
+            print(f"[{index}/{len(audio_files)}] {audio_path.name}", flush=True)
+        try:
+            result = await _generate_one(audio_path, root=root, options=options, admin_settings=admin)
+            results.append(result)
+            if not args.json:
+                print(f"  {result['status']}: {result.get('srt_path') or result.get('reason')}", flush=True)
+        except Exception as exc:
+            result = {"audio": str(audio_path), "status": "failed", "error": str(exc)}
+            results.append(result)
+            if not args.json:
+                print(f"  failed: {exc}", file=sys.stderr, flush=True)
+
+    summary = {
+        "project_root": str(PROJECT_ROOT), "backend": options.backend, "language": options.language,
+        "alignment_engine": options.alignment_engine, "total": len(results),
+        "completed": sum(item["status"] == "completed" for item in results),
+        "skipped": sum(item["status"] == "skipped" for item in results),
+        "failed": sum(item["status"] == "failed" for item in results), "results": results,
+    }
+    print(json.dumps(summary, ensure_ascii=False, indent=2) if args.json else (
+        f"Fertig: {summary['completed']} erstellt, {summary['skipped']} übersprungen, {summary['failed']} fehlgeschlagen."
+    ))
+    return 1 if summary["failed"] else 0
+
+
+def main() -> int:
+    try:
+        return asyncio.run(_main_async(_parser().parse_args()))
+    except (RuntimeError, ValueError) as exc:
+        print(f"FEHLER: {exc}", file=sys.stderr)
+        return 2
+    except KeyboardInterrupt:
+        print("Abgebrochen.", file=sys.stderr)
+        return 130
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

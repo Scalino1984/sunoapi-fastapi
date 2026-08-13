@@ -248,7 +248,7 @@ def test_verse_after_intro_gap_starts_at_asr_vocal_onset() -> None:
 # NEU (v4): Gapless-SRT
 # --------------------------------------------------------------------------- #
 
-def test_gapless_srt_extends_segment_ends_to_next_start() -> None:
+def test_standard_srt_keeps_real_pause_between_aligned_lines() -> None:
     lyrics = "\n".join([
         "Es ist Zeit zu gehn heut Nacht",
         "Der Morgen bricht ueber Rauenberg an",
@@ -259,7 +259,9 @@ def test_gapless_srt_extends_segment_ends_to_next_start() -> None:
     asr = _asr_from_words(entries)
     bundle = srt.align_lyrics_to_timeline_bundle(lyrics, asr, duration_seconds=40.0)
     segments = bundle["segments"]
-    assert abs(segments[0]["end"] - segments[1]["start"]) < 0.01, segments
+    assert segments[0]["end"] < segments[1]["start"]
+    assert abs(segments[0]["end"] - 9.15) < 0.01, segments[0]
+    assert abs(segments[1]["start"] - 30.1) < 0.01, segments[1]
 
 
 def test_transcription_only_overlaps_and_tiny_segments_are_sanitized() -> None:

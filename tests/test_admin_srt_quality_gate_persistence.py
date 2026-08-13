@@ -72,7 +72,7 @@ def test_quality_gate_defaults_are_returned_for_existing_legacy_row(isolated_db_
 
     result = get_ai_admin_settings(isolated_db_session)
 
-    assert result["srt_alignment_engine"] == "heuristic"
+    assert result["srt_alignment_engine"] == "forced_alignment"
     assert result["srt_quality_gate_enabled"] is False
     assert result["srt_quality_gate_min_score"] == pytest.approx(0.7)
 

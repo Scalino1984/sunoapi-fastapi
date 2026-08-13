@@ -5835,7 +5835,9 @@ a.button.disabled {
 
 .asset-flat-main {
   display: grid;
-  gap: 5px;
+  /* Die Titelzeile startet bündig mit dem oberen Coverrand. */
+  align-self: start;
+  gap: 8px;
   min-width: 0;
   width: 100%;
   justify-items: stretch;
@@ -5877,6 +5879,17 @@ a.button.disabled {
   font-weight: 800;
 }
 
+/* Variant is supporting information: keep it visibly attached to the song
+   title without competing with it. */
+.asset-flat-title strong .asset-flat-variant-index {
+  display: inline;
+  width: auto;
+  margin-left: .42rem;
+  color: color-mix(in srgb, var(--text) 70%, var(--muted) 30%);
+  font-size: .76em;
+  font-weight: 700;
+}
+
 .asset-flat-row.is-simple .asset-flat-title strong {
   font-size: .95rem;
 }
@@ -5885,6 +5898,46 @@ a.button.disabled {
 .asset-flat-meta {
   color: var(--muted);
   font-size: .82rem;
+}
+
+.asset-flat-time {
+  color: #fff;
+  font-size: .86rem;
+  font-weight: 700;
+  letter-spacing: .01em;
+}
+
+.asset-flat-style {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: .82rem;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.asset-flat-simple-details {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  gap: .42rem;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.asset-flat-simple-details .asset-flat-time {
+  flex: 0 0 auto;
+}
+
+.asset-flat-detail-separator {
+  flex: 0 0 auto;
+  color: var(--muted);
+}
+
+.asset-flat-simple-details .asset-flat-style {
+  flex: 1 1 auto;
 }
 
 .asset-flat-meta {

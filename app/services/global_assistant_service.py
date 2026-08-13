@@ -28,6 +28,44 @@ SUNO_STYLE_MIN_BPM = 40
 SUNO_STYLE_MAX_BPM = 240
 STYLE_BATCH_MODES = {"auto", "batch", "chunked", "single"}
 
+# Globaler technischer Nachsatz für Music-Style-Prompts. Die Reihenfolge ist
+# absichtlich fixiert: Genre, Instrumentierung und Songcharakter stehen zuerst;
+# dieser Block folgt immer danach und steuert ausschließlich die Mix-Qualität.
+# Die Einträge mit Minuszeichen gehören ausschließlich ins negative_tags-Feld.
+SUNO_MIXING_STYLE_TAGS = (
+    "clean vocal-forward mix",
+    "polished professional vocal recording",
+    "controlled grit",
+    "clean articulation",
+    "perfectly balanced vocal-to-instrumental level",
+    "vocals sitting on top of the mix",
+    "instrumental ducking under vocal",
+    "studio-grade mastered mix",
+    "punchy dynamic balance",
+    "radio-ready loudness",
+    "clean low-end",
+    "balanced wide stereo image",
+    "warm analog room ambience",
+    "subtle plate reverb",
+    "natural room depth",
+    "glued cohesive mix",
+    "smooth tape warmth",
+)
+SUNO_MIXING_NEGATIVE_TAGS = (
+    "-harsh vocal",
+    "-distorted vocal",
+    "-vocal hiss",
+    "-harsh sibilance",
+    "-raspy",
+    "-vocal buried in mix",
+    "-overpowering instrumental",
+    "-muddy low-mids",
+    "-boxy",
+    "-muddy",
+    "-dry vocal",
+    "-sterile mix",
+)
+
 SUNO_STYLE_DOCUMENTATION_REFERENCE = {
     "source": "SunoAI Master-Dokumentation + Vocal-Tag-Baukasten, Stand 2026-06",
     "style_prompt_architecture": [
@@ -43,6 +81,12 @@ SUNO_STYLE_DOCUMENTATION_REFERENCE = {
         "Energie, Sprache/Dialekt, Vocal-Delivery und Produktionsästhetik immer konkret nennen.",
         "Arrangement nur als kurzer roter Faden: Intro, Verse, Chorus/Hook, Bridge/Breakdown, Outro.",
     ],
+    "mixing_tag_standard": {
+        "placement": "Hänge die positiven Mixing-Tags immer NACH Genre, BPM, Instrumentierung, Atmosphäre und Arrangement als technischen Nachsatz an.",
+        "positive_style_tags": list(SUNO_MIXING_STYLE_TAGS),
+        "negative_tags_only": list(SUNO_MIXING_NEGATIVE_TAGS),
+        "section_tag_rule": "Die globalen Mixing-Tags gehören nicht in lyric_vocal_tags; dort bleiben nur abschnittsspezifische Stimme, Delivery und sparsame Vocal-FX.",
+    },
     "lyric_vocal_tag_formula": [
         "Nutze Doppelpunkt-Syntax: [SECTION: voice identity, vocal texture, delivery style, emotion/attitude, energy, language/accent, vocal production].",
         "Pro Abschnitt genau ein primärer Section-Header; lokale Vocal-/Rollen-Tags innerhalb des Abschnitts bleiben bei Sprecher- oder Delivery-Wechseln erhalten.",
@@ -451,7 +495,59 @@ class GlobalAssistantService:
             "role": self._limit_text(raw.get("role") or raw.get("rolle") or fallback.get("role") or "", 120) or None,
         }
         normalized["style"] = self._build_master_style_prompt(normalized)
+        normalized["style"] = self._append_mixing_style_tags(normalized["style"])
+        normalized["negative_tags"] = self._append_mixing_negative_tags(normalized.get("negative_tags"))
         return normalized
+
+    @staticmethod
+    def _tag_key(value: Any) -> str:
+        return re.sub(r"\s+", " ", str(value or "").strip().lower())
+
+    def _append_mixing_style_tags(self, value: Any) -> str:
+        """Append the fixed quality suffix while retaining the genre-led prompt.
+
+        Suno's style field is capped at 1000 characters. Reserving the suffix
+        before truncating means it is never silently lost on a verbose AI reply.
+        """
+        base = re.sub(r"\s+", " ", str(value or "")).strip(" ,;.-|")
+        # A revised draft may already contain the block, while subsequent
+        # structured fields can have been appended after it. Remove known tags
+        # first and add one complete, canonical suffix again.
+        for tag in SUNO_MIXING_STYLE_TAGS:
+            base = re.sub(
+                rf"(?i)(?:^|\s*[,;]\s*){re.escape(tag)}(?=\s*(?:[,;]|$))",
+                ", ",
+                base,
+            )
+        base = re.sub(r"\s*[,;]\s*(?:[,;]\s*)+", ", ", base).strip(" ,;.-|")
+        suffix = ", ".join(SUNO_MIXING_STYLE_TAGS)
+        separator = "; " if base else ""
+        max_base_length = max(0, SUNO_STYLE_PROMPT_MAX_LENGTH - len(separator) - len(suffix))
+        base = self._limit_style_prompt(base, max_base_length).rstrip(" ,;.-|")
+        return f"{base}{separator}{suffix}" if base else suffix
+
+    def _append_mixing_negative_tags(self, value: Any) -> str:
+        """Keep user/AI excludes and add the standard minus-prefixed mix guards."""
+        source = self._normalize_negative_tags(value) or ""
+        standard_keys = {self._tag_key(tag) for tag in SUNO_MIXING_NEGATIVE_TAGS}
+        extra_tags: list[str] = []
+        seen: set[str] = set()
+        for tag in (part.strip() for part in re.split(r"[,;\n]", source)):
+            key = self._tag_key(tag)
+            if not key or key in seen or key in standard_keys:
+                continue
+            extra_tags.append(tag)
+            seen.add(key)
+
+        suffix = ", ".join(SUNO_MIXING_NEGATIVE_TAGS)
+        max_extra_length = max(0, 500 - len(suffix) - 2)
+        retained: list[str] = []
+        for tag in extra_tags:
+            candidate = ", ".join([*retained, tag])
+            if len(candidate) > max_extra_length:
+                break
+            retained.append(tag)
+        return f"{', '.join(retained)}, {suffix}" if retained else suffix
 
     def _build_master_style_prompt(self, item: dict[str, Any]) -> str:
         """Build one Suno-ready master style prompt from structured style fields.
@@ -1308,6 +1404,11 @@ class GlobalAssistantService:
                 "[SECTION: voice identity, vocal texture, delivery style, emotion, energy, language/accent, vocal production]",
                 "Nur kurze Section-Tags liefern; voller getaggter Songtext wird separat erzeugt.",
             ],
+            "mixing_tag_standard": {
+                "placement": "Globale Mixing-Tags stehen als technischer Nachsatz am Ende des style-Felds, nie in lyric_vocal_tags.",
+                "positive_style_tags": list(SUNO_MIXING_STYLE_TAGS),
+                "negative_tags_only": list(SUNO_MIXING_NEGATIVE_TAGS),
+            },
         }
 
     def _build_style_instruction_payload(
@@ -1333,10 +1434,12 @@ class GlobalAssistantService:
         previous_titles = [self._limit_text(item.get("title"), 120) for item in (previous_suggestions or []) if item.get("title")]
         rules = [
             f"Gib exakt {batch_amount} Vorschlag/Vorschläge für diesen Batch zurück. Insgesamt werden {requested_amount} Vorschläge erzeugt.",
-            "Jeder Style ist ein vollständiger kopierbarer Suno-Master-Style-Prompt in einem Feld mit maximal 1000 Zeichen; Zielbereich 900 bis 950 Zeichen, damit der Prompt vollständig endet und nicht serverseitig gekürzt werden muss.",
+            "Jeder Style ist ein vollständiger kopierbarer Suno-Master-Style-Prompt mit maximal 1000 Zeichen. Halte Genre, BPM, Instrumentierung, Atmosphäre und Arrangement vor dem technischen Mixing-Nachsatz kompakt (etwa 430 bis 520 Zeichen), damit der vollständige Nachsatz erhalten bleibt.",
             "Liefere pro Vorschlag zusätzlich suggested_song_title als kurzen release-tauglichen Songtitel. suggested_song_title ist der eigentliche Songtitel, title bleibt nur der Name der Style-Variante.",
             "Style-Prompts müssen abgeschlossen formuliert sein: keine abgeschnittenen Satzenden, keine offenen Aufzählungen, keine wichtigen Informationen erst am Ende verstecken.",
             "Instrumente, Arrangement, Vocal-Delivery, feste BPM, Energie und Produktion müssen im style-Feld enthalten sein, nicht nur in Zusatzfeldern.",
+            "Hänge den Mixing-Tag-Baukasten aus suno_quality_reference immer als letzten technischen Nachsatz an das style-Feld. Die positiven Tags bleiben im style-Feld; alle Minus-Tags kommen ausschließlich und vollständig in negative_tags.",
+            "Keine globalen Mixing-Tags in lyric_vocal_tags wiederholen. Dort nur section-spezifische Stimme, Delivery, Emotion und sparsame Vocal-FX verwenden.",
             'bpm ist Pflicht und muss immer eine feste ganze Zahl als String enthalten, z. B. "170". Keine Bereiche wie "167-172", keine ca.-Angaben und kein leeres bpm-Feld.',
             'Das style-Feld muss dieselbe feste BPM enthalten, z. B. "170 BPM". Wenn ein Tempo-Wunsch als Bereich vorliegt, wähle den musikalisch passendsten Mittelwert.',
             "Nutze erkennbare Sprache, Rap-/Gesangsstimme, Stimmung, Hook-Art, Beat-Art und Energie aus dem Text.",
@@ -1519,7 +1622,7 @@ class GlobalAssistantService:
             "Nutze die integrierte SunoAI Master-Dokumentation und den Vocal-Tag-Baukasten als Qualitätsreferenz. "
             "Die Styles müssen direkt in Suno nutzbar sein und präzise Genre, Subgenre, feste BPM als einzelne ganze Zahl, Drums, Bass, Instrumente, Vocal-Delivery, Stimmung, Sprache und Produktionsästhetik nennen. Keine BPM-Bereiche und keine fehlende BPM. "
             "Wenn tempo_constraints aktiv sind, muss die feste BPM innerhalb dieses Bereichs liegen und trotzdem musikalisch passend zu Text, Hook und Groove gewählt werden. "
-            "Das style-Feld bleibt ein vollständiger Music-Style-Prompt mit Zielbereich 900 bis 950 Zeichen und harter Obergrenze 1000 Zeichen; section-spezifische Songtext-Vocal-Tags gehören ausschließlich in lyric_vocal_tags. "
+            "Das style-Feld bleibt ein vollständiger Music-Style-Prompt mit harter Obergrenze 1000 Zeichen. Genre, BPM, Instrumentierung und Atmosphäre stehen zuerst; danach folgt der vollständige globale Mixing-Tag-Baukasten als technischer Nachsatz. Section-spezifische Songtext-Vocal-Tags gehören ausschließlich in lyric_vocal_tags. "
             "Style-Prompts müssen sauber abgeschlossen sein und dürfen nicht mitten in einer Aufzählung oder einem Satz enden. "
             "Gib pro Vorschlag ein separates Feld suggested_song_title für den eigentlichen Songtitel aus; title ist nur die interne Überschrift der Style-Variante. "
             "Erstelle unterschiedliche, aber passende Varianten. Keine vollständigen Songtexte schreiben. Keine erfundenen URLs oder technischen IDs. "
@@ -1570,6 +1673,9 @@ class GlobalAssistantService:
         else:
             for suggestion in suggestions:
                 suggestion["lyric_vocal_tags"] = []
+        if not normalized_features.get("negative_tags", True):
+            for suggestion in suggestions:
+                suggestion["negative_tags"] = None
         return {
             "ok": True,
             "amount": len(suggestions),
