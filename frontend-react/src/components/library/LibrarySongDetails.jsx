@@ -38,7 +38,7 @@ export function LibrarySongDetails({ ctx }) {
     onPlay,
     withVariantPlaybackMeta,
     voiceLabelForAsset,
-    InlineRenameTitle,
+    renderInlineRenameTitle,
     t,
   } = ctx;
 
@@ -60,7 +60,7 @@ export function LibrarySongDetails({ ctx }) {
         </button>
         <div>
           <p className="eyebrow">{t('library.detail.projectSong', 'Projekt / Song')}</p>
-          <InlineRenameTitle asset={activeProject.assets[0]} title={activeProject.title} className="detail-hero-title" heading />
+          {renderInlineRenameTitle({ asset: activeProject.assets[0], title: activeProject.title, className: 'detail-hero-title', heading: true })}
           <p className="muted">{t('library.detail.projectMeta', '{{variants}} Varianten · {{operations}} Vorgänge · erstellt {{created}} · aktualisiert {{updated}}', { variants: activeProject.assets.length, operations: activeProject.operations.length, created: formatDate(activeProject.created_at), updated: formatDate(activeProject.updated_at) })}</p>
           <p className="muted">{summarizeStyle(pickStyle(activeProject.assets.find((asset) => pickStyle(asset))), 220, t)}</p>
           {activeProject.assets.some((asset) => voiceLabelForAsset(asset)) && <p className="muted voice-detail-line">{t('library.detail.voice', 'Stimme')}: <strong>{voiceLabelForAsset(activeProject.assets.find((asset) => voiceLabelForAsset(asset)))}</strong></p>}

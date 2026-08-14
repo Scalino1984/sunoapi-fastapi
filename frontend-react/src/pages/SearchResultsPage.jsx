@@ -24,6 +24,20 @@ function playlistSearchValue(item) {
   ].filter(Boolean).join(' ');
 }
 
+function mergeSearchItems(remoteItems = [], localItems = []) {
+  // Der Server kennt auch Inhalte außerhalb der geladenen Library-Seite. Die
+  // lokale Kopie enthält dagegen vollständige Metadaten. Beides muss sichtbar
+  // bleiben; eine erfolgreiche Serverantwort darf lokale Treffer nicht löschen.
+  const byId = new Map();
+  remoteItems.forEach((item) => {
+    if (item?.id != null) byId.set(String(item.id), item);
+  });
+  localItems.forEach((item) => {
+    if (item?.id != null) byId.set(String(item.id), item);
+  });
+  return [...byId.values()].slice(0, RESULT_LIMIT);
+}
+
 function ResultSection({ icon: Icon, title, items, empty, children }) {
   return (
     <section className="panel stack search-result-section">
@@ -62,10 +76,10 @@ export function SearchResultsPage({ query = '', assets = [], lyrics = [], styles
     return () => { cancelled = true; };
   }, [normalizedQuery]);
   const results = remoteResults ? {
-    assets: remoteResults.assets?.items || [],
-    lyrics: remoteResults.lyrics?.items || [],
-    styles: remoteResults.styles?.items || [],
-    playlists: remoteResults.playlists?.items || [],
+    assets: mergeSearchItems(remoteResults.assets?.items, localResults.assets),
+    lyrics: mergeSearchItems(remoteResults.lyrics?.items, localResults.lyrics),
+    styles: mergeSearchItems(remoteResults.styles?.items, localResults.styles),
+    playlists: mergeSearchItems(remoteResults.playlists?.items, localResults.playlists),
   } : localResults;
   const total = results.assets.length + results.lyrics.length + results.styles.length + results.playlists.length;
 

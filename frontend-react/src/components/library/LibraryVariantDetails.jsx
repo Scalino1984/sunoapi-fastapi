@@ -55,15 +55,15 @@ export function LibraryVariantDetails({ ctx, asset, index, activeProject, projec
     readLibraryAiTags,
     voiceInfoForAsset,
     notify,
-    GenerationOptionsCard,
-    PromptLyricsCard,
-    LibraryAiTagsCard,
-    AudioAiAnalysisCard,
-    StemCard,
-    VideoSummaryCard,
-    SrtCard,
-    AssetContentManager,
-    AudioActionMenu,
+    renderGenerationOptionsCard,
+    renderPromptLyricsCard,
+    renderLibraryAiTagsCard,
+    renderAudioAiAnalysisCard,
+    renderStemCard,
+    renderVideoSummaryCard,
+    renderSrtCard,
+    renderAssetContentManager,
+    renderAudioActionMenu,
     openPictureViewer,
     downloadCoverImage,
     t,
@@ -180,7 +180,7 @@ export function LibraryVariantDetails({ ctx, asset, index, activeProject, projec
                   <strong>{t('library.detail.primaryActions', 'Primär')}</strong>
                   <div className="button-row wrap compact-actions">
                     <button type="button" className={isAssetFavorite(asset) ? 'favorite-action is-favorite' : 'favorite-action'} onClick={() => toggleAssetFavorite(asset)} disabled={favoriteSavingIds.has(asset.id)}><ThumbsUp size={15} fill={isAssetFavorite(asset) ? 'currentColor' : 'none'} /> {t('library.favorites', 'Favoriten')}</button>
-                    <AudioActionMenu asset={playbackAsset} compact={false} label={t('library.actions.moreActions', 'Mehr')} dropUp />
+                    {renderAudioActionMenu({ asset: playbackAsset, compact: false, label: t('library.actions.moreActions', 'Mehr'), dropUp: true })}
                     <button type="button" className="stable-detail-action-button" onClick={() => setActionAsset(playbackAsset)}><MoreHorizontal size={15} /> {t('library.actionModal.title', 'Aktionen')}</button>
                     <button type="button" onClick={() => openWorkflowWizard(asset)}><FileText size={15} /> {t('library.workflow.audioWizard', 'Audio-Wizard')}</button>
                     <button type="button" onClick={() => generateSrt(asset)} disabled={srtLoadingIds.has(asset.id)}><FileText size={15} /> {srtLoadingIds.has(asset.id) ? t('library.bulk.srtRunning', 'SRT läuft…') : t('library.bulk.createSrt', 'SRT erzeugen')}</button>
@@ -231,7 +231,7 @@ export function LibraryVariantDetails({ ctx, asset, index, activeProject, projec
                 <div className="meta-card"><div className="row between"><h4>Audio-ID</h4><button type="button" onClick={async () => { await copyToClipboard(asset.audio_id); notify(t('library.messages.audioIdCopied', 'Audio-ID kopiert.'), 'success'); }}><Copy size={14} /></button></div><p>{asset.audio_id || '—'}</p></div>
                 <div className="meta-card"><div className="row between"><h4>Task-ID</h4><button type="button" onClick={async () => { await copyToClipboard(asset.suno_task_id || asset.task_id); notify(t('library.messages.taskIdCopied', 'Task-ID kopiert.'), 'success'); }}><Copy size={14} /></button></div><p>{asset.suno_task_id || asset.task_id || '—'}</p></div>
                 <div className="meta-card"><div className="row between"><h4>{t('library.detail.voice', 'Stimme')}</h4><button type="button" disabled={!voiceInfoForAsset(asset)?.id} onClick={async () => { await copyToClipboard(voiceInfoForAsset(asset)?.id || ''); notify(t('library.messages.voiceIdCopied', 'Voice-ID kopiert.'), 'success'); }}><Copy size={14} /></button></div><p>{voiceLabelForAsset(asset) || '—'}</p></div>
-                <GenerationOptionsCard asset={asset} />
+                {renderGenerationOptionsCard({ asset })}
               </div>
             </LibraryDetailSection>
 
@@ -253,9 +253,9 @@ export function LibraryVariantDetails({ ctx, asset, index, activeProject, projec
                     <button type="button" onClick={async () => { await copyToClipboard(pickStyle(asset)); notify(t('library.messages.styleCopied', 'Style kopiert.'), 'success'); }} disabled={!pickStyle(asset)}><Copy size={14} /> {t('common.copy', 'Kopieren')}</button>
                   )}
                 />
-                <PromptLyricsCard asset={asset} />
-                <LibraryAiTagsCard asset={asset} />
-                <AudioAiAnalysisCard asset={asset} />
+                {renderPromptLyricsCard({ asset })}
+                {renderLibraryAiTagsCard({ asset })}
+                {renderAudioAiAnalysisCard({ asset })}
               </div>
             </LibraryDetailSection>
 
@@ -267,10 +267,10 @@ export function LibraryVariantDetails({ ctx, asset, index, activeProject, projec
               defaultOpen
             >
               <div className="variant-meta-grid variant-detail-card-grid variant-detail-card-grid--assets">
-                <StemCard asset={asset} />
-                {hasAssetVideo(asset) && <VideoSummaryCard asset={asset} />}
-                <SrtCard asset={asset} />
-                <AssetContentManager asset={asset} />
+                {renderStemCard({ asset })}
+                {hasAssetVideo(asset) && renderVideoSummaryCard({ asset })}
+                {renderSrtCard({ asset })}
+                {renderAssetContentManager({ asset })}
               </div>
             </LibraryDetailSection>
 
@@ -300,7 +300,7 @@ export function LibraryVariantDetails({ ctx, asset, index, activeProject, projec
             </div>
             <div className="button-row wrap">
               <button type="button" className={isAssetFavorite(asset) ? 'favorite-action is-favorite' : 'favorite-action'} onClick={() => toggleAssetFavorite(asset)} disabled={favoriteSavingIds.has(asset.id)}><ThumbsUp size={15} fill={isAssetFavorite(asset) ? 'currentColor' : 'none'} /></button>
-              <AudioActionMenu asset={playbackAsset} compact label="" dropUp />
+              {renderAudioActionMenu({ asset: playbackAsset, compact: true, label: '', dropUp: true })}
               <button type="button" onClick={() => toggleVariantAccordion(asset, index)}>{t('library.detail.showDetails', 'Details anzeigen')}</button>
               <button type="button" onClick={() => openWorkflowWizard(asset)}><FileText size={15} /> Wizard</button>
               <a className="button primary" href={api.archive.assetBundleUrl(asset.id)}><Download size={15} /> ZIP</a>

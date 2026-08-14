@@ -4,7 +4,7 @@
 // Diese Werte werden in der DB fuer Songdetails/Library/Offline-Anzeige gespeichert.
 // Nicht auf interne snake_case-Namen zurueckbauen und nicht nur in buildAdvancedPayload()
 // pflegen; submit() ist der tatsaechliche Generate-Button-Pfad.
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowLeft, ArrowRight, CheckCircle2, Copy, Loader2, Music2, Redo2, RefreshCw, Search, Sparkles, Tag, Undo2, Wand2 } from 'lucide-react';
 import { api } from '../api/client.js';
 import { SectionHeader } from '../components/SectionHeader.jsx';
@@ -743,6 +743,7 @@ function StylePresetModal({ open, onClose, styles = [], builtinStyles = [], onAp
 export function MusicPage({ styles, voices = [], uploadedFiles = [], assets = [], draft, notify, onRefresh, onMusicStarted, onCheckStatus, taskRefreshState, initialWizard = false }) {
   const { t } = useI18n();
   const storedMusicState = useMemo(() => readStoredMusicPageState(), []);
+  const appliedDraftRef = useRef(null);
   const [title, setTitle] = useState(() => storedMusicState.title || '');
   const [prompt, setPrompt] = useState(() => storedMusicState.prompt || '');
   const [style, setStyle] = useState(() => storedMusicState.style || '');
@@ -889,7 +890,11 @@ export function MusicPage({ styles, voices = [], uploadedFiles = [], assets = []
     masterPackageText, abVariants
   ]);
   useEffect(() => {
-    if (!draft) return;
+    // Ein übernommener Draft ist eine explizite Navigation. Dieselbe Objekt-
+    // Instanz darf anschließend niemals erneut in ein gerade bearbeitetes Feld
+    // geschrieben werden.
+    if (!draft || appliedDraftRef.current === draft) return;
+    appliedDraftRef.current = draft;
     const isInstrumentalDraft = Boolean(draft.instrumental) || ['instrumental', 'instrumental_blueprint', 'blueprint', 'sound_blueprint'].includes(String(draft.work_mode || '').toLowerCase().replace('-', '_'));
     if (draft.title) setTitle(draft.title);
     if (draft.prompt) setPrompt(draft.prompt);

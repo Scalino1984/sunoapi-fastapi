@@ -55,8 +55,12 @@ export function ProfileMenu({ user, voices = [], uploadedFiles = [], onUserUpdat
   const [singerSkillLevel, setSingerSkillLevel] = useState('beginner');
   const [saving, setSaving] = useState(false);
   const menuRef = useRef(null);
+  const nicknameInputRef = useRef(null);
 
   useEffect(() => {
+    // Eine externe User-Aktualisierung darf keine gerade laufende Eingabe
+    // überschreiben oder den Cursor ans Ende setzen.
+    if (typeof document !== 'undefined' && document.activeElement === nicknameInputRef.current) return;
     setNickname(user?.nickname || '');
   }, [user?.nickname]);
 
@@ -295,7 +299,7 @@ export function ProfileMenu({ user, voices = [], uploadedFiles = [], onUserUpdat
 
           <form className="profile-form" onSubmit={saveProfile}>
             <label>{t('profile.nickname', 'Spitzname')}
-              <input value={nickname} onChange={(event) => setNickname(event.target.value)} placeholder={t('profile.nicknamePlaceholder', 'z. B. Scalino')} maxLength={120} />
+              <input ref={nicknameInputRef} value={nickname} onChange={(event) => setNickname(event.target.value)} placeholder={t('profile.nicknamePlaceholder', 'z. B. Scalino')} maxLength={120} />
             </label>
             <button className="primary" type="submit" disabled={saving}><Save size={15} /> {t('profile.saveProfile', 'Profil speichern')}</button>
           </form>

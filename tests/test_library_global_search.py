@@ -30,3 +30,21 @@ def test_global_search_matches_normalized_tags_and_paginates(isolated_db_session
     assert result["styles"]["total"] == 1
     assert result["playlists"]["total"] == 1
     assert result["assets"]["page_size"] == 1
+
+
+def test_global_search_matches_title_only_stored_in_original_candidate(isolated_db_session):
+    db = isolated_db_session
+    db.add(AudioAsset(
+        # Materialisierte Altbestände können keinen direkten asset.title haben;
+        # die sichtbare Library-Bezeichnung kommt dann aus candidate.title.
+        title=None,
+        source_url="https://cdn.example.test/di-clock-a-run.mp3",
+        status="remote",
+        metadata_json={"candidate": {"title": "Di Clock A Run"}},
+    ))
+    db.commit()
+
+    result = search_library_content(q="Di Clock A Run", page=1, page_size=25, db=db)
+
+    assert result["assets"]["total"] == 1
+    assert result["assets"]["items"][0]["title"] == "Di Clock A Run"

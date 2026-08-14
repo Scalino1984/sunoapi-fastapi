@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { ArrowLeft, ArrowRight, ChevronDown, ChevronRight, Clock3, Copy, Download, Edit3, ExternalLink, FileText, Film, Filter, Headphones, ListMusic, Maximize2, Minimize2, MoreHorizontal, Pause, Play, Plus, Scissors, Star, Tag, ThumbsUp, Trash2, ZoomIn, ZoomOut } from 'lucide-react';
 import { api } from '../api/client.js';
@@ -88,6 +88,14 @@ function ResponsiveLabel({ full, short }) {
 function UnplayedIndicator({ asset, className = '' }) {
   if (asset?.has_been_played !== false) return null;
   return <span className={`unplayed-indicator ${className}`.trim()} title="Noch nicht abgespielt" role="img" aria-label="Noch nicht abgespielt" />;
+}
+
+// This component deliberately lives at module scope. LibraryPage uses render
+// helpers for its large, stateful UI, but live audio progress still needs a
+// real React component to own its hook without remounting text editors.
+function LiveAudioProgressRenderer({ assetId, currentTime, isPlaying, children }) {
+  const liveAudio = useLiveAudioProgress(assetId, currentTime, isPlaying);
+  return children(liveAudio);
 }
 
 
@@ -815,11 +823,17 @@ function normalizeSrtSegment(segment, index = 0) {
   const start = Math.max(0, Number(segment?.start ?? 0));
   const rawEnd = Number(segment?.end ?? start + 2);
   const end = Math.max(start + 0.25, Number.isFinite(rawEnd) ? rawEnd : start + 2);
+  // Editorwerte bleiben bytegenau. trim() während onChange würde Leerzeichen
+  // am Cursor entfernen und damit die Textauswahl unerwartet verschieben.
+  const text = String(segment?.text ?? '');
   return {
+    // Der Schlüssel wird beim ersten Einlesen erzeugt und bei jeder Bearbeitung
+    // mitgenommen. Index-Keys würden beim Einfügen/Löschen Textareas remounten.
+    key: String(segment?.key || segment?.id || `srt-${index}-${start.toFixed(3)}-${end.toFixed(3)}-${text}`),
     index: index + 1,
     start: Number(start.toFixed(3)),
     end: Number(end.toFixed(3)),
-    text: String(segment?.text || '').trim()
+    text
   };
 }
 
@@ -902,6 +916,7 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
   const [openAudioMenuPosition, setOpenAudioMenuPosition] = useState(null);
   const audioMenuScrollRef = useRef({ key: '', scrollTop: 0 });
   const scrollRestoreTimerRef = useRef(null);
+  const libraryScrollAnchorRef = useRef(null);
   const suppressRouteDetailOpenRef = useRef(false);
   const localDetailOpenGuardRef = useRef({ projectId: '', route: '', until: 0 });
   const detailScrollInteractionUntilRef = useRef(0);
@@ -1156,6 +1171,38 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
   const nextProject = activeProjectIndex >= 0 && activeProjectIndex < navigationProjects.length - 1 ? navigationProjects[activeProjectIndex + 1] : null;
   const srtLiveColorOption = srtLiveColorOptions.find((item) => item.key === srtLiveColor) || srtLiveColorOptions[0];
   const srtLiveColorStyle = { '--srt-live-color': srtLiveColorOption.value };
+
+  // Server-Polling darf die Liste aktualisieren, aber nie die aktuell sichtbare
+  // Zeile verschieben. Der Anker ist bewusst eine Asset-ID mit Pixel-Offset
+  // statt einer nackten scrollY-Position: neue/entfernte Einträge oberhalb der
+  // Ansicht werden so korrekt ausgeglichen.
+  useLayoutEffect(() => {
+    const anchor = libraryScrollAnchorRef.current;
+    if (anchor && typeof window !== 'undefined') {
+      const row = Array.from(document.querySelectorAll('[data-react-asset-row]'))
+        .find((node) => String(node.dataset.reactAssetRow || '') === anchor.assetId);
+      if (row) {
+        const delta = row.getBoundingClientRect().top - anchor.offset;
+        if (Math.abs(delta) > 1) window.scrollBy({ top: delta, left: 0, behavior: 'auto' });
+      }
+    }
+    libraryScrollAnchorRef.current = null;
+
+    return () => {
+      if (typeof window === 'undefined') return;
+      const rows = Array.from(document.querySelectorAll('[data-react-asset-row]'));
+      const visibleRow = rows.find((node) => {
+        const rect = node.getBoundingClientRect();
+        return rect.bottom > 0 && rect.top < window.innerHeight;
+      });
+      if (visibleRow) {
+        libraryScrollAnchorRef.current = {
+          assetId: String(visibleRow.dataset.reactAssetRow || ''),
+          offset: visibleRow.getBoundingClientRect().top,
+        };
+      }
+    };
+  }, [effectiveAssets, libraryViewMode, libraryGalleryMode, libraryFlatListMode]);
 
   function windowScrollSnapshot() {
     if (typeof window === 'undefined') return null;
@@ -3127,16 +3174,17 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
     const editorOpen = String(srtEditorAssetId || '') === String(asset.id);
     const rawOpen = srtRawOpenIds.has(asset.id);
     const segments = draftSegmentsForAsset(asset);
-    const liveAudio = useLiveAudioProgress(asset.id, playbackState?.currentTime || 0, playbackState?.isPlaying);
-    const liveLine = liveSrtLineForAsset(asset);
-    const liveSegments = srtSegmentsFromState(state);
-    const liveTime = liveAudio.hasLiveTick && isCurrentAsset(asset) ? liveAudio.currentTime : playbackState?.currentTime || 0;
-    const visibleSegment = isCurrentAsset(asset)
-      ? (liveAudio.hasLiveTick ? findActiveSrtSegment(liveSegments, liveTime) : liveLine || findActiveSrtSegment(liveSegments, liveTime))
-      : null;
-    const visibleText = String(visibleSegment?.text || '').trim();
     return (
-      <div className="meta-card wide srt-card">
+      <LiveAudioProgressRenderer assetId={asset.id} currentTime={playbackState?.currentTime || 0} isPlaying={playbackState?.isPlaying}>
+        {(liveAudio) => {
+          const liveLine = liveSrtLineForAsset(asset);
+          const liveSegments = srtSegmentsFromState(state);
+          const liveTime = liveAudio.hasLiveTick && isCurrentAsset(asset) ? liveAudio.currentTime : playbackState?.currentTime || 0;
+          const visibleSegment = isCurrentAsset(asset)
+            ? (liveAudio.hasLiveTick ? findActiveSrtSegment(liveSegments, liveTime) : liveLine || findActiveSrtSegment(liveSegments, liveTime))
+            : null;
+          const visibleText = String(visibleSegment?.text || '').trim();
+          return <div className="meta-card wide srt-card">
         <div className="row between align-start">
           <div>
             <h4>{t('library.srt.title', 'SRT-Untertitel')}</h4>
@@ -3156,7 +3204,7 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
           <button type="button" onClick={() => openSrtAssistant(asset)}>{t('globalAi.help', 'KI-Hilfe')}</button>
           {hasSrt && <a className="button" href={api.archive.srtDownloadUrl(asset.id)}><Download size={14} /> {t('library.srt.file', 'Datei')}</a>}
           {hasHalfSrt && <a className="button" href={api.archive.srtHalfDownloadUrl(asset.id)}><Download size={14} /> {t('library.srt.halfFile', 'Half-Datei')}</a>}
-          {hasSrt && <SrtLiveColorSelect compact />}
+          {hasSrt && SrtLiveColorSelect({ compact: true })}
         </div>
         {hasSrt && (
           <div className={`srt-live-container ${isCurrentAsset(asset) ? 'is-live' : ''}`} style={srtLiveColorStyle}>
@@ -3189,7 +3237,9 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
             {rawOpen && <pre className="large-pre srt-preview keyboard-scroll-region">{state.srt_text}</pre>}
           </div>
         )}
-      </div>
+          </div>;
+        }}
+      </LiveAudioProgressRenderer>
     );
   }
 
@@ -3201,17 +3251,18 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
     const hasSrt = hasAssetSrt(asset, srtByAsset);
     const hasHalfSrt = hasAssetHalfSrt(asset, srtByAsset);
     const segments = draftSegmentsForAsset(asset);
-    const liveAudio = useLiveAudioProgress(asset.id, playbackState?.currentTime || 0, playbackState?.isPlaying);
-    const liveLine = liveSrtLineForAsset(asset);
-    const liveSegments = srtSegmentsFromState(state);
-    const liveTime = liveAudio.hasLiveTick && isCurrentAsset(asset) ? liveAudio.currentTime : playbackState?.currentTime || 0;
-    const visibleSegment = isCurrentAsset(asset)
-      ? (liveAudio.hasLiveTick ? findActiveSrtSegment(liveSegments, liveTime) : liveLine || findActiveSrtSegment(liveSegments, liveTime))
-      : null;
-    const visibleText = String(visibleSegment?.text || '').trim();
     const rawOpen = srtRawOpenIds.has(asset.id);
     return (
-      <Modal
+      <LiveAudioProgressRenderer assetId={asset.id} currentTime={playbackState?.currentTime || 0} isPlaying={playbackState?.isPlaying}>
+        {(liveAudio) => {
+          const liveLine = liveSrtLineForAsset(asset);
+          const liveSegments = srtSegmentsFromState(state);
+          const liveTime = liveAudio.hasLiveTick && isCurrentAsset(asset) ? liveAudio.currentTime : playbackState?.currentTime || 0;
+          const visibleSegment = isCurrentAsset(asset)
+            ? (liveAudio.hasLiveTick ? findActiveSrtSegment(liveSegments, liveTime) : liveLine || findActiveSrtSegment(liveSegments, liveTime))
+            : null;
+          const visibleText = String(visibleSegment?.text || '').trim();
+          return <Modal
         open={Boolean(asset)}
         title={t('library.srt.editorTitle', 'SRT-Editor: {{title}}', { title: pickTitle(asset) })}
         onClose={() => setSrtEditorOpen(asset.id, false)}
@@ -3230,7 +3281,7 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
               <button type="button" onClick={() => addSrtSegment(asset, null, playbackState?.currentTime || null)}><Plus size={14} /> {t('library.srt.atCurrentTime', 'Bei aktueller Zeit')}</button>
               <button type="button" onClick={() => resetSrtEditor(asset)}>{t('common.reset', 'Zurücksetzen')}</button>
               <button type="button" onClick={() => openSrtAssistant(asset)}>{t('globalAi.help', 'KI-Hilfe')}</button>
-              <SrtLiveColorSelect compact />
+              {SrtLiveColorSelect({ compact: true })}
               <button className="primary" type="button" onClick={() => saveSrtEditor(asset)} disabled={saving}>{saving ? t('common.saving', 'Speichert…') : t('common.save', 'Speichern')}</button>
             </div>
           </div>
@@ -3288,7 +3339,7 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
                   {segments.map((segment, index) => {
                     const rowActive = isCurrentAsset(asset) && Number(playbackState?.currentTime || 0) >= segment.start && Number(playbackState?.currentTime || 0) < segment.end;
                     return (
-                      <div className={`srt-editor-row ${rowActive ? 'is-active' : ''}`} key={`${asset.id}-${index}`}>
+                      <div className={`srt-editor-row ${rowActive ? 'is-active' : ''}`} key={`${asset.id}-${segment.key}`}>
                         <span className="srt-editor-index">{index + 1}</span>
                         <label>{t('library.srt.start', 'Start')}<input type="number" min="0" step="0.05" value={segment.start} onChange={(event) => updateSrtDraftSegment(asset.id, index, { start: event.target.value })} /></label>
                         <label>{t('library.srt.end', 'Ende')}<input type="number" min="0" step="0.05" value={segment.end} onChange={(event) => updateSrtDraftSegment(asset.id, index, { end: event.target.value })} /></label>
@@ -3309,7 +3360,9 @@ export function LibraryPage({ assets, loadError = '', voices = [], playlists = [
             </section>
           </div>
         </div>
-      </Modal>
+          </Modal>;
+        }}
+      </LiveAudioProgressRenderer>
     );
   }
 
@@ -4779,16 +4832,16 @@ ${generationOptionsText(asset)}`,
           >{t('library.details', 'Details')}</button>
           <UnplayedIndicator asset={asset} className="gallery-unplayed-indicator" />
           <div className="gallery-audio-menu-anchor">
-            <AudioActionMenu asset={asset} compact label="" playQueue={projectQueue} playIndex={queueIndex} project={project} />
+            {AudioActionMenu({ asset, compact: true, label: '', playQueue: projectQueue, playIndex: queueIndex, project })}
           </div>
         </div>
         <div className="gallery-tile-caption">
-          <InlineRenameTitle asset={asset} title={pickTitle(asset)} onOpen={() => openGalleryAssetDetails(project, asset)} />
+          {InlineRenameTitle({ asset, title: pickTitle(asset), onOpen: () => openGalleryAssetDetails(project, asset) })}
           <small>{label} · {formatDuration(asset.duration_seconds)}</small>
         </div>
         <div className="gallery-tile-actions">
           <button type="button" onClick={() => openWorkflowWizard(asset)}>Wizard</button>
-          <AudioActionMenu asset={asset} compact label="" dropUp playQueue={projectQueue} playIndex={queueIndex} project={project} />
+          {AudioActionMenu({ asset, compact: true, label: '', dropUp: true, playQueue: projectQueue, playIndex: queueIndex, project })}
         </div>
       </article>
     );
@@ -4820,13 +4873,13 @@ ${generationOptionsText(asset)}`,
           <span className="cover-play">{isPlayingAsset(asset) ? <Pause size={16} /> : <Play size={16} fill="currentColor" />}</span>
         </button>
         <div className="asset-flat-main">
-          <InlineRenameTitle
-            asset={asset}
-            title={pickTitle(asset)}
-            titleSuffix={variantIndex}
-            className="asset-flat-title"
-            onOpen={(event) => openGalleryAssetDetails(project, asset, event)}
-          />
+          {InlineRenameTitle({
+            asset,
+            title: pickTitle(asset),
+            titleSuffix: variantIndex,
+            className: 'asset-flat-title',
+            onOpen: (event) => openGalleryAssetDetails(project, asset, event),
+          })}
           {advanced ? (
             <>
               <div className="asset-flat-time">{t('common.time', 'Zeit')}: {formatDuration(asset.duration_seconds)}</div>
@@ -4853,7 +4906,7 @@ ${generationOptionsText(asset)}`,
           <button type="button" className={isAssetFavorite(asset) ? 'favorite-action is-favorite' : 'favorite-action'} onClick={() => toggleAssetFavorite(asset)} disabled={favoriteSavingIds.has(asset.id)} title={isAssetFavorite(asset) ? t('library.actions.removeFavorite', 'Favorit entfernen') : t('library.actions.saveFavorite', 'Als Favorit speichern')}>
             <ThumbsUp size={15} fill={isAssetFavorite(asset) ? 'currentColor' : 'none'} />
           </button>
-          <AudioActionMenu asset={asset} compact label="" dropUp playQueue={projectQueue} playIndex={queueIndex} project={project} />
+          {AudioActionMenu({ asset, compact: true, label: '', dropUp: true, playQueue: projectQueue, playIndex: queueIndex, project })}
         </div>
       </article>
     );
@@ -4862,7 +4915,7 @@ ${generationOptionsText(asset)}`,
   function LibraryFlatListView() {
     return (
       <div className={`asset-flat-list mode-${libraryFlatListMode} scale-${libraryFlatListScale}`}>
-        {pagedGalleryAssets.map((item) => <AssetFlatListRow key={`flat-row-${item.asset.id}`} item={item} />)}
+        {pagedGalleryAssets.map((item) => AssetFlatListRow({ item }))}
       </div>
     );
   }
@@ -4883,13 +4936,13 @@ ${generationOptionsText(asset)}`,
           <img src={displayCover || '/static/favicon.ico'} alt={`${project.title} Cover`} />
           <span className="cover-play">{projectPlaying ? <Pause size={18} /> : <Play size={18} fill="currentColor" />}</span>
         </button>
-        <InlineRenameTitle
-          asset={bestAsset}
-          title={project.title}
-          subtitle={t('library.variantsWithDuration', '{{count}} Varianten · {{duration}}', { count: project.assets.length, duration: formatDuration(project.duration) })}
-          className="gallery-card-title"
-          onOpen={(event) => openProjectDetails(project, event)}
-        />
+        {InlineRenameTitle({
+          asset: bestAsset,
+          title: project.title,
+          subtitle: t('library.variantsWithDuration', '{{count}} Varianten · {{duration}}', { count: project.assets.length, duration: formatDuration(project.duration) }),
+          className: 'gallery-card-title',
+          onOpen: (event) => openProjectDetails(project, event),
+        })}
         <p className="muted">{summarizeStyle(pickStyle(bestAsset), 90, t)}</p>
         <div className="project-gallery-asset-actions">
           {project.assets.map((asset, index) => (
@@ -4897,7 +4950,7 @@ ${generationOptionsText(asset)}`,
               <UnplayedIndicator asset={asset} className="pill-unplayed-indicator" />
               <span>{index + 1}/{project.assets.length || 1}</span>
               <small>{variantTitle(asset, project)}</small>
-              <AudioActionMenu asset={asset} compact label="" dropUp />
+              {AudioActionMenu({ asset, compact: true, label: '', dropUp: true })}
             </div>
           ))}
         </div>
@@ -5088,31 +5141,31 @@ ${generationOptionsText(asset)}`,
       readLibraryAiTags,
       voiceInfoForAsset,
       notify,
-      InlineRenameTitle,
-      GenerationOptionsCard,
-      PromptLyricsCard,
-      LibraryAiTagsCard,
-      AudioAiAnalysisCard,
-      StemCard,
-      VideoSummaryCard,
-      SrtCard,
-      AssetContentManager,
-      AudioActionMenu,
+      renderInlineRenameTitle: (props) => InlineRenameTitle(props),
+      renderGenerationOptionsCard: (props) => GenerationOptionsCard(props),
+      renderPromptLyricsCard: (props) => PromptLyricsCard(props),
+      renderLibraryAiTagsCard: (props) => LibraryAiTagsCard(props),
+      renderAudioAiAnalysisCard: (props) => AudioAiAnalysisCard(props),
+      renderStemCard: (props) => StemCard(props),
+      renderVideoSummaryCard: (props) => VideoSummaryCard(props),
+      renderSrtCard: (props) => SrtCard(props),
+      renderAssetContentManager: (props) => AssetContentManager(props),
+      renderAudioActionMenu: (props) => AudioActionMenu(props),
       t,
     };
     return (
       <>
         <LibrarySongDetails ctx={detailContext} />
-        <AssetWorkflowWizardModal asset={workflowWizardAsset} />
-        <ManualAudioImportModal />
+        {AssetWorkflowWizardModal({ asset: workflowWizardAsset })}
+        {ManualAudioImportModal()}
         {renderAiCoverModal()}
         {renderCoverReplaceModal()}
         {renderPictureViewerModal()}
-        <LyricsEditorModal />
-        <SrtEditorModal asset={srtEditorAsset} />
-        <StemPreviewModal asset={stemPreviewAsset} />
-        <AudioAiAnalysisReportModal />
-        <RenameTitleModal />
+        {LyricsEditorModal()}
+        {SrtEditorModal({ asset: srtEditorAsset })}
+        {StemPreviewModal({ asset: stemPreviewAsset })}
+        {AudioAiAnalysisReportModal()}
+        {RenameTitleModal()}
         <Modal open={Boolean(playlistAsset)} title={t('library.playlist.addTitle', 'Zu Playlist hinzufügen')} onClose={() => setPlaylistAsset(null)}>
           {playlistAsset && <div className="stack">
             <p className="muted">{t('library.playlist.track', 'Track')}: <strong>{pickTitle(playlistAsset)}</strong></p>
@@ -5134,8 +5187,8 @@ ${generationOptionsText(asset)}`,
             <pre className="large-pre keyboard-scroll-region" onWheel={(event) => event.stopPropagation()} onTouchMove={(event) => event.stopPropagation()}>{timestampedLyricsText(timestampAsset) || t('common.noData', 'Noch keine Daten vorhanden.')}</pre>
           </div>}
         </Modal>
-        <AudioOperationModal />
-        <VideoPlayerModal />
+        {AudioOperationModal()}
+        {VideoPlayerModal()}
         <ActionModal
           asset={actionAsset}
           onClose={() => setActionAsset(null)}
@@ -5231,13 +5284,13 @@ ${generationOptionsText(asset)}`,
                   title={t('library.openSongDetails', 'Songdetails öffnen')}
                 >
                   <div className="library-song-head">
-                    <InlineRenameTitle
-                      asset={project.assets[0]}
-                      title={project.title}
-                      subtitle={t('library.projectStatsLine', '{{variants}} Varianten · {{operations}} Vorgänge · {{playable}} abspielbar', { variants: project.assets.length, operations: project.operations.length, playable: project.playable.length })}
-                      className="title-button library-song-title"
-                      onOpen={(event) => openProjectDetails(project, event)}
-                    />
+                    {InlineRenameTitle({
+                      asset: project.assets[0],
+                      title: project.title,
+                      subtitle: t('library.projectStatsLine', '{{variants}} Varianten · {{operations}} Vorgänge · {{playable}} abspielbar', { variants: project.assets.length, operations: project.operations.length, playable: project.playable.length }),
+                      className: 'title-button library-song-title',
+                      onOpen: (event) => openProjectDetails(project, event),
+                    })}
                     <div className="project-actions library-song-status" aria-label={t('library.projectStatus', 'Projektstatus')}>
                       <div className="project-badges library-song-badges">
                         <span className="status cached"><ListMusic size={14} /> {formatDuration(project.duration)}</span>
@@ -5322,7 +5375,7 @@ ${generationOptionsText(asset)}`,
                             <button type="button" className={isAssetFavorite(asset) ? 'library-variant-row-favorite is-favorite' : 'library-variant-row-favorite'} onClick={(event) => { event.stopPropagation(); toggleAssetFavorite(asset); }} disabled={favoriteSavingIds.has(asset.id)} title={isAssetFavorite(asset) ? t('library.actions.removeFavorite', 'Favorit entfernen') : t('library.actions.saveFavorite', 'Als Favorit speichern')}>
                               <ThumbsUp size={13} fill={isAssetFavorite(asset) ? 'currentColor' : 'none'} />
                             </button>
-                            <AudioActionMenu asset={asset} compact label="" dropUp playQueue={projectQueue} playIndex={index} project={project} />
+                            {AudioActionMenu({ asset, compact: true, label: '', dropUp: true, playQueue: projectQueue, playIndex: index, project })}
                           </span>
                         </div>
                       );
@@ -5336,16 +5389,16 @@ ${generationOptionsText(asset)}`,
       </div>
       )}
       {LibraryPaginationControls()}
-      <AssetWorkflowWizardModal asset={workflowWizardAsset} />
-      <ManualAudioImportModal />
+      {AssetWorkflowWizardModal({ asset: workflowWizardAsset })}
+      {ManualAudioImportModal()}
       {renderAiCoverModal()}
       {renderCoverReplaceModal()}
       {renderPictureViewerModal()}
-      <LyricsEditorModal />
-      <SrtEditorModal asset={srtEditorAsset} />
-      <StemPreviewModal asset={stemPreviewAsset} />
-      <AudioAiAnalysisReportModal />
-      <RenameTitleModal />
+      {LyricsEditorModal()}
+      {SrtEditorModal({ asset: srtEditorAsset })}
+      {StemPreviewModal({ asset: stemPreviewAsset })}
+      {AudioAiAnalysisReportModal()}
+      {RenameTitleModal()}
       <Modal open={Boolean(playlistAsset)} title={t('library.playlist.addTitle', 'Zu Playlist hinzufügen')} onClose={() => setPlaylistAsset(null)}>
         {playlistAsset && <div className="stack">
           <p className="muted">{t('library.playlist.track', 'Track')}: <strong>{pickTitle(playlistAsset)}</strong></p>
@@ -5376,8 +5429,8 @@ ${generationOptionsText(asset)}`,
           <pre className="large-pre keyboard-scroll-region" onWheel={(event) => event.stopPropagation()} onTouchMove={(event) => event.stopPropagation()}>{timestampedLyricsText(timestampAsset) || t('common.noData', 'Noch keine Daten vorhanden.')}</pre>
         </div>}
       </Modal>
-      <AudioOperationModal />
-      <VideoPlayerModal />
+      {AudioOperationModal()}
+      {VideoPlayerModal()}
       <ActionModal
         asset={actionAsset}
         onClose={() => setActionAsset(null)}

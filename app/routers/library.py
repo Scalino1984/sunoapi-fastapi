@@ -141,19 +141,26 @@ def search_library_content(
     asset_items: list[dict[str, Any]] = []
     for asset in assets:
         metadata = asset.metadata_json if isinstance(asset.metadata_json, dict) else {}
+        candidate = metadata.get("candidate") if isinstance(metadata.get("candidate"), dict) else {}
+        request = metadata.get("request_payload") if isinstance(metadata.get("request_payload"), dict) else {}
         ai_tags = metadata.get("ai_tags") if isinstance(metadata.get("ai_tags"), dict) else {}
         project = projects.get(asset.project_id)
         song = songs.get(asset.song_id)
         value = " ".join(str(item or "") for item in [
             asset.title, asset.display_title, asset.filename, asset.audio_id, asset.suno_task_id,
             asset.prompt, asset.lyrics, asset.style, asset.operation_type,
+            # Materialisierte und importierte Songs führen ihren sichtbaren
+            # Titel häufig ausschließlich in der Original-Candidate-Nutzlast.
+            # Die Header-Suche muss denselben Titelraum wie die Library nutzen.
+            candidate.get("title"), candidate.get("name"), request.get("title"),
+            metadata.get("title"), metadata.get("name"),
             project.title if project else "", song.title if song else "", ai_tags.get("language"),
             *(ai_tags.get("tags") or []), *(ai_tags.get("moods") or []), *(ai_tags.get("genres") or []),
         ])
         if _search_matches(value, tokens):
             asset_items.append({
                 "id": asset.id,
-                "title": asset.display_title or asset.title or (song.title if song else "") or asset.filename or f"Audio {asset.id}",
+                "title": asset.display_title or asset.title or candidate.get("title") or request.get("title") or (song.title if song else "") or asset.filename or f"Audio {asset.id}",
                 "style": asset.style,
                 "operation_label": asset.operation_label,
             })

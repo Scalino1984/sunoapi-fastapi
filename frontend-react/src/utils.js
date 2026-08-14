@@ -431,9 +431,17 @@ export function isPlayable(asset) {
 }
 
 export function assetSearchText(asset) {
+  const metadata = asset?.metadata_json && typeof asset.metadata_json === 'object' ? asset.metadata_json : {};
+  const candidate = metadataCandidate(asset);
+  const request = metadataRequestPayload(asset);
   const aiTags = asset?.metadata_json?.ai_tags && typeof asset.metadata_json.ai_tags === 'object' ? asset.metadata_json.ai_tags : {};
   return [
-    pickTitle(asset), pickStyle(asset), pickPrompt(asset), pickLyrics(asset), asset.audio_id,
+    // Alle Titelquellen, die in der Library sichtbar sein können, gehören auch
+    // in die Suche. Besonders ältere/importierte Assets tragen den Titel nur
+    // in candidate.title oder der Projekt-/Song-Zuordnung.
+    pickTitle(asset), asset.project_display_title, asset.project_title, asset.song_title, asset?.song?.title,
+    candidate.title, candidate.name, request.title, metadata.title, metadata.name,
+    pickStyle(asset), pickPrompt(asset), pickLyrics(asset), asset.audio_id,
     asset.suno_task_id, asset.task_id, asset.filename, asset.source_url, asset.operation_type, asset.task_type, asset.operation_label,
     ...(Array.isArray(aiTags.tags) ? aiTags.tags : []),
     ...(Array.isArray(aiTags.moods) ? aiTags.moods : []),
