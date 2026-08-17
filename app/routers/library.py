@@ -138,7 +138,11 @@ def search_library_content(
     song_ids = {asset.song_id for asset in assets if asset.song_id}
     projects = {item.id: item for item in db.query(AudioProject).filter(AudioProject.id.in_(project_ids)).all()} if project_ids else {}
     songs = {item.id: item for item in db.query(Song).filter(Song.id.in_(song_ids)).all()} if song_ids else {}
-    asset_items: list[dict[str, Any]] = []
+    # Titel-Übereinstimmungen müssen vor Volltexttreffern erscheinen. Ohne
+    # Ranking können vier kurze Suchwörter zufällig in Lyrics/Style anderer
+    # Songs vorkommen und einen exakt passenden Song aus der ersten Seite
+    # verdrängen.
+    ranked_asset_items: list[tuple[int, int, dict[str, Any]]] = []
     for asset in assets:
         metadata = asset.metadata_json if isinstance(asset.metadata_json, dict) else {}
         candidate = metadata.get("candidate") if isinstance(metadata.get("candidate"), dict) else {}
@@ -146,8 +150,13 @@ def search_library_content(
         ai_tags = metadata.get("ai_tags") if isinstance(metadata.get("ai_tags"), dict) else {}
         project = projects.get(asset.project_id)
         song = songs.get(asset.song_id)
+        title_value = " ".join(str(item or "") for item in [
+            asset.display_title, asset.title, candidate.get("title"), candidate.get("name"),
+            request.get("title"), metadata.get("title"), metadata.get("name"),
+            project.title if project else "", song.title if song else "",
+        ])
         value = " ".join(str(item or "") for item in [
-            asset.title, asset.display_title, asset.filename, asset.audio_id, asset.suno_task_id,
+            title_value, asset.filename, asset.audio_id, asset.suno_task_id,
             asset.prompt, asset.lyrics, asset.style, asset.operation_type,
             # Materialisierte und importierte Songs führen ihren sichtbaren
             # Titel häufig ausschließlich in der Original-Candidate-Nutzlast.
@@ -158,12 +167,15 @@ def search_library_content(
             *(ai_tags.get("tags") or []), *(ai_tags.get("moods") or []), *(ai_tags.get("genres") or []),
         ])
         if _search_matches(value, tokens):
-            asset_items.append({
+            ranked_asset_items.append((0 if _search_matches(title_value, tokens) else 1, -int(asset.id or 0), {
                 "id": asset.id,
                 "title": asset.display_title or asset.title or candidate.get("title") or request.get("title") or (song.title if song else "") or asset.filename or f"Audio {asset.id}",
                 "style": asset.style,
                 "operation_label": asset.operation_label,
-            })
+            }))
+
+    ranked_asset_items.sort(key=lambda row: (row[0], row[1]))
+    asset_items = [item for _, _, item in ranked_asset_items]
 
     lyrics = db.query(LyricDraft).filter(LyricDraft.is_deleted.is_(False)).order_by(LyricDraft.updated_at.desc(), LyricDraft.id.desc()).all()
     lyric_items = [{"id": item.id, "title": item.title, "content": item.content, "tags": item.tags}

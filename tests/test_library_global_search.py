@@ -34,17 +34,26 @@ def test_global_search_matches_normalized_tags_and_paginates(isolated_db_session
 
 def test_global_search_matches_title_only_stored_in_original_candidate(isolated_db_session):
     db = isolated_db_session
-    db.add(AudioAsset(
+    title_match = AudioAsset(
         # Materialisierte Altbestände können keinen direkten asset.title haben;
         # die sichtbare Library-Bezeichnung kommt dann aus candidate.title.
         title=None,
         source_url="https://cdn.example.test/di-clock-a-run.mp3",
         status="remote",
         metadata_json={"candidate": {"title": "Di Clock A Run"}},
-    ))
+    )
+    # Jeder Suchbegriff kommt im Volltext vor, aber der Titel passt nicht.
+    # Der exakte Titel muss dennoch in der Ergebnisliste vor diesem Treffer stehen.
+    fulltext_only_match = AudioAsset(
+        title="Mi Cyaan Breathe",
+        source_url="https://cdn.example.test/other-song.mp3",
+        status="remote",
+        metadata_json={"candidate": {"prompt": "di old clock makes a runner run"}},
+    )
+    db.add_all([title_match, fulltext_only_match])
     db.commit()
 
     result = search_library_content(q="Di Clock A Run", page=1, page_size=25, db=db)
 
-    assert result["assets"]["total"] == 1
+    assert result["assets"]["total"] == 2
     assert result["assets"]["items"][0]["title"] == "Di Clock A Run"

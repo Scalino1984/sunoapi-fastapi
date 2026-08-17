@@ -87,6 +87,21 @@ def test_rc3_split_tokens_match_without_hardcode() -> None:
     assert occurrences[0]["end_index"] == 7
 
 
+def test_umlauts_remain_single_tokens_and_are_written_to_srt() -> None:
+    """German visible text must never be split by the internal matcher."""
+    lyrics = "Für Öl, Äpfel und Grüße – süß."
+    parsed = srt._script_parse_lyrics_text(lyrics)
+    assert len(parsed) == 1
+    assert parsed[0].match_tokens == ["für", "öl", "äpfel", "und", "grüße", "süß"]
+
+    asr = _asr_from_words(_timed_words("für", "öl", "äpfel", "und", "grüße", "süß", start=2.0))
+    bundle = srt.align_lyrics_to_timeline_bundle(lyrics, asr, duration_seconds=8.0)
+    exported = srt.segments_to_srt(bundle["segments"])
+
+    assert bundle["segments"][0]["matched"] is True
+    assert "Für Öl, Äpfel und Grüße – süß." in exported
+
+
 def test_rc4_half_srt_uses_exact_asr_word_times() -> None:
     lyrics = "Ich komm aus Rauenberg der Huegel ruft"
     asr = _asr_from_words([

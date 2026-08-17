@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Bot, Check, Copy, FileText, Maximize2, Minimize2, Redo2, Save, Sparkles, Trash2, Undo2 } from 'lucide-react';
 import { Modal } from '../components/Modal.jsx';
 import { api } from '../api/client.js';
@@ -75,6 +75,31 @@ function getStudioModes(t) {
 function normalizeStudioMode(value) {
   const normalized = String(value || '').trim().toLowerCase().replace('-', '_');
   return ['instrumental', 'instrumental_blueprint', 'blueprint', 'sound_blueprint', 'sounds'].includes(normalized) ? 'instrumental_blueprint' : 'lyrics';
+}
+
+// This is deliberately separate from `assistant-lyrics-state`: the latter is
+// assistant context, while this is the user-facing recovery point for fields
+// which have not yet been persisted to the Library/AI session.
+const LYRICS_STUDIO_RECOVERY_KEY = 'react-lyrics-studio-recovery';
+
+function readLyricsStudioRecovery() {
+  try {
+    const stored = JSON.parse(localStorage.getItem(LYRICS_STUDIO_RECOVERY_KEY) || 'null');
+    if (!stored || typeof stored !== 'object') return null;
+    return {
+      canvas: typeof stored.canvas === 'string' ? stored.canvas : '',
+      message: typeof stored.message === 'string' ? stored.message : '',
+      sessionTitle: typeof stored.sessionTitle === 'string' ? stored.sessionTitle : '',
+      sessionId: stored.sessionId || null,
+      draftId: stored.draftId || null,
+      profileId: stored.profileId || '',
+      provider: typeof stored.provider === 'string' ? stored.provider : '',
+      model: typeof stored.model === 'string' ? stored.model : '',
+      studioMode: normalizeStudioMode(stored.studioMode),
+    };
+  } catch {
+    return null;
+  }
 }
 
 const SECTION_TYPE_LABELS = {
@@ -247,19 +272,23 @@ function CanvasSectionMap({ sections, onJump, modeConfig, t }) {
 
 export function LyricsStudioPage({ notify, onRefresh, useForMusic, lyrics = [], assets = [] }) {
   const { t } = useI18n();
+  // Read exactly once per page mount. A later server/config response must not
+  // replace a newer locally typed canvas during this hydration.
+  const recoveryRef = useRef(readLyricsStudioRecovery());
+  const recovery = recoveryRef.current;
   const [sessions, setSessions] = useState([]);
   const [profiles, setProfiles] = useState([]);
   const [aiConfig, setAiConfig] = useState(null);
   const [vocalTags, setVocalTags] = useState([]);
   const [session, setSession] = useState(null);
-  const [canvas, setCanvas] = useState('');
-  const [message, setMessage] = useState('');
-  const [sessionTitle, setSessionTitle] = useState(t('lyricsStudio.newSession', 'Neue Session'));
-  const [studioMode, setStudioMode] = useState(() => normalizeStudioMode(localStorage.getItem('react-lyrics-studio-mode') || 'lyrics'));
-  const [draftId, setDraftId] = useState(null);
-  const [provider, setProvider] = useState('openai');
-  const [model, setModel] = useState('GPT-5.4-mini');
-  const [profileId, setProfileId] = useState('');
+  const [canvas, setCanvas] = useState(() => recovery?.canvas || '');
+  const [message, setMessage] = useState(() => recovery?.message || '');
+  const [sessionTitle, setSessionTitle] = useState(() => recovery?.sessionTitle || t('lyricsStudio.newSession', 'Neue Session'));
+  const [studioMode, setStudioMode] = useState(() => normalizeStudioMode(recovery?.studioMode || localStorage.getItem('react-lyrics-studio-mode') || 'lyrics'));
+  const [draftId, setDraftId] = useState(() => recovery?.draftId || null);
+  const [provider, setProvider] = useState(() => recovery?.provider || 'openai');
+  const [model, setModel] = useState(() => recovery?.model || 'GPT-5.4-mini');
+  const [profileId, setProfileId] = useState(() => recovery?.profileId || '');
   const [loading, setLoading] = useState(false);
   const [assistantPreview, setAssistantPreview] = useState(null);
   const [sunoLyricsLoading, setSunoLyricsLoading] = useState(false);
@@ -305,11 +334,21 @@ export function LyricsStudioPage({ notify, onRefresh, useForMusic, lyrics = [], 
   useEffect(() => localStorage.setItem('react-lyrics-chat-modal-size', JSON.stringify(chatModalSize)), [chatModalSize]);
   useEffect(() => localStorage.setItem('react-lyrics-canvas-font-size', String(canvasFontSize)), [canvasFontSize]);
   useEffect(() => localStorage.setItem('react-lyrics-chat-font-size', String(chatFontSize)), [chatFontSize]);
-  useEffect(() => {
-    const payload = { canvas, sessionTitle, sessionId: session?.id || null, draftId, profileId, studioMode };
-    localStorage.setItem('assistant-lyrics-state', JSON.stringify(payload));
+  // Layout effect makes the update synchronous with the committed input. This
+  // covers an immediate click to another page, before this component unmounts.
+  useLayoutEffect(() => {
+    const payload = { canvas, message, sessionTitle, sessionId: session?.id || recovery?.sessionId || null, draftId, profileId, provider, model, studioMode };
+    try {
+      localStorage.setItem(LYRICS_STUDIO_RECOVERY_KEY, JSON.stringify(payload));
+      localStorage.setItem('assistant-lyrics-state', JSON.stringify(payload));
+    } catch {
+      // Storage may be disabled/quota-limited. Editing must remain usable.
+    }
     assistant.updatePageState?.('lyrics', payload);
-  }, [canvas, sessionTitle, session?.id, draftId, profileId, studioMode]);
+  // `assistant` intentionally does not belong in the dependency list: its
+  // page-state update changes the context identity and would retrigger this
+  // same persistence effect indefinitely.
+  }, [canvas, draftId, message, model, profileId, provider, recovery?.sessionId, session?.id, sessionTitle, studioMode]);
 
   useEffect(() => {
     async function handleSave() {
@@ -362,6 +401,19 @@ export function LyricsStudioPage({ notify, onRefresh, useForMusic, lyrics = [], 
       setModel(safeConfig.default_model);
     } else if (providerModels.length) {
       setModel(providerModels[0]);
+    }
+
+    // Reconnect to the last session for chat/undo support. The canvas remains
+    // local when present, so an older server copy can never overwrite a newer
+    // local edit that was made immediately before leaving the page.
+    if (recovery?.sessionId) {
+      try {
+        const restored = await api.ai.getSession(recovery.sessionId);
+        setSession(restored);
+        if (!recovery.canvas) setCanvas(restored.canvas_content || '');
+      } catch {
+        // A deleted session must not invalidate the locally recovered text.
+      }
     }
   }
 

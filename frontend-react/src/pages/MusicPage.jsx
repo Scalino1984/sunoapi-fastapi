@@ -4,7 +4,7 @@
 // Diese Werte werden in der DB fuer Songdetails/Library/Offline-Anzeige gespeichert.
 // Nicht auf interne snake_case-Namen zurueckbauen und nicht nur in buildAdvancedPayload()
 // pflegen; submit() ist der tatsaechliche Generate-Button-Pfad.
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { ArrowLeft, ArrowRight, CheckCircle2, Copy, Loader2, Music2, Redo2, RefreshCw, Search, Sparkles, Tag, Undo2, Wand2 } from 'lucide-react';
 import { api } from '../api/client.js';
 import { SectionHeader } from '../components/SectionHeader.jsx';
@@ -740,7 +740,7 @@ function StylePresetModal({ open, onClose, styles = [], builtinStyles = [], onAp
   );
 }
 
-export function MusicPage({ styles, voices = [], uploadedFiles = [], assets = [], draft, notify, onRefresh, onMusicStarted, onCheckStatus, taskRefreshState, initialWizard = false }) {
+export function MusicPage({ styles, voices = [], uploadedFiles = [], assets = [], draft, onDraftApplied, notify, onRefresh, onMusicStarted, onCheckStatus, taskRefreshState, initialWizard = false }) {
   const { t } = useI18n();
   const storedMusicState = useMemo(() => readStoredMusicPageState(), []);
   const appliedDraftRef = useRef(null);
@@ -819,7 +819,9 @@ export function MusicPage({ styles, voices = [], uploadedFiles = [], assets = []
 
   useEffect(() => { api.runtimeConfig().then(setRuntime).catch(() => setRuntime(null)); }, []);
   useEffect(() => { api.admin.aiSettings().then(setAdminRuntimeSettings).catch(() => setAdminRuntimeSettings(null)); }, []);
-  useEffect(() => {
+  // Layout-Effekt statt Effekt: Navigation unmittelbar nach einer Eingabe darf
+  // den letzten Text nicht vor dem Local-Storage-Write unmounten.
+  useLayoutEffect(() => {
     writeStoredMusicPageState({
       title,
       prompt,
@@ -923,7 +925,11 @@ export function MusicPage({ styles, voices = [], uploadedFiles = [], assets = []
     setWizard(!draft.forceAdvanced);
     setStep(draft.safeCheckRequested ? 4 : draft.forceAdvanced ? 0 : 1);
     if (draft.safeCheckRequested) setSafeCheckRequestedPending(true);
-  }, [draft]);
+    // Ein Draft ist ein einmaliger Übergabewert (z. B. „Reuse Prompt“), kein
+    // dauerhafter Sollzustand. Ohne Verbrauch würde er beim nächsten Öffnen
+    // von /music die zwischenzeitlich editierten Lyrics wieder überschreiben.
+    onDraftApplied?.();
+  }, [draft, onDraftApplied]);
   useEffect(() => {
     if (initialWizard) setWizard(true);
   }, [initialWizard]);

@@ -334,6 +334,8 @@ export default function App() {
   const pollingUntilRef = useRef(0);
   const lastStatusPollAtRef = useRef(0);
   const lastNotificationPollAtRef = useRef(Date.now());
+  const headerSearchOriginRef = useRef(null);
+  const headerSearchScrollRestoreRef = useRef(null);
 
   useEffect(() => {
     tasksRef.current = tasks;
@@ -565,6 +567,23 @@ export default function App() {
       setLibraryRouteTitle('');
     }
   }, [activeTab, libraryRouteTitle]);
+
+  useEffect(() => {
+    const restore = headerSearchScrollRestoreRef.current;
+    if (!restore || restore.tab !== activeTab || typeof window === 'undefined') return undefined;
+    headerSearchScrollRestoreRef.current = null;
+    const restoreScroll = () => {
+      const main = document.querySelector('.studio-main-content');
+      if (main && Number.isFinite(restore.mainScrollTop)) main.scrollTop = restore.mainScrollTop;
+      window.scrollTo({ left: restore.windowScrollX || 0, top: restore.windowScrollY || 0, behavior: 'auto' });
+    };
+    const frame = window.requestAnimationFrame(restoreScroll);
+    const timer = window.setTimeout(restoreScroll, 80);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.clearTimeout(timer);
+    };
+  }, [activeTab]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return undefined;
@@ -1398,6 +1417,43 @@ export default function App() {
     setSidebarMode((current) => current === 'open' ? 'compact' : current === 'compact' ? 'closed' : 'open');
   }
 
+  function rememberHeaderSearchOrigin() {
+    if (headerSearchOriginRef.current || typeof window === 'undefined') return;
+    const main = document.querySelector('.studio-main-content');
+    headerSearchOriginRef.current = {
+      tab: activeTab,
+      libraryRouteTitle,
+      windowScrollX: window.scrollX || 0,
+      windowScrollY: window.scrollY || 0,
+      mainScrollTop: main?.scrollTop || 0,
+    };
+  }
+
+  function handleHeaderSearchChange(value) {
+    const nextQuery = String(value || '');
+    const hasQuery = Boolean(nextQuery.trim());
+    setCommandQuery(nextQuery);
+
+    if (hasQuery) {
+      if (activeTab !== 'search') {
+        rememberHeaderSearchOrigin();
+        openMainTab('search');
+      }
+      return;
+    }
+
+    // Vollständig geleert: zurück zu genau der Seite, von der die Suche
+    // geöffnet wurde. Die gespeicherte Position macht die Library wieder zu
+    // derselben Liste statt zu einem Sprung an den Seitenanfang.
+    if (activeTab === 'search') {
+      const origin = headerSearchOriginRef.current || { tab: 'library', libraryRouteTitle: '', windowScrollX: 0, windowScrollY: 0, mainScrollTop: 0 };
+      headerSearchOriginRef.current = null;
+      headerSearchScrollRestoreRef.current = origin;
+      if (origin.tab === 'library') setLibraryRouteTitle(origin.libraryRouteTitle || '');
+      setActiveTab(origin.tab);
+    }
+  }
+
   function runCommand(rawQuery) {
     const query = String(rawQuery || '').trim();
     if (!query) return;
@@ -1479,6 +1535,10 @@ export default function App() {
     setActiveTab('music');
     notify(payload?.message || (payload?.operationMode ? 'Musik-Operation wurde vorbereitet.' : 'Prompt und Style wurden in Musik übernommen.'), 'success');
   }
+
+  const handleMusicDraftApplied = useCallback(() => {
+    setMusicDraft(null);
+  }, []);
 
   const handleLibraryOpenAssetHandled = useCallback(() => {
     setLibraryOpenAssetId(null);
@@ -1870,7 +1930,7 @@ export default function App() {
     if (activeTab === 'search') return <SearchResultsPage query={commandQuery} assets={assets} lyrics={lyrics} styles={styles} playlists={playlists} onNavigate={openMainTab} onOpenAsset={openSearchAsset} />;
     if (activeTab === 'library') return <LibraryPage assets={assets} loadError={libraryLoadError} voices={voices} playlists={playlists} onReload={refreshAll} onTaskStarted={handleBackgroundTaskStarted} onPlay={play} notify={notify} onUseLyric={useLyricForMusic} onReusePrompt={reusePromptForMusic} openAssetId={libraryOpenAssetId} openAssetRequestKey={libraryOpenRequestKey} onOpenAssetHandled={handleLibraryOpenAssetHandled} resetSignal={libraryResetSignal} onOpenDaw={openAssetInDaw} playbackState={stablePlaybackState} onToggleCurrentPlayback={toggleCurrentPlayer} onDetailTitleChange={handleLibraryDetailRouteChange} routeDetailSlug={libraryRouteDetailSlug} searchQuery={commandQuery} onTrashChanged={markTrashHasItems} />;
     if (activeTab === 'imports') return <ImportPage notify={notify} onReload={refreshAll} onOpenAsset={requestLibraryAssetOpen} />;
-    if (activeTab === 'music') return <MusicPage styles={styles} voices={voices} uploadedFiles={uploadedFiles} assets={assets} draft={musicDraft} notify={notify} onRefresh={refreshAll} onMusicStarted={handleMusicStarted} initialWizard={musicWizardSignal} taskRefreshState={taskRefreshState} onCheckStatus={() => refreshPendingAndReload({ manual: true })} />;
+    if (activeTab === 'music') return <MusicPage styles={styles} voices={voices} uploadedFiles={uploadedFiles} assets={assets} draft={musicDraft} onDraftApplied={handleMusicDraftApplied} notify={notify} onRefresh={refreshAll} onMusicStarted={handleMusicStarted} initialWizard={musicWizardSignal} taskRefreshState={taskRefreshState} onCheckStatus={() => refreshPendingAndReload({ manual: true })} />;
     if (activeTab === 'lyrics') return <LyricsStudioPage lyrics={lyrics} assets={assets} notify={notify} onRefresh={refreshAll} useForMusic={useLyricForMusic} />;
     if (activeTab === 'texts') return <LibraryTextPage lyrics={lyrics} notify={notify} onReload={refreshAll} useForMusic={useLyricForMusic} searchQuery={commandQuery} />;
     if (activeTab === 'playlists') return <PlaylistsPage playlists={playlists} assets={assets} notify={notify} onReload={refreshAll} onPlay={play} searchQuery={commandQuery} />;
@@ -1881,7 +1941,7 @@ export default function App() {
     if (activeTab === 'status') return <StatusPage notifications={notifications} tasks={tasks} onReload={refreshAll} onCheckStatus={() => refreshPendingAndReload({ manual: true })} taskRefreshState={taskRefreshState} onOpenNotification={openNotification} onOpenTaskDetails={openTaskDetails} notify={notify} />;
     if (activeTab === 'help') return <HelpPage onNavigate={openMainTab} notify={notify} />;
     return <SystemPage notify={notify} uploadedFiles={uploadedFiles} onRefresh={refreshAll} />;
-  }, [activeTab, assets, libraryLoadError, lyrics, styles, voices, uploadedFiles, playlists, musicDraft, currentPageNotifications, currentPageTasks, libraryOpenAssetId, dawOpenAssetId, libraryResetSignal, libraryRouteDetailSlug, commandQuery, musicWizardSignal, currentPageTaskRefreshState, stablePlaybackState, toggleCurrentPlayer, handleLibraryOpenAssetHandled, refreshAll, refreshPendingAndReload, handleMusicStarted, handleBackgroundTaskStarted, notify, requestLibraryAssetOpen, openSearchAsset, handleLibraryDetailRouteChange, libraryOpenRequestKey, markTrashHasItems]);
+  }, [activeTab, assets, libraryLoadError, lyrics, styles, voices, uploadedFiles, playlists, musicDraft, currentPageNotifications, currentPageTasks, libraryOpenAssetId, dawOpenAssetId, libraryResetSignal, libraryRouteDetailSlug, commandQuery, musicWizardSignal, currentPageTaskRefreshState, stablePlaybackState, toggleCurrentPlayer, handleLibraryOpenAssetHandled, refreshAll, refreshPendingAndReload, handleMusicStarted, handleBackgroundTaskStarted, handleMusicDraftApplied, notify, requestLibraryAssetOpen, openSearchAsset, handleLibraryDetailRouteChange, libraryOpenRequestKey, markTrashHasItems]);
 
   if (!authChecked) return <main className="loading">{t('app.loading', 'Lade Anwendung…')}</main>;
   if (!user) return <Login onLogin={setUser} />;
@@ -1926,7 +1986,7 @@ export default function App() {
 
           <form className={`studio-commandbar ${mobileSearchOpen ? 'is-open' : ''}`} onSubmit={(event) => { event.preventDefault(); runCommand(commandQuery); }}>
             <Search size={17} />
-            <input value={commandQuery} onChange={(event) => setCommandQuery(event.target.value)} placeholder={t('topbar.searchPlaceholder', 'Song, Task, Bereich oder Befehl suchen …')} />
+            <input value={commandQuery} onChange={(event) => handleHeaderSearchChange(event.target.value)} placeholder={t('topbar.searchPlaceholder', 'Song, Task, Bereich oder Befehl suchen …')} />
             <button className="commandbar-close" type="button" onClick={() => setMobileSearchOpen(false)} aria-label={t('topbar.closeSearch', 'Suche schließen')}><X size={15} /></button>
             <kbd>Enter</kbd>
           </form>

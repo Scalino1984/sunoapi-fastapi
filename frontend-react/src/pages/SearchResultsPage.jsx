@@ -29,11 +29,14 @@ function mergeSearchItems(remoteItems = [], localItems = []) {
   // lokale Kopie enthält dagegen vollständige Metadaten. Beides muss sichtbar
   // bleiben; eine erfolgreiche Serverantwort darf lokale Treffer nicht löschen.
   const byId = new Map();
-  remoteItems.forEach((item) => {
-    if (item?.id != null) byId.set(String(item.id), item);
-  });
+  // Bereits geladene Treffer haben vollständige Titel/Metadaten und werden
+  // bewusst vor den kompakten Serverzeilen gezeigt. Serverzeilen ergänzen
+  // danach Treffer außerhalb des aktuellen Library-Fensters.
   localItems.forEach((item) => {
     if (item?.id != null) byId.set(String(item.id), item);
+  });
+  remoteItems.forEach((item) => {
+    if (item?.id != null && !byId.has(String(item.id))) byId.set(String(item.id), item);
   });
   return [...byId.values()].slice(0, RESULT_LIMIT);
 }
@@ -81,6 +84,11 @@ export function SearchResultsPage({ query = '', assets = [], lyrics = [], styles
     styles: mergeSearchItems(remoteResults.styles?.items, localResults.styles),
     playlists: mergeSearchItems(remoteResults.playlists?.items, localResults.playlists),
   } : localResults;
+  // Ein Songtitel ist eine andere Trefferqualität als ein Wort, das zufällig
+  // irgendwo in einem langen Prompt oder Style vorkommt. Direkte Titel stehen
+  // daher immer vor den ähnlichen Volltexttreffern.
+  const directSongResults = results.assets.filter((asset) => matchesSearchQuery(pickTitle(asset), normalizedQuery));
+  const similarSongResults = results.assets.filter((asset) => !matchesSearchQuery(pickTitle(asset), normalizedQuery));
   const total = results.assets.length + results.lyrics.length + results.styles.length + results.playlists.length;
 
   return (
@@ -90,18 +98,24 @@ export function SearchResultsPage({ query = '', assets = [], lyrics = [], styles
         <p className="muted">{t('search.total', '{{count}} direkte Treffer', { count: total })}</p>
         {remoteError && <p className="warning-text">{t('search.serverFallback', 'Server-Suche nicht verfügbar; es werden die bereits geladenen Inhalte durchsucht.')}</p>}
         {!total && <EmptyState title={t('search.emptyTitle', 'Keine passenden Inhalte')} text={t('search.emptyText', 'Probiere einzelne Begriffe oder entferne Filterwörter.')} />}
-        <ResultSection icon={Music2} title={t('search.songs', 'Songs')} items={results.assets} empty={t('search.songsEmpty', 'Keine Songs gefunden.')}>
-          {results.assets.map((asset) => <button key={asset.id} type="button" className="mini-list-row" onClick={() => onOpenAsset(asset.id)}><strong>{pickTitle(asset)}</strong><small>{asset.style || asset.tags || asset.operation_label || t('search.songFallback', 'Audio-Variante')}</small></button>)}
-        </ResultSection>
-        <ResultSection icon={FileText} title={t('search.lyrics', 'Songtexte')} items={results.lyrics} empty={t('search.lyricsEmpty', 'Keine Songtexte gefunden.')}>
+        {!!directSongResults.length && <ResultSection icon={Music2} title={t('search.directSongMatches', 'Direkte Songtreffer')} items={directSongResults} empty="">
+          {directSongResults.map((asset) => <button key={asset.id} type="button" className="mini-list-row" onClick={() => onOpenAsset(asset.id)}><strong>{pickTitle(asset)}</strong><small>{asset.style || asset.tags || asset.operation_label || t('search.songFallback', 'Audio-Variante')}</small></button>)}
+        </ResultSection>}
+        <section className="search-similar-results stack" aria-label={t('search.similarResults', 'Ähnliche Ergebnisse')}>
+          <h2>{t('search.similarResults', 'Ähnliche Ergebnisse')}</h2>
+          <ResultSection icon={Music2} title={t('search.songs', 'Songs')} items={similarSongResults} empty={t('search.songsEmpty', 'Keine ähnlichen Songs gefunden.')}>
+            {similarSongResults.map((asset) => <button key={asset.id} type="button" className="mini-list-row" onClick={() => onOpenAsset(asset.id)}><strong>{pickTitle(asset)}</strong><small>{asset.style || asset.tags || asset.operation_label || t('search.songFallback', 'Audio-Variante')}</small></button>)}
+          </ResultSection>
+          <ResultSection icon={FileText} title={t('search.lyrics', 'Songtexte')} items={results.lyrics} empty={t('search.lyricsEmpty', 'Keine Songtexte gefunden.')}>
           {results.lyrics.map((item) => <button key={item.id} type="button" className="mini-list-row" onClick={() => onNavigate('texts')}><strong>{item.title || t('search.untitledLyric', 'Ohne Titel')}</strong><small>{String(item.content || item.lyrics || '').replace(/\s+/g, ' ').slice(0, 130)}</small></button>)}
-        </ResultSection>
-        <ResultSection icon={Palette} title={t('search.styles', 'Styles')} items={results.styles} empty={t('search.stylesEmpty', 'Keine Styles gefunden.')}>
+          </ResultSection>
+          <ResultSection icon={Palette} title={t('search.styles', 'Styles')} items={results.styles} empty={t('search.stylesEmpty', 'Keine Styles gefunden.')}>
           {results.styles.map((item) => <button key={item.id} type="button" className="mini-list-row" onClick={() => onNavigate('styles')}><strong>{item.name || t('search.untitledStyle', 'Ohne Namen')}</strong><small>{item.genre || item.tags || item.description || ''}</small></button>)}
-        </ResultSection>
-        <ResultSection icon={ListMusic} title={t('search.playlists', 'Playlists')} items={results.playlists} empty={t('search.playlistsEmpty', 'Keine Playlists gefunden.')}>
+          </ResultSection>
+          <ResultSection icon={ListMusic} title={t('search.playlists', 'Playlists')} items={results.playlists} empty={t('search.playlistsEmpty', 'Keine Playlists gefunden.')}>
           {results.playlists.map((item) => <button key={item.id} type="button" className="mini-list-row" onClick={() => onNavigate('playlists')}><strong>{item.name || t('search.untitledPlaylist', 'Ohne Namen')}</strong><small>{item.description || t('search.tracks', '{{count}} Tracks', { count: item.items?.length || 0 })}</small></button>)}
-        </ResultSection>
+          </ResultSection>
+        </section>
       </>}
     </section>
   );

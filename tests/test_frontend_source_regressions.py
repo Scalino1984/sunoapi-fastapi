@@ -113,6 +113,17 @@ def test_music_page_defaults_to_expert_form_instead_of_restoring_the_wizard():
     assert "storedMusicState.wizard !== undefined ? Boolean(storedMusicState.wizard) : initialWizard" not in music
 
 
+def test_lyrics_studio_recovers_unsaved_canvas_without_server_overwrite():
+    lyrics_studio = _read("frontend-react/src/pages/LyricsStudioPage.jsx")
+
+    assert "LYRICS_STUDIO_RECOVERY_KEY = 'react-lyrics-studio-recovery'" in lyrics_studio
+    assert "const recoveryRef = useRef(readLyricsStudioRecovery());" in lyrics_studio
+    assert "const [canvas, setCanvas] = useState(() => recovery?.canvas || '');" in lyrics_studio
+    assert "useLayoutEffect(() => {" in lyrics_studio
+    assert "localStorage.setItem(LYRICS_STUDIO_RECOVERY_KEY, JSON.stringify(payload));" in lyrics_studio
+    assert "if (!recovery.canvas) setCanvas(restored.canvas_content || '');" in lyrics_studio
+
+
 def test_music_generate_submit_uses_official_suno_advanced_option_names():
     music = _read("frontend-react/src/pages/MusicPage.jsx")
 

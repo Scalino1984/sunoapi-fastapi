@@ -284,7 +284,11 @@ class AsrResult:
 SECTION_RE = re.compile(r"^\s*\[.*\]\s*$")
 EMPHASIS_RE = re.compile(r"[*_]")
 WS_RE = re.compile(r"\s+")
-NONWORD_RE = re.compile(r"[^a-z0-9'\s-]")
+# Matching tokens are not display text, but they must still preserve every
+# letter in a German word. The former ASCII-only class turned e.g. ``für``
+# into ``f r`` and dropped lines consisting of umlaut words entirely before
+# timing/alignment could happen.
+NONWORD_RE = re.compile(r"[^a-z0-9äöüß'\s-]", re.IGNORECASE)
 VOWEL_RE = re.compile(r"[aeiouyäöü]+", re.IGNORECASE)
 
 
@@ -339,7 +343,10 @@ def _script_syllable_weight(text: str) -> float:
 
 
 def _script_clean_display(raw: str) -> str:
-    s_clean = str(raw or "").strip()
+    # NFC makes decomposed input (``u`` + combining diaeresis) byte-stable in
+    # JSON, the database and the UTF-8 SRT file. It never transliterates or
+    # removes visible characters such as ä, ö, ü and ß.
+    s_clean = unicodedata.normalize("NFC", str(raw or "")).strip()
     # Untertitel dürfen keine Prompt-/Regie-Markups anzeigen.
     # Stage-/SFX-Inhalte werden bereits vor dem Alignment entfernt; hier wird
     # zusätzlich sichergestellt, dass gesungene Adlibs wie "(Alla hopp!)"
@@ -350,7 +357,9 @@ def _script_clean_display(raw: str) -> str:
 
 
 def _script_tokenize_match(text: str) -> list[str]:
-    normalized = EMPHASIS_RE.sub(" ", str(text or "").lower())
+    # Compose first: a decomposed umlaut must be recognized as the same token
+    # as its normal precomposed spelling and must not be replaced by whitespace.
+    normalized = unicodedata.normalize("NFC", EMPHASIS_RE.sub(" ", str(text or "")).lower())
     normalized = NONWORD_RE.sub(" ", normalized)
     normalized = normalized.replace("-", " ")
     return [w for w in (tok.strip("'") for tok in normalized.split()) if w]
