@@ -56,7 +56,7 @@ def test_quality_gate_survives_save_and_reload(isolated_db_session):
     assert reloaded["srt_quality_gate_min_score"] == pytest.approx(0.82)
 
 
-def test_quality_gate_defaults_are_returned_for_existing_legacy_row(isolated_db_session):
+def test_legacy_alignment_default_is_migrated_to_safe_heuristic_engine(isolated_db_session):
     provider, model = _valid_provider_and_model()
     isolated_db_session.add(
         AppSetting(
@@ -72,7 +72,10 @@ def test_quality_gate_defaults_are_returned_for_existing_legacy_row(isolated_db_
 
     result = get_ai_admin_settings(isolated_db_session)
 
-    assert result["srt_alignment_engine"] == "forced_alignment"
+    # Alte Datensätze enthielten kein explizites Opt-in, obwohl Forced
+    # Alignment früher implizit der Default war. Sie dürfen den Webserver
+    # nicht mehr unbemerkt mit einem lokalen torch-Modell belasten.
+    assert result["srt_alignment_engine"] == "heuristic"
     assert result["srt_quality_gate_enabled"] is False
     assert result["srt_quality_gate_min_score"] == pytest.approx(0.7)
 

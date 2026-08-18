@@ -84,7 +84,10 @@ def _settings_row(db: Session) -> AppSetting:
             "srt_auto_regenerate": False,
             "srt_generate_vocal_stems_before_transcription": False,
             "srt_ai_cleanup_enabled": True,
-            "srt_alignment_engine": "forced_alignment",
+            # MMS/torch bleibt eine explizite Experten-Opt-in-Option. Der
+            # portable Standard muss ohne lokales Modell zuverlässig laufen.
+            "srt_alignment_engine": "heuristic",
+            "srt_forced_alignment_opt_in": False,
             "srt_quality_gate_enabled": False,
             "srt_quality_gate_min_score": 0.7,
             "library_content_polling_enabled": False,
@@ -154,10 +157,13 @@ def get_ai_admin_settings(db: Session) -> dict[str, Any]:
         "srt_auto_regenerate": bool(value.get("srt_auto_regenerate", False)),
         "srt_generate_vocal_stems_before_transcription": bool(value.get("srt_generate_vocal_stems_before_transcription", False)),
         "srt_ai_cleanup_enabled": bool(value.get("srt_ai_cleanup_enabled", True)),
+        # Legacy-Installationen hatten Forced Alignment als impliziten Default.
+        # Ohne ausdrückliches Opt-in wird der sichere Heuristik-Pfad verwendet.
         "srt_alignment_engine": (
-            str(value.get("srt_alignment_engine") or "forced_alignment").strip().lower()
-            if str(value.get("srt_alignment_engine") or "forced_alignment").strip().lower() in {"heuristic", "forced_alignment"}
-            else "forced_alignment"
+            "forced_alignment"
+            if str(value.get("srt_alignment_engine") or "heuristic").strip().lower() == "forced_alignment"
+            and bool(value.get("srt_forced_alignment_opt_in", False))
+            else "heuristic"
         ),
         "srt_quality_gate_enabled": bool(value.get("srt_quality_gate_enabled", False)),
         "srt_quality_gate_min_score": _bounded_float(value.get("srt_quality_gate_min_score"), 0.7, 0.3, 0.95),
@@ -258,7 +264,7 @@ def update_ai_settings(payload: AiAdminSettingsUpdate, db: Session = Depends(get
     transcription_language = str(payload.transcription_language or settings.transcript_language_default or "de").strip().lower()
     if transcription_language not in {"auto", "de", "en"}:
         raise HTTPException(status_code=400, detail="Transkriptionssprache ist nicht freigegeben.")
-    srt_alignment_engine = str(payload.srt_alignment_engine or "forced_alignment").strip().lower()
+    srt_alignment_engine = str(payload.srt_alignment_engine or "heuristic").strip().lower()
     if srt_alignment_engine not in {"heuristic", "forced_alignment"}:
         raise HTTPException(status_code=400, detail="SRT-Alignment-Engine ist nicht freigegeben.")
     try:
@@ -283,6 +289,7 @@ def update_ai_settings(payload: AiAdminSettingsUpdate, db: Session = Depends(get
         "srt_generate_vocal_stems_before_transcription": bool(payload.srt_generate_vocal_stems_before_transcription),
         "srt_ai_cleanup_enabled": bool(payload.srt_ai_cleanup_enabled),
         "srt_alignment_engine": srt_alignment_engine,
+        "srt_forced_alignment_opt_in": srt_alignment_engine == "forced_alignment",
         "srt_quality_gate_enabled": bool(payload.srt_quality_gate_enabled),
         "srt_quality_gate_min_score": _bounded_float(payload.srt_quality_gate_min_score, 0.7, 0.3, 0.95),
         "library_content_polling_enabled": bool(payload.library_content_polling_enabled),

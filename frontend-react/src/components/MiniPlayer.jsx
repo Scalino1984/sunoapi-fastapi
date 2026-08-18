@@ -1103,7 +1103,7 @@ export function MiniPlayer({ queue, currentIndex, loop, sidebarMode = 'open', mo
         <div className="player-menu-wrap">
           <button type="button" onClick={() => setMenuOpen(!menuOpen)} title={t('player.options', 'Optionen')}><MoreVertical size={18} /></button>
           {menuOpen && (
-            <div className="player-menu">
+            <div className="player-menu" onClickCapture={() => setMenuOpen(false)}>
               <button type="button" onClick={() => { setMenuOpen(false); onOpenDetails?.(current); }} title={shortcutTitle(t('player.openDetails', 'Songdetails öffnen'), keyOpenDetails)}><FileText size={15} /> {t('player.openDetails', 'Songdetails öffnen')}</button>
               <button type="button" onClick={toggleCurrentFavorite} disabled={favoriteSaving}><ThumbsUp size={15} fill={currentFavorite ? 'currentColor' : 'none'} /> {currentFavorite ? t('player.removeFavorite', 'Favorit entfernen') : t('player.favorite', 'Favorit')}</button>
               <button type="button" onClick={() => { setMenuOpen(false); hasSrt ? setPlayerView('srt') : void generateCurrentSrt({ switchToSrt: true }); }} disabled={srtLoading || srtGenerating}><Captions size={15} /> {hasSrt ? t('player.showSrt', 'SRT anzeigen') : srtGenerating ? t('player.srtRunning', 'SRT läuft…') : t('player.generateSrt', 'SRT erzeugen')}</button>

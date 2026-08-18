@@ -29,11 +29,13 @@ import difflib
 import json
 import logging
 import os
+import queue
 import re
 import shutil
 import subprocess
 from collections import Counter
 import tempfile
+import threading
 import time
 import unicodedata
 from dataclasses import dataclass
@@ -4559,10 +4561,13 @@ def load_transcription_admin_settings(db: Session) -> dict[str, Any]:
         "srt_auto_regenerate": bool(value.get("srt_auto_regenerate", False)),
         "srt_generate_vocal_stems_before_transcription": bool(value.get("srt_generate_vocal_stems_before_transcription", False)),
         "srt_ai_cleanup_enabled": bool(value.get("srt_ai_cleanup_enabled", True)),
+        # The former implicit MMS default can monopolize small web servers.
+        # Existing settings only keep it after a deliberate admin save/opt-in.
         "srt_alignment_engine": (
-            str(value.get("srt_alignment_engine") or "forced_alignment").strip().lower()
-            if str(value.get("srt_alignment_engine") or "forced_alignment").strip().lower() in {"heuristic", "forced_alignment"}
-            else "forced_alignment"
+            "forced_alignment"
+            if str(value.get("srt_alignment_engine") or "heuristic").strip().lower() == "forced_alignment"
+            and bool(value.get("srt_forced_alignment_opt_in", False))
+            else "heuristic"
         ),
         "srt_quality_gate_enabled": bool(value.get("srt_quality_gate_enabled", False)),
         "srt_quality_gate_min_score": max(0.3, min(0.95, float(value.get("srt_quality_gate_min_score", 0.7) or 0.7))),
@@ -7192,6 +7197,45 @@ def _transcription_timeout_seconds(backend: str) -> float:
     return float(getattr(settings, "srt_transcription_timeout_seconds", 240.0) or 240.0)
 
 
+class ForcedAlignmentTimeoutError(RuntimeError):
+    """The optional local MMS aligner did not finish in its bounded window."""
+
+
+def _forced_alignment_timeout_seconds() -> float:
+    configured = float(getattr(get_settings(), "srt_forced_alignment_timeout_seconds", 120.0) or 120.0)
+    return max(15.0, min(configured, 900.0))
+
+
+def _run_forced_alignment_bounded(operation: Callable[[], dict[str, Any]], *, timeout_seconds: float) -> dict[str, Any]:
+    """Run optional MMS alignment without allowing it to hold an SRT task forever.
+
+    The SRT job itself runs in an isolated process by default. A daemon thread
+    here is intentional: if torch stalls while loading a model or inside CTC,
+    the normal heuristic path can finish the SRT and the worker process exits,
+    which also tears down that daemon. ``Thread.join`` is avoided because it
+    would recreate the permanent step-11 hang after a timeout.
+    """
+    result_queue: queue.Queue[tuple[str, Any]] = queue.Queue(maxsize=1)
+
+    def run() -> None:
+        try:
+            result_queue.put(("result", operation()))
+        except BaseException as exc:  # forwarded to the existing fallback path
+            result_queue.put(("error", exc))
+
+    worker = threading.Thread(target=run, name="srt-forced-alignment", daemon=True)
+    worker.start()
+    try:
+        kind, value = result_queue.get(timeout=timeout_seconds)
+    except queue.Empty as exc:
+        raise ForcedAlignmentTimeoutError(
+            f"Forced Alignment überschritt das Limit von {timeout_seconds:.0f}s."
+        ) from exc
+    if kind == "error":
+        raise value
+    return value
+
+
 def _groq_request_timeout_seconds() -> float:
     settings = get_settings()
     specific = float(getattr(settings, "transcript_groq_request_timeout_seconds", 90.0) or 90.0)
@@ -7911,7 +7955,7 @@ async def generate_srt_for_audio_asset(
             asr.raw["songstudio_transcription_audio_source"] = transcription_audio_source
             asr.raw["songstudio_lyrics_cleanup"] = lyrics_cleanup_info
 
-        alignment_engine = str(alignment_engine_override or admin_settings.get("srt_alignment_engine") or "forced_alignment").strip().lower()
+        alignment_engine = str(alignment_engine_override or admin_settings.get("srt_alignment_engine") or "heuristic").strip().lower()
         if alignment_engine not in {"heuristic", "forced_alignment"}:
             alignment_engine = "heuristic"
         _update_srt_status_step(
@@ -7927,21 +7971,25 @@ async def generate_srt_for_audio_asset(
         )
         alignment_bundle: dict[str, Any] | None = None
         if has_alignment_lyrics and alignment_engine == "forced_alignment":
+            forced_timeout_seconds = _forced_alignment_timeout_seconds()
             try:
-                alignment_bundle = align_lyrics_with_forced_alignment_bundle(
-                    lyrics, asr, transcription_audio_path, duration, source_lyrics=source_lyrics,
+                alignment_bundle = _run_forced_alignment_bounded(
+                    lambda: align_lyrics_with_forced_alignment_bundle(
+                        lyrics, asr, transcription_audio_path, duration, source_lyrics=source_lyrics,
+                    ),
+                    timeout_seconds=forced_timeout_seconds,
                 )
                 _append_srt_debug_event(
                     db, srt_task, asset, "forced_alignment_completed",
                     detail="Forced Alignment (MMS) erfolgreich.",
-                    data={"quality": alignment_bundle.get("alignment_quality")},
+                    data={"quality": alignment_bundle.get("alignment_quality"), "timeout_seconds": forced_timeout_seconds},
                 )
             except Exception as forced_exc:  # noqa: BLE001
                 alignment_bundle = None
                 _append_srt_debug_event(
                     db, srt_task, asset, "forced_alignment_failed",
                     detail=f"Forced Alignment fehlgeschlagen; Heuristik-Fallback: {forced_exc}",
-                    data={"error": str(forced_exc)[:400]},
+                    data={"error": str(forced_exc)[:400], "timeout_seconds": forced_timeout_seconds},
                 )
         if alignment_bundle is None:
             alignment_bundle = (

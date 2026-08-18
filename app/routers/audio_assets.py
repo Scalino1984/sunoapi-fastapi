@@ -1463,7 +1463,10 @@ def _build_audio_asset_bundle(db: Session, asset: AudioAsset, include: set[str] 
         if wants("audio"):
             audio_path = _resolve_asset_audio_file(asset)
             if audio_path:
-                arcname = f"audio/{_safe_zip_part(audio_path.stem, 'audio')}{audio_path.suffix.lower()}"
+                # Exportnamen richten sich nach dem sichtbaren Songtitel, nie
+                # nach dem internen Cache-Dateinamen (z. B. audio_705_...).
+                # Audio und Cover liegen im Einzelpaket direkt im ZIP-Root.
+                arcname = f"{safe_title}{audio_path.suffix.lower()}"
                 zip_file.write(audio_path, arcname)
                 manifest["included"].append({"type": "audio", "path": arcname, "source": str(audio_path)})
             else:
@@ -1474,7 +1477,7 @@ def _build_audio_asset_bundle(db: Session, asset: AudioAsset, include: set[str] 
         if wants("wav"):
             wav_path = _resolve_asset_wav_file(asset)
             if wav_path:
-                arcname = f"audio/{_safe_zip_part(wav_path.stem, 'audio_wav')}.wav"
+                arcname = f"{safe_title}.converted.wav"
                 zip_file.write(wav_path, arcname)
                 manifest["included"].append({"type": "wav", "path": arcname, "source": str(wav_path)})
             else:
@@ -1485,7 +1488,7 @@ def _build_audio_asset_bundle(db: Session, asset: AudioAsset, include: set[str] 
         if wants("cover"):
             cover_path = _resolve_asset_cover_file(asset)
             if cover_path:
-                arcname = f"cover/{_safe_zip_part(cover_path.stem, 'cover')}{cover_path.suffix.lower()}"
+                arcname = f"{safe_title}{cover_path.suffix.lower()}"
                 zip_file.write(cover_path, arcname)
                 manifest["included"].append({"type": "cover", "path": arcname, "source": str(cover_path)})
             elif asset.image_url:

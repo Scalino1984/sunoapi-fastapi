@@ -1834,7 +1834,7 @@ class AiAdminSettingsRead(BaseModel):
     srt_auto_regenerate: bool = False
     srt_generate_vocal_stems_before_transcription: bool = False
     srt_ai_cleanup_enabled: bool = True
-    srt_alignment_engine: str = "forced_alignment"
+    srt_alignment_engine: str = "heuristic"
     srt_quality_gate_enabled: bool = False
     srt_quality_gate_min_score: float = Field(default=0.7, ge=0.3, le=0.95)
     library_content_polling_enabled: bool = False
@@ -1880,7 +1880,7 @@ class AiAdminSettingsUpdate(BaseModel):
     srt_auto_regenerate: bool = False
     srt_generate_vocal_stems_before_transcription: bool = False
     srt_ai_cleanup_enabled: bool = True
-    srt_alignment_engine: str = "forced_alignment"
+    srt_alignment_engine: str = "heuristic"
     srt_quality_gate_enabled: bool = False
     srt_quality_gate_min_score: float = Field(default=0.7, ge=0.3, le=0.95)
     library_content_polling_enabled: bool = False

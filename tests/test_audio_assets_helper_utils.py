@@ -1,5 +1,6 @@
 from io import BytesIO
 from pathlib import Path
+from zipfile import ZipFile
 
 import pytest
 from fastapi import HTTPException, UploadFile
@@ -7,6 +8,7 @@ from fastapi import HTTPException, UploadFile
 from app.routers.audio_assets import (
     _delete_audio_file_content,
     _delete_cover_content,
+    _build_audio_asset_bundle,
     _path_from_public_url,
     _public_url_for_storage_file,
     _resolve_file_inside_roots,
@@ -22,6 +24,44 @@ def test_upload_name_and_zip_part_sanitizers_are_stable():
     assert _sanitize_upload_stem("  Donnerbalken 4?! / Mix  ") == "Donnerbalken_4_____Mix"
     assert _sanitize_upload_stem("***", fallback="audio") == "audio"
     assert _safe_zip_part("Song: 1 / Final?!") == "Song__1___Final"
+
+
+def test_single_asset_bundle_uses_title_names_at_zip_root(monkeypatch, isolated_db_session, tmp_path):
+    db = isolated_db_session
+    audio_root = tmp_path / "audio"
+    cover_root = tmp_path / "covers"
+    audio_root.mkdir()
+    cover_root.mkdir()
+    audio_file = audio_root / "audio_705_ea72d7a3b2ac36c6.mp3"
+    cover_file = cover_root / "cover_773d349aa32bed51.jpeg"
+    audio_file.write_bytes(b"audio")
+    cover_file.write_bytes(b"cover")
+
+    from app.routers import audio_assets as audio_assets_router
+
+    monkeypatch.setattr(
+        audio_assets_router,
+        "get_settings",
+        lambda: type("Settings", (), {"audio_storage_path": audio_root, "cover_storage_path": cover_root})(),
+    )
+    asset = AudioAsset(
+        title="Mi was here - bronx",
+        source_url="https://cdn.example.test/mi-was-here.mp3",
+        local_path=str(audio_file),
+        filename=audio_file.name,
+        status="cached",
+        metadata_json={"cover_cache": {"local_path": str(cover_file)}},
+    )
+    db.add(asset)
+    db.commit()
+
+    data, _filename = _build_audio_asset_bundle(db, asset, {"audio", "cover"})
+    with ZipFile(BytesIO(data)) as archive:
+        names = set(archive.namelist())
+
+    assert "Mi_was_here_-_bronx.mp3" in names
+    assert "Mi_was_here_-_bronx.jpeg" in names
+    assert not any(name.startswith(("audio/", "cover/")) for name in names)
 
 
 def test_validate_upload_extension_accepts_only_allowed_extensions():

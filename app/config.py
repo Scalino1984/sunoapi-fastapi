@@ -133,6 +133,10 @@ class Settings(BaseSettings):
     transcript_groq_preprocess_sample_rate: int = 16000
     transcript_groq_preprocess_bitrate: str = "64k"
     srt_transcription_timeout_seconds: float = 240.0
+    # MMS/torch Forced Alignment ist optional und darf einen SRT-Worker nicht
+    # unbegrenzt festhalten. Bei Überschreitung wird deterministisch auf die
+    # Heuristik zurückgefallen.
+    srt_forced_alignment_timeout_seconds: float = 120.0
     transcript_whisperx_timeout_seconds: int = 1800
     voxtral_api_key: str = Field(default="", repr=False)
     mistral_api_key: str = Field(default="", repr=False)
@@ -181,7 +185,9 @@ class Settings(BaseSettings):
     task_watchdog_enabled: bool = True
     task_watchdog_stale_minutes: int = 30
     task_watchdog_interval_seconds: int = 120
-    background_worker_start_method: str = "thread"  # thread | spawn | fork | auto
+    # Rechenintensive SRT-/Stem-/Whisper-Jobs dürfen den ASGI-Prozess nicht
+    # teilen; ein Thread kann sonst den Reverse-Proxy bis zur 503 verhungern.
+    background_worker_start_method: str = "spawn"  # thread | spawn | fork | auto
     local_app_task_no_heartbeat_stale_minutes: int = 10
     startup_library_repair_enabled: bool = True
     local_task_default_timeout_seconds: int = 1800

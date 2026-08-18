@@ -6,6 +6,8 @@
 
 from app.config import get_settings
 from app.services import srt_transcript_service as svc
+import time
+import pytest
 
 
 def test_srt_status_phases_cover_full_pipeline():
@@ -33,3 +35,8 @@ def test_srt_provider_timeout_settings_are_available():
     assert settings.transcript_groq_max_retries >= 0
     assert settings.srt_transcription_timeout_seconds > 0
     assert svc._groq_request_timeout_seconds() <= settings.transcript_request_timeout_seconds
+
+
+def test_forced_alignment_timeout_returns_control_to_heuristic_fallback():
+    with pytest.raises(svc.ForcedAlignmentTimeoutError):
+        svc._run_forced_alignment_bounded(lambda: (time.sleep(0.15), {})[1], timeout_seconds=0.01)
